@@ -10,17 +10,20 @@
             // List view mode
             '<table>' +
                 '<tr>' +
-                    '<td width="50">' +
+                    '<td megatype="fav" >' +
                         '<span class="grid-status-icon"></span>' +
                     '</td>' +
-                    '<td>' +
-                        '<span class="transfer-filetype-icon"></span>' +
+                    '<td megatype="fname">' +
+                        '<span class="transfer-filetype-icon"><img/></span>' +
                         '<span class="tranfer-filetype-txt"></span>' +
                     '</td>' +
-                    '<td width="100" class="size"></td>' +
-                    '<td width="130" class="type"></td>' +
-                    '<td width="120" class="time"></td>' +
-                    '<td width="93" class="grid-url-field own-data">' +
+                    '<td megatype="label" class="label"></td>' +
+                    '<td megatype="size" class="size"></td>' +
+                    '<td megatype="type" class="type"></td>' +
+                    '<td megatype="timeAd" class="time ad"></td>' +
+                    '<td megatype="timeMd" class="time md"></td>' +
+                    '<td megatype="versions" class="hd-versions"></td>' +
+                    '<td megatype="extras" class="grid-url-field own-data">' +
                         '<a class="grid-url-arrow"></a>' +
                         '<span class="versioning-indicator">' +
                             '<i class="small-icon icons-sprite grey-clock"></i>' +
@@ -74,7 +77,10 @@
                             '<div class="clear"></div>' +
                         '</div>' +
                     '</td>' +
-                    '<td width="270">' +
+                    '<td width="100">' +
+                        '<div class="shared-folder-size"></div>' +
+                    '</td>' +
+                    '<td width="200">' +
                         '<div class="shared-folder-access"></div>' +
                     '</td>' +
                     '<td class="grid-url-header-nw">' +
@@ -95,11 +101,63 @@
                     '<div class="video-thumb-details">' +
                         '<i class="small-icon small-play-icon"></i>' +
                         '<span>00:00</span>' +
-                    ' </div>' +
+                    '</div>' +
                 '</span>' +
                 '<span class="shared-folder-info-block">' +
                     '<span class="shared-folder-name"></span>' +
                     '<span class="shared-folder-info"></span>' +
+                '</span>' +
+            '</a>'
+        ],
+
+        'out-shares': [
+            // List view mode
+            '<table>' +
+                '<tr>' +
+                    '<td width="50">' +
+                        '<span class="grid-status-icon"></span>' +
+                    '</td>' +
+                    '<td>' +
+                        '<div class="shared-folder-icon medium-file-icon folder-shared"></div>' +
+                        '<div class="shared-folder-info-block">' +
+                            '<div class="shared-folder-name"></div>' +
+                            '<div class="shared-folder-info"></div>' +
+                        '</div>' +
+                    '</td>' +
+                    '<td width="240" class="simpletip-parent">' +
+                        '<div class="fm-chat-users-wrapper">' +
+                            '<div class="fm-chat-users"></div>' +
+                            '<div class="fm-chat-users-other"></div>' +
+                        '</div>' +
+                    '</td>' +
+                    '<td width="100">' +
+                        '<div class="shared-folder-size"></div>' +
+                    '</td>' +
+                    '<td width="200">' +
+                        '<div class="last-shared-time"></div>' +
+                    '</td>' +
+                    '<td class="grid-url-header-nw">' +
+                        '<a class="grid-url-arrow"></a>' +
+                    '</td>' +
+                '</tr>' +
+            '</table>',
+
+            // Icon view mode
+            '<a class="data-block-view folder">' +
+                '<span class="data-block-bg">' +
+                    '<span class="data-block-indicators">' +
+                       '<span class="file-status-icon indicator"></span>' +
+                    '</span>' +
+                    '<span class="block-view-file-type"></span>' +
+                    '<span class="file-settings-icon"></span>' +
+                    '<div class="video-thumb-details">' +
+                        '<i class="small-icon small-play-icon"></i>' +
+                        '<span>00:00</span>' +
+                    ' </div>' +
+                '</span>' +
+                '<span class="shared-folder-info-block">' +
+                    '<span class="shared-folder-name"></span>' +
+                    '<span class="shared-contact-info"></span>' +
                 '</span>' +
             '</a>'
         ],
@@ -222,11 +280,37 @@
             '.shared-grid-view .grid-table.shared-with-me',
             '.shared-blocks-scrolling'
         ],
+        'out-shares': [
+            '.out-shared-grid-view .grid-table.out-shares',
+            '.out-shared-blocks-scrolling'
+        ],
         'contact-shares': [
             '.contacts-details-block .grid-table.shared-with-me',
             '.fm-blocks-view.contact-details-view .file-block-scrolling'
         ]
     };
+
+    var versionColumnPrepare = function(versionsNb, VersionsSize) {
+        var versionsTemplate = '<div class="ver-col-container">' +
+            '<div class="ver-nb">' + versionsNb + '</div>' +
+            '<div class="ver-icon versioning">' +
+            '<span class="versioning-indicator"><i class="small-icon icons-sprite grey-clock"></i></span>' +
+            '</div>' +
+            '<div class="ver-size">' +
+            '<div class="ver-size-nb">' + bytesToSize(VersionsSize) + '</div>' +
+            '</div>' +
+            '</div>';
+
+        // safe will remove any scripts
+        return parseHTML(versionsTemplate).firstChild;
+    };
+
+    var classListMultiple = false;
+    tryCatch(function() {
+        var te = document.createElement("test");
+        te.classList.add("foo", "bar");
+        classListMultiple = te.classList.contains("bar");
+    }, false);
 
     mBroadcaster.once('startMega', function() {
         logger = MegaLogger.getLogger('MegaRender');
@@ -287,6 +371,10 @@
 
             section = 'shares';
         }
+        else if (M.currentdirid === 'out-shares') {
+
+            section = 'out-shares';
+        }
         else if (M.currentrootid === 'contacts'
                 && M.currentdirid.length === 11) {
 
@@ -308,8 +396,17 @@
             this.chatIsReady = megaChatIsReady;
         }
 
-        this.numInsertedDOMNodes = 0;
+        this.labelsColors = {
+            'red': l[16223],
+            'orange': l[16224],
+            'yellow': l[16225],
+            'green': l[16226],
+            'blue': l[16227],
+            'purple': l[16228],
+            'grey': l[16229]
+        };
 
+        this.numInsertedDOMNodes = 0;
 
         define(this, 'viewmode',            aViewMode);
         define(this, 'nodeMap',             Object.create(null));
@@ -320,6 +417,7 @@
         define(this, 'render',              renderer || this.renderer[section] || this.renderer['*']);
         define(this, 'getNodeProperties',   this.nodeProperties[section] || this.nodeProperties['*']);
         define(this, 'section',             section);
+        this.versionColumnPrepare = versionColumnPrepare;
 
         if (scope.d) {
             var options = {
@@ -356,17 +454,16 @@
                 console.time('MegaRender.cleanupLayout');
             }
 
-            var lSel = aListSelector;
-
-            M.hideEmptyGrids();
-            $.tresizer();
-
             if (!aUpdate) {
+                M.hideEmptyGrids();
+                $.tresizer();
+
                 sharedFolderUI();
                 deleteScrollPanel('.contacts-blocks-scrolling', 'jsp');
                 deleteScrollPanel('.contacts-details-block .file-block-scrolling', 'jsp');
                 deleteScrollPanel('.file-block-scrolling', 'jsp');
                 deleteScrollPanel('.shared-blocks-scrolling', 'jsp');
+                deleteScrollPanel('.out-shared-blocks-scrolling', 'jsp');
 
                 initOpcGridScrolling();
                 initIpcGridScrolling();
@@ -374,9 +471,11 @@
                 $('.grid-table:not(.arc-chat-messages-block) tr').remove();
                 $('.file-block-scrolling a').remove();
                 $('.shared-blocks-scrolling a').remove();
+                $('.out-shared-blocks-scrolling a').remove();
                 $('.contacts-blocks-scrolling .content a').remove();
 
-                $(lSel).show().parent().children('table').show();
+                // eslint-disable-next-line local-rules/jquery-replacements
+                $(aListSelector).show().parent().children('table').show();
             }
 
             // Draw empty grid if no contents.
@@ -384,6 +483,7 @@
             if (!nodeListLength) {
                 if (M.RubbishID && M.currentdirid === M.RubbishID) {
                     $('.fm-empty-trashbin').removeClass('hidden');
+                    $('.fm-clearbin-button').addClass('hidden');
                 }
                 else if (M.currentdirid === 'contacts') {
                     $('.fm-empty-contacts .fm-empty-cloud-txt').text(l[784]);
@@ -399,27 +499,21 @@
                 else if (String(M.currentdirid).substr(0, 7) === 'search/') {
                     $('.fm-empty-search').removeClass('hidden');
                 }
-                else if (M.currentdirid === 'links') {
-                    // TODO: a dedicated splash
-                    $('.fm-empty-folder').removeClass('hidden');
-                }
                 else if (M.currentdirid === M.RootID && folderlink) {
                     // FIXME: implement
                     /*if (!isValidShareLink()) {
                         $('.fm-invalid-folder').removeClass('hidden');
                     }
-                    else*/ {
+                    else {*/
                         $('.fm-empty-folder-link').removeClass('hidden');
-                    }
+                    /*} */
                 }
                 else if (M.currentdirid === M.InboxID) {
                     $('.fm-empty-messages').removeClass('hidden');
                 }
                 else if (M.currentrootid === M.RootID
                         || M.currentrootid === M.RubbishID
-                        || M.currentrootid === M.InboxID
-                        || M.currentrootid === 'shares') {
-
+                        || M.currentrootid === M.InboxID) {
                     // If filter is empty show 'Your label filter did not match any documents'
                     if (M.currentLabelFilter) {
                         $('.fm-empty-filter').removeClass('hidden');
@@ -427,15 +521,33 @@
                     else if (M.currentdirid === M.RootID) {
                         $('.fm-empty-cloud').removeClass('hidden');
                     }
-                    else if (M.currentdirid === 'shares') {
-                        $('.fm-empty-incoming').removeClass('hidden');
+                    else if (M.currentrootid) {
+                        $('.fm-empty-folder').removeClass('hidden');
+                    }
+                }
+                else if (M.currentrootid === 'out-shares') {
+                    if (M.currentdirid === 'out-shares') {
+                        $('.fm-empty-outgoing').removeClass('hidden');
+                    }
+                    else {
+                        $('.fm-empty-folder').removeClass('hidden');
+                    }
+                }
+                else if (M.currentrootid === 'public-links') {
+                    if (M.currentdirid === 'public-links') {
+                        $('.fm-empty-public-link').removeClass('hidden');
                     }
                     else {
                         $('.fm-empty-folder').removeClass('hidden');
                     }
                 }
                 else if (M.currentrootid === 'shares') {
-                    M.emptySharefolderUI(lSel);
+                    if (M.currentdirid === 'shares') {
+                        $('.fm-empty-incoming').removeClass('hidden');
+                    }
+                    else {
+                        M.emptySharefolderUI(aListSelector);
+                    }
                 }
                 else if (M.currentrootid === 'contacts') {
                     $('.fm-empty-incoming.contact-details-view').removeClass('hidden');
@@ -526,11 +638,17 @@
                 initData = this.initialize(aUpdate, aNodeList);
                 if (initData && initData.newNodeList) {
                     aNodeList = initData.newNodeList;
+
+                    // Got a new nodeList, cleanup cached DOM nodes.
+                    var nodes = Object.values(aNodeList);
+                    for (var i = nodes.length; i--;) {
+                        delete this.nodeMap[nodes[i].h];
+                    }
                 }
             }
 
-            for (var idx in aNodeList) {
-                if (aNodeList.hasOwnProperty(idx)) {
+            if (!DYNLIST_ENABLED || this.section !== 'cloud-drive') {
+                for (var idx = aNodeList.length; idx--;) {
                     var node = this.nodeList[idx];
 
                     if (node && node.h) {
@@ -561,8 +679,40 @@
             else {
                 return aNodeList.length;
             }
-
         },
+
+        setDOMColumnsWidth: function(nodeDOM) {
+            var sectionName = 'cloud';
+            if (this.section !== 'cloud-drive') {
+                sectionName = this.section;
+            }
+            // setting widths
+            if (M && M.columnsWidth && M.columnsWidth[sectionName]) {
+                var knownColumnsWidths = Object.keys(M.columnsWidth[sectionName]) || [];
+                for (var col = 0; col < knownColumnsWidths.length; col++) {
+                    var tCol = nodeDOM.querySelector('[megatype="' + knownColumnsWidths[col] + '"]');
+                    if (tCol) {
+                        if (typeof M.columnsWidth[sectionName][knownColumnsWidths[col]].curr === 'number') {
+                            tCol.style.width = M.columnsWidth[sectionName][knownColumnsWidths[col]].curr + 'px';
+                        }
+                        else if (M.columnsWidth[sectionName][knownColumnsWidths[col]].currpx) {
+                            tCol.style.width = M.columnsWidth[sectionName][knownColumnsWidths[col]].currpx + 'px';
+                        }
+                        else {
+                            tCol.style.width = M.columnsWidth[sectionName][knownColumnsWidths[col]].curr || '';
+                        }
+
+                        if (M.columnsWidth[sectionName][knownColumnsWidths[col]].viewed) {
+                            tCol.style.display = "";
+                        }
+                        else {
+                            tCol.style.display = "none";
+                        }
+                    }
+                }
+            }
+        },
+
 
         /**
          * Retrieves a DOM node stored in the `nodeMap`,
@@ -573,7 +723,7 @@
          */
         getDOMNode: function(aHandle, aNode) {
 
-            if (!this.nodeMap[aHandle]) {
+            if (!this.nodeMap[aHandle] && (aNode = aNode || M.getNodeByHandle(aHandle))) {
                 var template = this.template.cloneNode(true);
                 var properties = this.getNodeProperties(aNode, aHandle);
 
@@ -602,29 +752,14 @@
         },
 
         /**
-
-        /**
          * Add classes to DOM node
          * @param {Object} aDOMNode    DOM node to set class over
          * @param {Array}  aClassNames An array of classes
          */
-        addClasses: function(aDOMNode, aClassNames) {
-            var len;
-
-            // TODO: find what is causing the issue and remove then all this
-            if (d) {
-                len = aClassNames.length;
-
-                while (len--) {
-                    if (!aClassNames[len] || typeof aClassNames[len] !== 'string') {
-                        console.warn('Invalid classList', len, aClassNames[len], aClassNames[len - 1], aClassNames);
-                        break;
-                    }
-                }
-            }
-            aClassNames = aClassNames.filter(String);
-
-            len = aClassNames.length;
+        addClasses: classListMultiple ? function(aDOMNode, aClassNames) {
+            aDOMNode.classList.add.apply(aDOMNode.classList, aClassNames);
+        } : function(aDOMNode, aClassNames) {
+            var len = aClassNames.length;
             while (len--) {
                 // XXX: classList.add does support an array, but not in all browsers
                 aDOMNode.classList.add(aClassNames[len]);
@@ -636,7 +771,9 @@
          * @param {Object} aDOMNode    DOM node to set class over
          * @param {Array}  aClassNames An array of classes
          */
-        removeClasses: function(aDOMNode, aClassNames) {
+        removeClasses: classListMultiple ? function(aDOMNode, aClassNames) {
+            aDOMNode.classList.remove.apply(aDOMNode.classList, aClassNames);
+        } : function(aDOMNode, aClassNames) {
             // XXX: classList.add does support an array, but not in all browsers
             var len = aClassNames.length;
             while (len--) {
@@ -730,11 +867,12 @@
                     props.type = l[1049];
                     props.icon = 'folder';
                     props.classNames.push('folder');
+                    props.size = bytesToSize(aNode.tb || 0);
                 }
                 else {
                     props.classNames.push('file');
-                    props.type = filetype(aNode.name);
                     props.size = bytesToSize(aNode.s);
+                    props.type = filetype(aNode, 0, 1);
 
                     if (aNode.fa && aNode.fa.indexOf(':8*') > 0) {
                         Object.assign(props, MediaAttribute(aNode).data);
@@ -782,12 +920,19 @@
                     props.icon = fileIcon(aNode);
 
                     if (!this.viewmode) {
-                        if (M.lastColumn && aNode.p !== "contacts") {
-                            props.time = time2date(aNode[M.lastColumn] || aNode.ts);
+                        if (M.currentCustomView.type === 'public-links' && aNode.shares && aNode.shares.EXP) {
+                            props.time = aNode.shares.EXP.ts ? time2date(aNode.shares.EXP.ts) : '';
+                            props.mTime = aNode.mtime ? time2date(aNode.mtime) : '';
+                        }
+                        else if (aNode.p !== "contacts") {
+                            // props.time = time2date(aNode[M.lastColumn] || aNode.ts);
+                            props.time = time2date(aNode.ts);
+                            props.mTime = aNode.mtime ? time2date(aNode.mtime) : '';
                         }
                         else {
                             props.time = time2date(aNode.ts
                                 || (aNode.p === 'contacts' && M.contactstatus(aHandle).ts));
+                            props.mTime = '';
                         }
                     }
 
@@ -796,6 +941,7 @@
                         var colourLabel = M.getLabelClassFromId(aNode.lbl);
                         props.classNames.push('colour-label');
                         props.classNames.push(colourLabel);
+                        props.labelC = this.labelsColors[colourLabel];
                     }
                 }
 
@@ -807,6 +953,7 @@
 
                 props.userHandle = aNode.su || aNode.p;
                 props.userName = M.getNameByHandle(props.userHandle);
+                props.folderSize = bytesToSize(aNode.tb);
 
                 if (aNode.r === 1) {
                     props.accessRightsText = l[56];
@@ -827,14 +974,7 @@
                     }
                 }
                 else {
-                    var cs = M.contactstatus(aHandle);
-
-                    if (cs.files === 0 && cs.folders === 0) {
-                        props.shareInfo = l[782];// Empty Folder
-                    }
-                    else {
-                        props.shareInfo = fm_contains(cs.files, cs.folders);
-                    }
+                    props.shareInfo = fm_contains(aNode.tf, aNode.td);
 
                     if (this.chatIsReady) {
                         var contact = M.u[props.userHandle];
@@ -852,6 +992,54 @@
 
                 if (avatar) {
                     props.avatar = parseHTML(avatar).firstChild;
+                }
+
+                // Colour label
+                if (aNode.lbl && !folderlink && (aNode.su !== u_handle)) {
+                    var colourLabel = M.getLabelClassFromId(aNode.lbl);
+                    props.classNames.push('colour-label');
+                    props.classNames.push(colourLabel);
+                }
+
+                return props;
+            },
+            'out-shares': function(aNode, aHandle, aExtendedInfo) {
+                var props = this.nodeProperties['*'].call(this, aNode, aHandle, false);
+                props.lastSharedAt = 0;
+                props.userNames = [];
+                props.userHandles = [];
+                props.avatars = [];
+                for (var i in aNode.shares) {
+                    if (i !== 'EXP') {
+                        props.lastSharedAt = Math.max(props.lastSharedAt, aNode.shares[i].ts);
+                        props.userNames.push(M.getNameByHandle(i));
+                        props.userHandles.push(aNode.shares[i].u);
+                    }
+                }
+
+                // Adding pending shares data
+                for (var suh in M.ps[aNode.h]) {
+                    if (M.ps[aNode.h] && M.opc[suh]) {
+                        props.lastSharedAt = Math.max(props.lastSharedAt, M.ps[aNode.h][suh].ts);
+                        props.userNames.push(M.opc[suh].m);
+                        props.userHandles.push(suh);
+                    }
+                }
+
+                props.userNames = props.userNames.sort();
+                props.lastSharedAt = time2date(props.lastSharedAt);
+                props.folderSize = bytesToSize(aNode.tb + (aNode.tvb || 0));
+
+                if (this.viewmode) {
+                    if (aExtendedInfo !== false) {
+                        for (i = 0; i < props.userHandles.length && i < 4; i++) {
+                            props.avatars.push(parseHTML(useravatar.contact(props.userHandles[i], '', 'span'))
+                                .firstChild);
+                        }
+                    }
+                }
+                else {
+                    props.shareInfo = fm_contains(aNode.tf, aNode.td);
                 }
 
                 // Colour label
@@ -922,16 +1110,25 @@
 
                 if (!aNode.t && aNode.tvf) {
                     aTemplate.classList.add('versioning');
+                    var vTemplate = aTemplate.querySelector('.hd-versions');
+                    if (vTemplate) {
+                        vTemplate.appendChild(versionColumnPrepare(aNode.tvf, aNode.tvb || 0));
+                    }
                 }
 
-                if (this.viewmode || aProperties.name.length > 78 || aProperties.playtime) {
+                if (this.viewmode || String(aProperties.name).length > 78 || aProperties.playtime !== undefined) {
                     if (aProperties.width) {
                         title.push(aProperties.width + 'x' + aProperties.height + ' @' + aProperties.fps + 'fps');
                     }
                     if (aProperties.codecs) {
-                        title.push(aProperties.codecs.join('/'));
+                        title.push(aProperties.codecs);
                     }
-                    title.push(aProperties.name);
+                    if (aNode.s) {
+                        title.push(bytesToSize(aNode.s, 0));
+                    }
+                    if (aProperties.name) {
+                        title.push(aProperties.name);
+                    }
                 }
                 title = title.join(' ');
 
@@ -942,7 +1139,7 @@
                         tmp.classList.add(aProperties.icon);
                     }
 
-                    if (aProperties.playtime) {
+                    if (aProperties.playtime !== undefined) {
                         aTemplate.querySelector('.data-block-bg').classList.add('video');
                         aTemplate.querySelector('.video-thumb-details span').textContent
                             = secondsToTimeShort(aProperties.playtime);
@@ -963,6 +1160,8 @@
                     }
                     aTemplate.querySelector('.type').textContent = aProperties.type;
                     aTemplate.querySelector('.time').textContent = aProperties.time;
+                    aTemplate.querySelector('.time.md').textContent = aProperties.mTime;
+                    aTemplate.querySelector('.label').textContent = aProperties.labelC || '';
 
                     tmp = aTemplate.querySelector('.tranfer-filetype-txt');
                     tmp.textContent = aProperties.name;
@@ -979,8 +1178,13 @@
             },
             'shares': function(aNode, aProperties, aTemplate) {
 
+                var selector = this.viewmode ? '.file-status-icon' : '.grid-status-icon';
+
+                if (!this.viewmode) {
+                    aTemplate.querySelector(selector).classList.add(aProperties.accessRightsClass);
+                }
+
                 if (aNode.fav && !folderlink) {
-                    var selector = this.viewmode ? '.file-status-icon' : '.grid-status-icon';
                     aTemplate.querySelector(selector).classList.add('star');
                 }
 
@@ -1022,6 +1226,86 @@
 
                     aTemplate.querySelector('.fm-chat-user').textContent = aProperties.userName;
                     aTemplate.querySelector('.shared-folder-info').textContent = aProperties.shareInfo;
+                    aTemplate.querySelector('.shared-folder-size').textContent = aProperties.folderSize;
+                }
+
+                return aTemplate;
+            },
+            'out-shares': function(aNode, aProperties, aTemplate) {
+
+                if (aNode.fav && !folderlink) {
+                    var selector = this.viewmode ? '.file-status-icon' : '.grid-status-icon';
+                    aTemplate.querySelector(selector).classList.add('star');
+                }
+
+                aTemplate.querySelector('.shared-folder-name').textContent = aProperties.name;
+
+                if (this.viewmode) {
+                    if (aProperties.avatars) {
+
+                        var avatarElement;
+                        var avatar = this.viewmode ? '.shared-folder-info-block' : '.fm-chat-user-info';
+                        avatar = aTemplate.querySelector(avatar);
+
+                        if (aProperties.avatars.length === 1) {
+                            avatarElement = aProperties.avatars[0];
+                        }
+                        else {
+                            avatarElement = document.createElement("div");
+                            avatarElement.classList = 'multi-avatar multi-avatar-' + aProperties.avatars.length;
+
+                            for (var i in aProperties.avatars) {
+                                if (aProperties.avatars[i]) {
+                                    aProperties.avatars[i].classList += ' avatar-' + i;
+                                    avatarElement.appendChild(aProperties.avatars[i]);
+                                }
+                            }
+                        }
+
+                        avatar.parentNode.insertBefore(avatarElement, avatar);
+
+                    }
+
+
+                    if (aProperties.icon) {
+                        aTemplate.querySelector('.block-view-file-type').classList.add(aProperties.icon);
+                    }
+
+                    var shareContactInfo = aTemplate.querySelector('.shared-contact-info');
+                    shareContactInfo.textContent = escapeHTML(l[989]).replace('[X]', aProperties.userNames.length);
+                    if (aProperties.userNames.length === 1) {
+                        shareContactInfo.textContent = escapeHTML(l[990]);
+                    }
+                    else {
+                        shareContactInfo.textContent = escapeHTML(l[989]).replace('[X]', aProperties.userNames.length);
+                    }
+                    shareContactInfo.classList += ' simpletip';
+                    shareContactInfo.dataset.simpletip = aProperties.userNames.join(",[BR]");
+                }
+                else {
+                    tmp = aTemplate.querySelector('.fm-chat-user-info');
+
+                    var otherCount = 0;
+                    var userNames = aProperties.userNames;
+                    if (aProperties.userNames.length > 3) {
+                        userNames = userNames.slice(0, 3);
+                        otherCount = aProperties.userNames.length - 3;
+                        var sharedUserWrapper = aTemplate.querySelector('.fm-chat-users-wrapper');
+                        sharedUserWrapper.classList += ' simpletip';
+                        sharedUserWrapper.dataset.simpletip = aProperties.userNames.join(",[BR]");
+                    }
+                    aTemplate.querySelector('.fm-chat-users').textContent = userNames.join(', ');
+
+                    if (otherCount === 1) {
+                        aTemplate.querySelector('.fm-chat-users-other').textContent = l[20652];
+                    }
+                    else if (otherCount > 1) {
+                        aTemplate.querySelector('.fm-chat-users-other').textContent = l[20653]
+                            .replace('$1', otherCount);
+                    }
+                    aTemplate.querySelector('.shared-folder-info').textContent = aProperties.shareInfo;
+                    aTemplate.querySelector('.shared-folder-size').textContent = aProperties.folderSize;
+                    aTemplate.querySelector('.last-shared-time').textContent = aProperties.lastSharedAt;
                 }
 
                 return aTemplate;
@@ -1055,8 +1339,7 @@
                 }
 
                 if (this.viewmode) {
-
-                    aTemplate.querySelector('.shared-folder-name').textContent = aNode.name;
+                    aTemplate.querySelector('.shared-folder-name').textContent = nicknames.getNickname(aNode.u);
                     aTemplate.querySelector('.shared-folder-info').textContent = aNode.m;
                 }
                 else {
@@ -1119,21 +1402,19 @@
                 return null;
             },
             'cloud-drive': function(aUpdate, aNodeList) {
-                var self = this;
                 var result = this.initializers['*'].apply(this, arguments);
 
                 if (DYNLIST_ENABLED) {
                     if (!aUpdate || !this.megaList) {
-                        var isFF = ua.details.engine === "Gecko";
 
                         var megaListOptions = {
                             'itemRenderFunction': M.megaListRenderNode,
                             'preserveOrderInDOM': true,
-                            'extraRows': isFF ? 10 : 4,
-                            'batchPages': isFF ? 1 : 0,
-                            'appendOnly': isFF,
+                            'extraRows': 4,
+                            'batchPages': 0,
+                            'appendOnly': false,
                             'onContentUpdated': function () {
-                                M.rmSetupUIDelayed();
+                                M.rmSetupUI(false, true);
                             },
                             'perfectScrollOptions': {
                                 'handlers': ['click-rail', 'drag-scrollbar', 'wheel', 'touch'],
@@ -1166,8 +1447,6 @@
                         }
 
                         var newNodes = [];
-                        var nodeIndex = [];
-
                         var objMap = newnodes
                             .map(function(n) {
                                 return n.h;
@@ -1177,17 +1456,15 @@
                                 return obj;
                             }, {});
 
-                        for (var idx in aNodeList) {
-                            if (aNodeList.hasOwnProperty(idx)) {
-                                if (objMap[aNodeList[idx].h]) {
-                                    newNodes[idx] = aNodeList[idx];
-                                }
-                                nodeIndex[aNodeList[idx].h] = idx;
+                        for (var idx = aNodeList.length; idx--;) {
+                            if (objMap[aNodeList[idx].h]) {
+                                newNodes[idx] = aNodeList[idx];
                             }
                         }
 
                         if (newNodes.length) {
                             result.newNodeList = newNodes;
+                            result.curNodeList = aNodeList;
                         }
                     }
                 }
@@ -1203,12 +1480,15 @@
              * @param {Array}   aNodeList The list of ufs-nodes processed
              * @param {Object}  aUserData  Any data provided by initializers
              */
+            'contacts': function() {
+                M.contactsUI();
+            },
             'contact-shares': function(aUpdate, aNodeList, aUserData) {
                 var contact = M.d[M.currentdirid];
 
                 if (contact) {
                     $('.contact-share-notification')
-                        .text(contact.name + ' shared the following folders with you:')
+                        .text(l[20435].replace('%1', contact.name))
                         .removeClass('hidden');
                 }
             },
@@ -1239,49 +1519,21 @@
                             this.removeClasses(container.parentNode.parentNode, ["hidden"]);
                         }
 
-
-                        var ids = [];
-                        aNodeList.forEach(function(v) {
-                            ids.push(v.h);
-                        });
-
-                        this.megaList.batchAdd(ids);
+                        this.megaList.batchReplace(aNodeList.map(String));
                         this.megaList.initialRender();
                     }
                     else if (aUserData && aUserData.newNodeList && aUserData.newNodeList.length > 0) {
-                        var sortedNodeList = {};
-                        var foundNodesForAdding = false;
-                        aNodeList.forEach(function(v, k) {
-                            // newnodes, and update may be triggered by an move op (because of the newly modified
-                            // lack of 'i' property), so the newnodes may contain unrelated nodes (to the current
-                            // view)
-                            if (v.p === M.currentdirid) {
-                                foundNodesForAdding = true;
-                                sortedNodeList[k] = v.h;
-                                if (!M.v[k] || M.v[k].h !== v.h) {
-                                    console.error("This should never happen, e.g. !M.v[k] || M.v[k].h !== v.h", v);
-                                }
-                            }
-
-                        });
-
-                        if (foundNodesForAdding) {
-                            this.megaList.batchAddFromMap(sortedNodeList);
-                        }
+                        this.megaList.batchReplace(aUserData.curNodeList.map(String));
                     }
                 }
             }
         }),
 
         destroy: function() {
-            // megaList can be undefined/empty if the current folder had no nodes in it.
-            if (DYNLIST_ENABLED && this.megaList) {
+            if (this.megaList) {
                 this.megaList.destroy();
-                if (window.selectionManager) {
-                    window.selectionManager.destroy();
-                }
-                window.selectionManager = false;
             }
+            oDestroy(this);
         },
 
         toString: function() {

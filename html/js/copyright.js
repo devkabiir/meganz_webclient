@@ -19,86 +19,79 @@ copyright.updateUI = function() {
  */
 copyright.validateEmail = function(email) {
     'use strict';
-    var re1 = /[a-z0-9!#$%&'*+\/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+\/=?^_`{|}~-]+)*/;
-    var re2 = /@([a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/;
-    var re = new RegExp(re1.source + re2.source);
-    var match = re.exec(email);
-    return match !== null;
+    return isValidEmail(email);
 };
+
+copyright.ourDomains = {'mega.co.nz': 1, 'mega.nz': 1, 'mega.io': 1};
 
 /**
  * Validate that the user has entered a link that is, or can be easily turned into, a valid MEGA link
  * @param {String} url The url to validate as a mega public link
- * @return {Number} The (integer) number of handles found
+ * @return {Array} The link type at idx 0, handle found as idx 1, and sub-node as idx 2 if any.
  */
 copyright.validateUrl = function(url) {
     'use strict';
-    if (!/^\s*https?:\/\/mega\./i.test(url)) {
-        return 0;
+    url = tryCatch(() => new URL(mURIDecode(url).trim()), false)();
+    const ext = url && String(url.protocol).endsWith('-extension:');
+
+    if (!url || !this.ourDomains[url.host] && !ext) {
+        return null;
     }
-    url = copyright.decodeURIm(url);
-    var handles = copyright.getHandles(url);
-    return Object.keys(handles).length;
+    let path = (ext ? '' : url.pathname) + url.hash;
+
+    if (url.hash) {
+        const hash = String(url.hash).replace('#', '');
+
+        if (hash[0] === '!' || hash[0] === 'F' && hash[1] === '!') {
+            path = hash[0] === 'F'
+                ? hash.replace('F!', '/folder/').replace('!', '#').replace('!', '/folder/').replace('?', '/file/')
+                : hash.replace('!', '/file/').replace('!', '#');
+        }
+        else if (hash[0] === 'P' && hash[1] === '!') {
+            const a = base64urldecode(hash.substr(2));
+            const b = String.fromCharCode(a.charCodeAt(2))
+                    + String.fromCharCode(a.charCodeAt(3))
+                    + String.fromCharCode(a.charCodeAt(4))
+                    + String.fromCharCode(a.charCodeAt(5))
+                    + String.fromCharCode(a.charCodeAt(6))
+                    + String.fromCharCode(a.charCodeAt(7));
+            path = '/file/' + base64urlencode(b);
+        }
+    }
+
+    const match = path.match(/^[#/]*(file|folder|embed)[!#/]+([\w-]{8})\b/i);
+    if (!match) {
+        console.warn('Invalid url.', url);
+        return null;
+    }
+    const result = [match[1], match[2]];
+
+    if (match[1] === 'folder') {
+        result.push((path.replace(match[0], '').match(/(?:file|folder)\/([\w-]{8})/i) || [])[1]);
+    }
+    return result;
 };
 
 /**
- * Find any valid or semi-valid MEGA link handles from the data
- * @param {String} data The data to scan for handles
- * @return {Object} hashset of handles
+ * Check if the entered URL is a folder link without a subfile link.
+ * @param url
+ * @return {Boolean} If is folder without subfile link.
  */
-copyright.getHandles = function(data) {
+copyright.isFolderWithoutSubHandle = function(url) {
     'use strict';
-
-    var handles = {};
-    var passwordLinkPattern = /(#P!)([\w-]+)\b/gi;
-
-    // Find the handles for any password protected link
-    data = data.replace(passwordLinkPattern, function(fullUrlHash, passwordLinkId, urlEncodedData) {
-
-        // Decode the Base64 URL encoded data and get the 6 bytes for the handle, then re-encode the handle to Base64
-        var bytes = exportPassword.base64UrlDecode(urlEncodedData);
-        var handle = bytes.subarray(2, 8);
-        var handleBase64 = exportPassword.base64UrlEncode(handle);
-
-        // Add the handle
-        handles[handleBase64] = 1;
-
-        // Remove the link so the bottom code doesn't detect it as well
-        return '';
-    });
-
-    var p = /.(?:F?!|\w+\=)([\w-]{8})(?:!([\w-]+))?\b/gi;
-
-    (data.replace(/<\/?\w[^>]+>/g, '').replace(/\s+/g, '') + data).replace(p, function(a, id) {
-        if (!handles[id]) {
-            handles[id] = 1;
-        }
-    });
-
-    return handles;
+    url = this.isFolderLink(url);
+    return url && !url[2];
 };
 
 /**
- * Iteratively remove any %% stuff from the data
- * @param {String} data The data string to decode
- * @return {String} the decoded data
+ * Check if a URL is a folder link.
+ * @param url
+ * @return {Boolean}
  */
-copyright.decodeURIm = function(data) {
+copyright.isFolderLink = function(url) {
     'use strict';
-    for (var lmt = 7; --lmt && /%[a-f\d]{2}/i.test(data);) {
-        try {
-            data = decodeURIComponent(data);
-        }
-        catch (ex) {
-            break;
-        }
-    }
-
-    while (data.indexOf('%25') !== -1) {
-        data = data.replace(/%25/g, '%');
-    }
-
-    return data.replace(/%21/g, '!');
+    url = this.validateUrl(url) || !1;
+    return url[0] === 'folder' && url;
 };
 
 /**
@@ -147,31 +140,108 @@ copyright.loadCopyrightOwnerValues = function() {
     }
 };
 
+copyright.step2Submit = function() {
+    'use strict';
+
+    if (!$('.select.content').hasClass('selected')) {
+        msgDialog('warninga', l[135], escapeHTML(l[657]));
+    }
+    else if (!$('.select.type').hasClass('selected')) {
+        msgDialog('warninga', l[135], escapeHTML(l[658]));
+    }
+    else {
+        var invalidWords = ['asd', 'asdf', 'copyright'];
+        var copyrightwork = $('.copyrightwork');
+        var proceed = false;
+        var takedownType = $('.select.type select').val();
+        var doStep2Submit = function() {
+            copyright.step2Submit();
+        };
+        $('.contenturl').each(function(i, e) {
+            var cVal = String($(copyrightwork[i]).val()).trim();
+            var urls = String($(e).val()).split(/\n/);
+            urls = urls.map(String.trim).filter(String);
+
+            proceed = urls.length > 0;
+            if (!proceed) {
+                msgDialog('warninga', l[135], escapeHTML(l[659]));
+                copyright.markInputWrong(e);
+                return false;
+            }
+
+            for (var k = 0; k < urls.length; k++) {
+                var eVal = urls[k];
+                if (eVal !== ''  && cVal === '' || invalidWords.indexOf(cVal.toLowerCase()) !== -1) {
+                    proceed = false;
+                    msgDialog('warninga', l[135], escapeHTML(l[660]));
+                    copyright.markInputWrong(copyrightwork[i]);
+                    return false;
+                }
+                if (eVal === '' || cVal === '') {
+                    proceed = false;
+                    msgDialog('warninga', l[135], escapeHTML(l[659]));
+                    copyright.markInputWrong(eVal ? copyrightwork[i] : e);
+                    return false;
+                }
+
+                if (!copyright.validateUrl(eVal)) {
+                    proceed = false;
+                    msgDialog('warninga', l[135], escapeHTML(l[7686]));
+                    copyright.markInputWrong(e);
+                    return false;
+                }
+
+                if (copyright.validateUrl(cVal)) {
+                    proceed = false;
+                    msgDialog('warninga', l[135], escapeHTML(l[9056]));
+                    copyright.markInputWrong(copyrightwork[i]);
+                    return false;
+                }
+
+                if (takedownType === "1" && copyright.isFolderLink(eVal)
+                    && !copyright.isFolderWithoutSubHandle(eVal)) {
+                    proceed = false;
+                    msgDialog('warninga', l[135], l[19804]);
+                    return false;
+                }
+
+                if ((takedownType === "2" || takedownType === "3")
+                    && localStorage.tdFolderlinkWarning !== "1"
+                    && copyright.isFolderWithoutSubHandle(eVal)) {
+                    localStorage.tdFolderlinkWarning = 1;
+                    proceed = false;
+                    msgDialog('info', l[621], escapeHTML(l[19802]), null, doStep2Submit);
+                    return false;
+                }
+            }
+            $(e).removeClass("red");
+        });
+
+        if (proceed && !$('.cn_check1 .checkinput').prop('checked')) {
+            msgDialog('warninga', l[135], escapeHTML(l[665]));
+        }
+        else if (proceed) {
+            $('.cn.step1').addClass('hidden');
+            $('.cn.step2').removeClass('hidden');
+
+            // Reload values from local storage if the user has previously been here
+            copyright.loadCopyrightOwnerValues();
+        }
+    }
+};
+
 /**
  * Initialises the copyright form page, binding the events the form requires
  */
 copyright.init_cn = function() {
     'use strict';
-    var wrong = function(elm) {
-        $(elm)
-            .addClass("red")
-            .css('font-weight', 'bold')
-            .rebind('click', function() {
-                $(this).off('click')
-                    .removeClass("red")
-                    .css('font-weight', 'normal')
-                    .parent()
-                    .css('box-shadow', 'none');
-            })
-            .parent().css('box-shadow', '0px 0px 8px #f00');
-    };
 
     $('.addurlbtn').rebind('click', function() {
         $('#cn_urls').safeAppend('<div class="new-affiliate-label">' +
             '<div class="new-affiliate-star"></div>@@</div>' +
             '<div class="clear"></div>' +
-            '<div class="affiliate-input-block">' +
-                '<input type="text" class="contenturl" value="">' +
+            '<div class="affiliate-input-block dynamic-height">' +
+                '<textarea class="contenturl" rows="3"></textarea>' +
             '</div>' +
             '<div class="new-affiliate-label">' +
                 '<div class="new-affiliate-star"></div>@@' +
@@ -184,62 +254,7 @@ copyright.init_cn = function() {
     });
     copyright.updateUI();
     $('.step2btn').rebind('click', function() {
-        if (!$('.select.content').hasClass('selected')) {
-            msgDialog('warninga', l[135], escapeHTML(l[657]));
-        }
-        else if (!$('.select.type').hasClass('selected')) {
-            msgDialog('warninga', l[135], escapeHTML(l[658]));
-        }
-        else {
-            var invalidWords = ['asd', 'asdf', 'copyright'];
-            var copyrightwork = $('.copyrightwork');
-            var proceed = false;
-            $('.contenturl').each(function(i, e) {
-                proceed = true;
-                var eVal = String($(e).val()).trim();
-                var cVal = String($(copyrightwork[i]).val()).trim();
-                if (eVal !== ''  && cVal === '' || invalidWords.indexOf(cVal.toLowerCase()) !== -1) {
-                    proceed = false;
-                    msgDialog('warninga', l[135], escapeHTML(l[660]));
-                    wrong(copyrightwork[i]);
-                    return false;
-                }
-                if (eVal === '' || cVal === '') {
-                    proceed = false;
-                    msgDialog('warninga', l[135], escapeHTML(l[659]));
-                    wrong(eVal ? copyrightwork[i] : e);
-                    return false;
-                }
-
-                if (!copyright.validateUrl(eVal)) {
-                    proceed = false;
-                    msgDialog('warninga', l[135], escapeHTML(l[7686]));
-                    wrong(e);
-                    return false;
-                }
-
-                if (copyright.validateUrl(cVal)) {
-                    proceed = false;
-                    msgDialog('warninga', l[135], escapeHTML(l[9056]));
-                    wrong(copyrightwork[i]);
-                    return false;
-                }
-
-                $(e).removeClass("red");
-
-            });
-
-            if (proceed && !$('.cn_check1 .checkinput').prop('checked')) {
-                msgDialog('warninga', l[135], escapeHTML(l[665]));
-            }
-            else if (proceed) {
-                $('.cn.step1').addClass('hidden');
-                $('.cn.step2').removeClass('hidden');
-
-                // Reload values from local storage if the user has previously been here
-                copyright.loadCopyrightOwnerValues();
-            }
-        }
+        copyright.step2Submit();
     });
 
     $('.backbtn').rebind('click', function() {
@@ -311,11 +326,18 @@ copyright.init_cn = function() {
 
             var cn_post_urls = [];
             var cn_post_works = [];
-            $('.contenturl').each(function(a, b) {
-                cn_post_urls.push(b.value);
-            });
-            $('.copyrightwork').each(function(a, b) {
-                cn_post_works.push(b.value);
+
+            var copyrightwork = $('.copyrightwork');
+            $('.contenturl').each(function(i, e) {
+                var cVal = String($(copyrightwork[i]).val()).trim();
+                var urls = String($(e).val() || $(e).html()).split(/\n/);
+                urls = urls.map(String.trim).filter(function (url) {
+                    return url !== "";
+                });
+                for (var k = 0; k < urls.length; k++) {
+                    cn_post_urls.push(urls[k]);
+                    cn_post_works.push(cVal);
+                }
             });
             var cn_works_json = JSON.stringify([cn_post_urls, cn_post_works]);
             loadingDialog.show();
@@ -473,6 +495,16 @@ copyright.init_cndispute = function() {
         $('input.email').val(u_attr.email);
     }
 
+    // prefill the URL with public node handle.
+    if (u_attr) {
+        var localStorageKey = 'takedownDisputeNodeURL';
+        var disputeNodeURL = localStorage.getItem(localStorageKey);
+        if (disputeNodeURL) {
+            $('.bottom-page .copyrightdisputeform .contenturl').val(disputeNodeURL);
+            localStorage.removeItem(localStorageKey);
+        }
+    }
+
     // The sign button needs to validate the form
     $('.signbtn').rebind('click.copydispute', function() {
 
@@ -482,10 +514,13 @@ copyright.init_cndispute = function() {
 
             // The 'copyright notice dispute' api request. Pull the values straight from the inputs
             // as we have already validated them
-            var handles = copyright.getHandles($('input.contenturl').val());
-            api_req({
+            var url = $('input.contenturl').val();
+            var handles = copyright.validateUrl(url);
+
+            var requestParameters = {
                 a: 'cnd',
-                ph: Object.keys(handles)[0],
+                ph: handles[1],
+                ufsh: handles[2],
                 desc: $('input.copyrightwork').val(),
                 comments: $('input.copyrightexplanation').val(),
                 name: $('input.copyrightowner').val(),
@@ -499,7 +534,9 @@ copyright.init_cndispute = function() {
                 postalcode: $('input.zip').val(),
                 country: $('.select.country select').val(),
                 otherremarks: $('input.otherremarks').val()
-            }, {
+            };
+
+            api_req(requestParameters, {
                 callback: function(response) {
                     loadingDialog.hide();
 
@@ -584,3 +621,23 @@ copyright.initCheckboxListeners = function() {
         }
     });
 };
+
+/**
+ * Mark input field as wrong.
+ * @param elm
+ */
+copyright.markInputWrong = function(elm) {
+    'use strict';
+    $(elm)
+        .addClass("red")
+        .css('font-weight', 'bold')
+        .rebind('click', function() {
+            $(this).off('click')
+                .removeClass("red")
+                .css('font-weight', 'normal')
+                .parent()
+                .css('box-shadow', 'none');
+        })
+        .parent().css('box-shadow', '0px 0px 8px #f00');
+};
+

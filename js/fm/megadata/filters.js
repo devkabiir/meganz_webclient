@@ -31,6 +31,12 @@ MegaData.prototype.getFilterBy = function(f) {
  });
  };*/
 
+
+/**
+ * filter M.v by parent ID
+ * @param {String} id   handle of the parent
+ * @returns {Object} duplicates if found
+ */
 MegaData.prototype.filterByParent = function(id) {
     var i;
     var node;
@@ -60,17 +66,34 @@ MegaData.prototype.filterByParent = function(id) {
         }
     }
     // We should have a parent's childs into M.c, no need to traverse the whole M.d
-    else if (this.c[id]) {
-        this.v = Object.keys(this.c[id])
+    else if (id === 'public-links' || id === 'out-shares' || this.c[id]) {
+        var list;
+
+        if (id === 'public-links') {
+            list = this.su.EXP || {};
+        }
+        else if (id === 'out-shares') {
+            list = this.getOutShareTree();
+        }
+        else {
+            list = this.c[id];
+        }
+
+        this.v = Object.keys(list)
             .map(function(h) {
                 return M.d[h];
             })
             .filter(function(n) {
-                // filter label applies here.
+                // Filter versioned file or undefined node.
+                if (!n || n.fv) {
+                    return false;
+                }
+
+                // Filter label applies here.
                 if (M.currentLabelFilter && !M.filterByLabel(n)){
                     return false;
                 }
-                return n !== undefined;
+                return true;
             });
     }
     else {
@@ -125,7 +148,6 @@ MegaData.prototype.filterBySearch = function (str) {
             // Wait for this.openFolder to finish and set colors to matching hashes
             this.onRenderFinished = function() {
                 var find = M.viewmode ? 'a' : 'tr';
-                $(window).trigger('dynlist.flush');
                 $(M.fsViewSel).find(find).each(function() {
                     var $this = $(this);
                     var node = M.d[$this.attr('id')];

@@ -1,3 +1,8 @@
+/**
+ * global MegaData instance
+ * @name M
+ */
+var M = null;
 var dlid = false;
 var dlkey = false;
 var cn_url = false;
@@ -30,54 +35,56 @@ var account = false;
 var register_txt = false;
 var login_next = false;
 var loggedout = false;
+var anonymouschat = false;
 var flhashchange = false;
-var folderLinkVisitLogged = false;
 var avatars = {};
 var mega_title = 'MEGA';
-
+var pchandle = false;
 
 
 var pro_json = '[[["N02zLAiWqRU",1,500,1024,1,"9.99","EUR"],["zqdkqTtOtGc",1,500,1024,12,"99.99","EUR"],["j-r9sea9qW4",2,2048,4096,1,"19.99","EUR"],["990PKO93JQU",2,2048,4096,12,"199.99","EUR"],["bG-i_SoVUd0",3,4096,8182,1,"29.99","EUR"],["e4dkakbTRWQ",3,4096,8182,12,"299.99","EUR"]]]';
 
-pages['placeholder'] = '<div class="bottom-page scroll-block">' +
+pages['placeholder'] = '<div class="bottom-page scroll-block placeholder">' +
     '((TOP))' +
     '<div class="main-pad-block">' +
     '<div class="main-mid-pad new-bottom-pages"></div>' +
     '</div>';
 
-mBroadcaster.once('startMega', function () {
+mBroadcaster.once('startMega', function() {
     'use strict';
 
-    if (!hashLogic) {
-        $(window).rebind('popstate.mega', function (event) {
-            var state = event.originalEvent.state || {};
-            var add = '';
-            if (state.searchString) {
-                add = state.searchString;
-            }
-            loadSubPage((state.subpage || state.fmpage || location.hash) + add, event);
-        });
+    if (is_mobile) {
+        pages.placeholder = pages.mobile || '';
+    }
+
+    if (pages['dialogs-common']) {
+        $('body').safeAppend(translate(pages['dialogs-common'].replace(/{staticpath}/g, staticpath)));
+        delete pages['dialogs-common'];
     }
 });
 
-mBroadcaster.once('startMega:desktop', function () {
+mBroadcaster.once('startMega:desktop', function() {
     'use strict';
 
-    if (pages['dialogs']) {
-        $('body').safeAppend(translate(pages['dialogs'].replace(/{staticpath}/g, staticpath)));
-        delete pages['dialogs'];
+    var $body = $('body');
+    var p = ['chat', 'onboarding', 'dialogs'];
+
+    for (var i = p.length; i--;) {
+        if (typeof pages[p[i]] === 'string') {
+            $body.safeAppend(translate(pages[p[i]].replace(/{staticpath}/g, staticpath)));
+            delete pages[p[i]];
+        }
     }
-    if (pages['onboarding']) {
-        $('body').safeAppend(translate(pages['onboarding'].replace(/{staticpath}/g, staticpath)));
-        delete pages['onboarding'];
-    }
-    if (pages['chat']) {
-        $('body').safeAppend(translate(pages['chat'].replace(/{staticpath}/g, staticpath)));
-        delete pages['chat'];
+
+    if ((p = document.querySelector('.viewer-image-bl'))) {
+        mCreateElement('iframe', {type: 'content', 'class': 'hidden', src: 'about:blank', id: 'pdfpreviewdiv1'}, p);
     }
 });
 
 function startMega() {
+    'use strict';
+
+    jsl = [];
     mBroadcaster.sendMessage('startMega');
 
     if (is_mobile) {
@@ -89,7 +96,6 @@ function startMega() {
         mBroadcaster.removeListeners('startMega:mobile');
     }
 
-    jsl = [];
     if (silent_loading) {
         onIdle(silent_loading);
         silent_loading = false;
@@ -100,42 +106,87 @@ function startMega() {
 }
 
 function topMenu(close) {
+    'use strict';
+
+    var $topMenuIcon =  $('.top-icon.menu', 'body');
+    var $topMenu = $('.top-menu-popup', 'body');
+    var $mobileOverlay = $('.mobile.dark-overlay', 'body');
 
     if (close) {
         $.topMenu = '';
-        $('.top-icon.menu').removeClass('active');
-        $('.top-menu-popup').addClass('hidden');
+        $topMenuIcon.removeClass('active');
+        $topMenu.addClass('hidden');
 
         // If on mobile, hide the menu and also remove the close click/tap handler on the dark background overlay
         if (is_mobile) {
             $('html').removeClass('overlayed');
-            $('.mobile.dark-overlay').addClass('hidden').removeClass('active').off('tap');
+            $mobileOverlay.addClass('hidden').removeClass('active').unbind('tap.topmenu');
         }
         $(window).off('resize.topmenu');
     }
     else {
         $.topMenu = 'topmenu';
-        $('.top-icon.menu').addClass('active');
-        $('.top-menu-popup').removeClass('hidden');
+        $topMenuIcon.addClass('active');
+        $topMenu.removeClass('hidden');
+
+        if (u_type) {
+            $('.top-menu-logged .loader', $topMenu).addClass('loading');
+            M.getStorageQuota().then(topMenuDataUpdate).catch(dump);
+        }
 
         if (!is_mobile) {
             topMenuScroll();
             $(window).rebind('resize.topmenu', function () {
-                if ($('.top-icon.menu').hasClass('active')) {
+                if ($topMenuIcon.hasClass('active')) {
                     topMenuScroll();
                 }
             });
         }
         else {
-            // If on mobile, show the dark backround overlay behind the menu and if it's clicked, close the menu
+            // Mobile
+            // Close the title menu
+            mobile.titleMenu.close();
+
+            // Show the dark backround overlay behind the menu and if it's clicked, close the menu
             $('html').addClass('overlayed');
-            $('.mobile.dark-overlay').removeClass('hidden').addClass('active').off('tap').on('tap', function () {
+            $mobileOverlay.removeClass('hidden').addClass('active').rebind('tap.topmenu', function() {
                 topMenu(true);
                 return false;
             });
         }
     }
 }
+
+/* Update used storage info*/
+function topMenuDataUpdate(data) {
+    'use strict';
+    var storageHtml;
+    var $storageBlock = $('.top-menu-logged', '.top-menu-popup').removeClass('going-out exceeded');
+    var space_used = bytesToSize(data.used);
+    var space = bytesToSize(data.max);
+    var perc = data.percent;
+
+    if (perc >= 100) {
+        $storageBlock.addClass('exceeded');
+    }
+    else if (perc > 80) {
+        $storageBlock.addClass('going-out');
+    }
+
+    // Show only space_used  for business accounts
+    if (u_attr && u_attr.b) {
+        storageHtml = '<span>' +  space_used + '</span>';
+    }
+    else {
+        storageHtml = l[1607].replace('%1', '<span>' +  space_used + '</span>')
+            .replace('%2', space);
+    }
+
+    $('.loader', $storageBlock).removeClass('loading');
+    $('.storage-txt', $storageBlock).safeHTML(storageHtml);
+    $('.storage span', $storageBlock).outerWidth(perc + '%');
+}
+
 
 function topMenuScroll() {
     $('.top-menu-scroll').jScrollPane({
@@ -149,8 +200,8 @@ function topMenuScroll() {
 function scrollMenu() {
     "use strict";
 
-    $('.bottom-pages .fmholder').rebind('scroll.devmenu', function () {
-        if (page === 'doc' || page === 'cpage' || page === 'sdk' || page === 'dev') {
+    $('.bottom-pages .fmholder').rebind('scroll.devmenu', function() {
+        if (page === 'doc' || page.substr(0, 9) === 'corporate' || page === 'sdk' || page === 'dev') {
             var $menu = $('.new-left-menu-block');
             var topPos = $(this).scrollTop();
             if (topPos > 0) {
@@ -176,13 +227,15 @@ function topPopupAlign(button, popup, topPos) {
             pageWidth,
             popupRightPos,
             arrowRightPos,
-            buttonTopPos;
+            buttonTopPos,
+            headerWidth;
 
         if ($button.length && $popup.length) {
-            pageWidth = $('body').width();
+            pageWidth = $('body').outerWidth();
+            headerWidth = $('.top-head').outerWidth();
             $popup.removeAttr('style');
             $popupArrow.removeAttr('style');
-            popupRightPos = pageWidth
+            popupRightPos = headerWidth
                 - $button.offset().left
                 - $button.outerWidth() / 2
                 - $popup.outerWidth() / 2;
@@ -211,22 +264,18 @@ function topPopupAlign(button, popup, topPos) {
     };
 
     // If top menu is opened - set timeout to count correct positions
-    if (!$('.top-menu-popup').hasClass('hidden')) {
+    if (!$('.top-menu-popup', 'body').hasClass('hidden')) {
         setTimeout(function () {
             $.popupAlign();
         }, 250);
-    } else {
+    }
+    else {
         $.popupAlign();
     }
 }
 
-
-
-
 function init_page() {
     page = page || (u_type ? 'fm' : 'start');
-
-    var mobilePageParsed = false;
 
     if (!window.M) {
         return console.warn('Something went wrong, the initialization did not completed...');
@@ -241,36 +290,59 @@ function init_page() {
         }
     }
 
-    // Get information about what API flags are enabled e.g. 2FA, New Registration etc
-    mega.getApiMiscFlags();
+    // Users that logged in and are suspended (requiring special SMS unlock) are not allowed to go anywhere else in the
+    // site until they validate their account. So if they clicked the browser back button, then they should get logged
+    // out or they will end up with with a partially logged in account stuck in an infinite loop. This logout is not
+    // triggered on the mobile web sms/ pages because a session is still required to talk with the API to get unlocked.
+    if (window.doUnloadLogOut) {
+        return false;
+    }
 
     dlkey = false;
-    if (page[0] === '!' && page.length > 1) {
 
-        var ar = page.substr(1, page.length - 1).split('!');
-        if (ar[0]) {
-            dlid = ar[0].replace(/[^\w-]+/g, "");
-        }
-
-        if (ar[1]) {
-            dlkey = ar[1].replace(/[^\w-]+/g, "");
-        }
-        $.playbackTimeOffset = parseInt(ar[2]) | 0;
-
+    var fileLinkReloading = function() {
         if (M.hasPendingTransfers() && $.lastSeenFilelink !== getSitePath()) {
             page = 'download';
 
             M.abortTransfers()
-                .done(function () {
+                .done(function() {
                     location.reload();
                 })
-                .fail(function () {
+                .fail(function() {
                     loadSubPage($.lastSeenFilelink);
                 });
 
             return;
         }
         $.lastSeenFilelink = getSitePath();
+    };
+
+    var pageBeginLetters = page.substr(0, 2);
+
+    if (page.length > 2 && (page[0] === '!' || pageBeginLetters === 'F!')) {
+        // Convering old links to new links format.
+        page = page[0] === 'F' ? page.replace('F!', 'folder/').replace('!', '#')
+            .replace('!', '/folder/').replace('?', '/file/')
+            : page.replace('!', 'file/').replace('!', '#');
+
+        history.replaceState({ subpage: page }, "", (hashLogic ? '#' : '/') + page);
+        return init_page();
+    }
+
+    if (page.substr(0, 5) === 'file/') {
+        var phLen = page.indexOf('#');
+
+        if (phLen < 0) {
+            phLen = page.length;
+        }
+        dlid = page.substr(5, phLen - 5).replace(/[^\w-]+/g, "");
+
+        // check if we have key
+        if (page.length - phLen > 2) {
+            dlkey = page.substr(phLen + 1, page.length - phLen - 1);
+        }
+
+        fileLinkReloading();
     }
 
     // Set class if gbot
@@ -301,6 +373,8 @@ function init_page() {
 
     // Add language class to body for CSS fixes for specific language strings
     $('body').addClass(lang);
+    // add business class to affect the top header
+    $('body').removeClass('business');
 
     if ('-fa-ar-he-'.indexOf('-' + lang + '-') > -1) {
         $('body').addClass('rtl');
@@ -311,17 +385,18 @@ function init_page() {
 
         $html.height(window.innerHeight);
 
-        $(window).rebind('resize.htmlheight', function () {
+        $(window).rebind('resize.htmlheight', function() {
             $html.height(window.innerHeight);
         });
     }
 
-    // If on the plugin page, show the page with the relevant extension for their current browser
-    if (page == 'plugin') {
-        page = (mega.chrome) ? 'chrome' : 'firefox';
+    // Redirect url to extensions when it tries to go plugin or chrome or firefox
+    if (page === 'plugin' || page === 'chrome' || page === 'firefox') {
+        loadSubPage('extensions');
+        return false;
     }
 
-    if (!page.match(/^(blog|help|corporate|page_)/)) {
+    if (!page.match(/^(blog|help|corporate|fm\/recents|page_)/)) {
         $('.top-head').remove();
     }
     $('#loading').hide();
@@ -330,7 +405,7 @@ function init_page() {
     }
 
     var oldPFKey = pfkey;
-    var pageBeginLetters = page.substr(0, 2);
+
     // contact link handling...
     if (pageBeginLetters === 'C!' && page.length > 2) {
         var ctLink = page.substring(2, page.length);
@@ -340,13 +415,13 @@ function init_page() {
             }
             else {
                 page = 'fm/contacts';
-                mBroadcaster.once('fm:initialized', function () {
+                mBroadcaster.once('fm:initialized', function() {
                     openContactInfoLink(ctLink);
                 });
             }
         }
         else {
-            var processContactLink = function () {
+            var processContactLink = function() {
                 if (!mega.ui.contactLinkCardDialog) {
                     // because there's a strange solution applied by someone to clear the top-mobile
                     // and to re-do everything in the header in mobile.html !!
@@ -375,42 +450,86 @@ function init_page() {
         }
     }
 
-    if (pageBeginLetters === 'F!' && page.length > 2) {
-        var ar = page.substr(2, page.length - 1).split('!');
+    var newLinkSelector = '';
+    if (page.substr(0, 7) === 'folder/') {
+        var phLen = page.indexOf('#');
+        var possibleS = -1;
 
-        pfid = false;
-        if (ar[0]) {
-            pfid = ar[0].replace(/[^\w-]+/g, "");
+        if (phLen < 0) {
+            phLen = page.length;
+            possibleS = page.indexOf('/f', 7);
+            if (possibleS > -1) {
+                phLen = possibleS;
+            }
         }
 
+        pfid = page.substr(7, phLen - 7).replace(/[^\w-]+/g, "");
+
+        // check if we have key
         pfkey = false;
-        if (ar[1]) {
-            pfkey = ar[1].replace(/[^\w-]+/g, "").substr(0, 22);
-        }
-
         pfhandle = false;
-        if (ar[2]) {
-            pfhandle = ar[2].replace(/[^\w-]+/g, "");
-        }
+        if (page.length - phLen > 2) {
+            if (possibleS === -1) {
+                phLen++;
+            }
 
-        // If the visit to the folder link has not been logged yet
-        if (folderLinkVisitLogged === false) {
+            var linkRemaining = page.substr(phLen, page.length - phLen);
 
-            // Log to see how many public folder views on mobile webclient
-            if (is_mobile) {
-                api_req({ a: 'log', e: 99631, m: 'Loaded public folder link on mobile webclient' });
+            var fileSelectorPlace = linkRemaining.indexOf('/file/');
+
+            var folderSelectorPlace = linkRemaining.indexOf('/folder/');
+
+            var selectorIsValid = false;
+
+            if (fileSelectorPlace > -1 || folderSelectorPlace > -1) {
+                selectorIsValid = true;
+            }
+
+            if (selectorIsValid && fileSelectorPlace > -1 && folderSelectorPlace > -1) {
+                selectorIsValid = false;
+            }
+
+            var keyCutPlace;
+            if (selectorIsValid) {
+                if (fileSelectorPlace > -1) {
+                    keyCutPlace = fileSelectorPlace;
+
+                    if (linkRemaining.length - 6 - fileSelectorPlace > 2) {
+                        $.autoSelectNode = linkRemaining.substring(fileSelectorPlace + 6, linkRemaining.length);
+                        $.autoSelectNode = $.autoSelectNode.replace(/[^\w-]+/g, "");
+                    }
+                }
+                else {
+                    keyCutPlace = folderSelectorPlace;
+
+                    if (linkRemaining.length - 8 - folderSelectorPlace > 2) {
+                        pfhandle = linkRemaining.substring(folderSelectorPlace + 8, linkRemaining.length);
+                        pfhandle = pfhandle.replace(/[^\w-]+/g, "");
+                        newLinkSelector = '/folder/' + pfhandle;
+                    }
+
+                }
             }
             else {
-                // Otherwise log to see how many public folder views on regular webclient
-                api_req({ a: 'log', e: 99632, m: 'Loaded public folder link on regular webclient' });
+                keyCutPlace = Math.min(fileSelectorPlace, folderSelectorPlace);
+                if (keyCutPlace === -1) {
+                    keyCutPlace = linkRemaining.length;
+                }
             }
+            pfkey = linkRemaining.substring(0, keyCutPlace).replace(/[^\w-]+/g, "") || false;
 
-            // Don't log this again for this session
-            folderLinkVisitLogged = true;
         }
 
         n_h = pfid;
-        if (!flhashchange || pfkey !== oldPFKey || pfkey.length !== 22) {
+        if (!flhashchange || pfkey !== oldPFKey || pfkey.length !== 22 || pfid.length !== 8) {
+            closeDialog();
+            eventlog(is_mobile ? 99631 : 99632, true);
+
+            if (pfid.length !== 8 || window['preflight-folder-link-error:' + pfid]) {
+                folderreqerr(false, window['preflight-folder-link-error:' + pfid] || EARGS);
+                return false;
+            }
+
             if (pfkey.length === 22) {
                 api_setfolder(n_h);
                 if (waitxhr) {
@@ -421,21 +540,21 @@ function init_page() {
             else {
                 // If mobile, show the decryption key overlay
                 if (is_mobile) {
-                    parsepage(pages['mobile']);
+                    mobile.initDOM();
                     mobile.decryptionKeyOverlay.show(pfid, true, pfkey);
                 }
                 else {
                     // Insert placeholder background page while waiting for user input
-                    parsepage(pages['placeholder']);
+                    parsepage(pages.placeholder);
 
                     // Show the decryption key dialog on top
-                    mKeyDialog(pfid, true, pfkey)
-                        .fail(function () {
+                    mKeyDialog(pfid, true, pfkey, newLinkSelector)
+                        .fail(function() {
                             loadSubPage('start');
                         });
                     pfkey = false;
                 }
-                return;
+                return false;
             }
 
             if (fminitialized && (!folderlink || pfkey !== oldPFKey)) {
@@ -445,6 +564,7 @@ function init_page() {
                 delete $.mcImport;
             }
         }
+
         if (pfhandle) {
             page = 'fm/' + pfhandle;
         }
@@ -470,12 +590,22 @@ function init_page() {
         confirmcode = page.replace("confirm", "");
         page = 'confirm';
     }
+
     if (page.substr(0, 7) == 'pwreset') {
         resetpwcode = page.replace("pwreset", "");
         page = 'resetpassword';
     }
 
-    if ((pfkey || dlkey) && location.hash[0] !== '#') {
+    // If password revert link, use generic background page, show the dialog and pass in the code
+    if (page.substr(0, 8) === 'pwrevert') {
+        parsepage(pages.placeholder);
+        passwordRevert.init(page);
+
+        // Make sure placeholder background is shown
+        return false;
+    }
+
+    if ((pfkey && !flhashchange || dlkey) && !location.hash) {
         return location.replace(getAppBaseUrl());
     }
 
@@ -490,20 +620,30 @@ function init_page() {
         && (page.substr(0, 3) !== 'pro')
         && (page.substr(0, 5) !== 'start' || is_fm())
         && (page.substr(0, 4) !== 'help')
+        && (page !== 'refer')
         && (page !== 'contact')
-        && (page !== 'ios')
-        && (page !== 'android')
-        && (page !== 'wp')
+        && (page !== 'mobileapp')
+        && (page !== 'nas')
         && (page !== 'extensions')
         && (page !== 'sync')
-        && (page !== 'bird')
         && (page !== 'cmd')
         && (page !== 'terms')
         && (page !== 'privacy')
         && (page !== 'gdpr')
         && (page !== 'takendown')
-        && (page !== 'general')
         && (page !== 'resellers')
+        && (page !== 'security')
+        // && (page !== 'storage')
+        // && (page !== 'collaboration')
+        // && (page !== 'securechat')
+        && (page !== 'downloadapp')
+        && (page !== 'unsub')
+        && (page !== 'cookie')
+        && (page !== 'updatedterms')
+        && (page !== 'updatedprivacy')
+        && (page !== 'updatedtakedown')
+        && (page.indexOf('file/') === -1)
+        && (page.indexOf('folder/') === -1)
         && localStorage.awaitingConfirmationAccount) {
 
         var acc = JSON.parse(localStorage.awaitingConfirmationAccount);
@@ -515,9 +655,8 @@ function init_page() {
         else {
             // Show signup link dialog for mobile
             if (is_mobile) {
-                parsepage(pages['mobile']);
+                mobile.initDOM();
                 mobile.register.showConfirmEmailScreen(acc);
-                topmenuUI();
                 return false;
             }
             else {
@@ -535,77 +674,26 @@ function init_page() {
 
     // If the account has just finished being cancelled
     if (localStorage.beingAccountCancellation) {
-        if (is_mobile) {
-            parsepage(pages['mobile']);
+        // Insert placeholder page while waiting for user input
+        parsepage(pages.placeholder);
 
-            // Show message that the account has been cancelled successfully
-            mobile.messageOverlay.show(l[6188], l[6189], function () {
-                loadSubPage('start');
-            });
-        }
-        else {
-            // Insert placeholder page while waiting for user input
-            parsepage(pages['placeholder']);
-
-            msgDialog('warninga', l[6188], l[6189], '', function () {
-                loadSubPage('start');
-            });
-        }
+        // Show message that the account has been cancelled successfully
+        msgDialog('warninga', l[6188], l[6189], '', loadSubPage.bind(null, 'start'));
 
         delete localStorage.beingAccountCancellation;
         return false;
     }
-    // Password protected link decryption dialog
-    if (page.substr(0, 2) === 'P!' && page.length > 2) {
-        // Check if TextEncoder function is available for the stringToByteArray function
-        if (window.TextEncoder) {
-            // Show the password overlay for mobile
-            if (is_mobile) {
-                parsepage(pages['mobile']);
-                mobile.decryptionPasswordOverlay.show(page);
-                mobilePageParsed = true;
-            }
-            else {
-                // Otherwise insert background page, show the password
-                // decryption dialog and pass in the current URL hash
-                parsepage(pages['placeholder']);
-                exportPassword.decrypt.init(page);
-            }
-        }
-        else { // not supported browser, appologize from user
-            var msgToUser = l[18420];
-            if (!is_mobile) {
-                if (u_type) {
-                    mBroadcaster.once('boot_done', function () {
-                        setTimeout(
-                            msgDialog('info', 'Pwssword protected link not supported', // not visible
-                                msgToUser), 1000);
-                    });
-                    page = 'fm';
-                }
-                else {
-                    msgDialog('info', 'Pwssword protected link not supported', // not visible
-                        msgToUser);
-                    page = 'start';
-                }
-            }
-            else {
-                if (u_type) {
-                    loadSubPage('fm');
-                }
-                else {
-                    parsepage(pages['mobile']);
-                    mobile.signin.show();
-                }
-                msgDialog('info', 'Pwssword protected link not supported', // not visible
-                    msgToUser);
-                mobilePageParsed = true;
-            }
-        }
-    }
 
-    if (mobilePageParsed) {
-        mobilePageParsed = false;
+    if (page.substr(0, 2) === 'P!' && page.length > 2) {
+        // Password protected link decryption dialog
+        parsepage(pages.placeholder);
+
+        if (is_mobile) {
+            mobile.decryptionPasswordOverlay.show(page);
+        }
+        else {
+            exportPassword.decrypt.init(page);
+        }
     }
     else if (page.substr(0, 10) == 'blogsearch') {
         blogsearch = decodeURIComponent(page.substr(11, page.length - 1));
@@ -616,60 +704,20 @@ function init_page() {
         parsepage(pages['blogarticle']);
         init_blog();
     }
-
-
     else if (page.substr(0, 6) == 'verify') {
         parsepage(pages['change_email']);
         emailchange.main();
     }
-    else if (page.substr(0, 9) == 'corporate') {
-        function doRenderCorpPage() {
-            if (window.corpTemplate) {
-                parsepage(window.corpTemplate);
-                topmenuUI();
-                loadingDialog.hide();
-                CMS.loaded('corporate');
-                return;
-            }
-
-            loadingDialog.show();
-            CMS.watch('corporate', function () {
-                window.corpTemplate = null;
-                doRenderCorpPage();
-            });
-            CMS.get('corporate', function (err, content) {
-                parsepage(window.corpTemplate = content.html);
-                topmenuUI();
-                loadingDialog.hide();
-            });
-        }
-
-        doRenderCorpPage();
-        page = 'cpage';
-        bottompage.init();
+    else if (page.substr(0, 9) === 'corporate') {
+        parsepage(pages.corporate);
+        corporate.init();
     }
-    else if (page.substr(0, 5) == 'page_') {
-        var cpage = decodeURIComponent(page.substr(5, page.length - 2));
-
-        function doRenderCMSPage() {
-            loadingDialog.show();
-            CMS.watch(cpage, function () {
-                doRenderCMSPage();
-            });
-
-            CMS.get(cpage, function (err, content) {
-                parsepage(content.html);
-                topmenuUI();
-                loadingDialog.hide();
-            });
-        }
-
-        doRenderCMSPage();
-        page = 'cpage';
-        bottompage.init();
-        return;
+    else if (page.substr(0, 5) === 'blog/') {
+        // eslint-disable-next-line dot-notation
+        parsepage(pages['blogarticle']);
+        init_blogarticle();
     }
-    else if (page.substr(0, 4) == 'blog' && page.length > 4 && page.length < 10) {
+    else if (page.substr(0, 5) === 'blog_' && page.length > 4 && page.length < 10) {
         blogid = page.substr(5, page.length - 2);
         page = 'blogarticle';
         parsepage(pages['blogarticle']);
@@ -724,6 +772,30 @@ function init_page() {
             alert('We can\'t decipher your invite link, please check you copied the link correctly, or sign up manually with the same email address.');
         }
     }
+    else if (page.length > 14 && page.substr(0, 14) === 'businesssignup') {
+        if (is_mobile) {
+            parsepage(pages['mobile']);
+            mobile.decryptionPasswordOverlay.show(page, true);
+        }
+        else {
+            var signupCodeEncrypted = page.substring(14, page.length);
+            M.require('businessAcc_js', 'businessAccUI_js').done(function () {
+                var business = new BusinessAccountUI();
+                business.showLinkPasswordDialog(signupCodeEncrypted);
+            });
+        }
+
+    }
+    else if (page.length > 14 && page.substr(0, 14) === 'businessinvite') {
+        if (is_mobile) {
+            mobile.initDOM();
+        }
+        var signupCode = page.substring(14, page.length);
+        M.require('businessAcc_js', 'businessAccUI_js').done(function () {
+            var business = new BusinessAccountUI();
+            business.openInvitationLink(signupCode);
+        });
+    }
     else if (page === 'confirm') {
 
         loadingDialog.show();
@@ -736,16 +808,29 @@ function init_page() {
             page = 'login';
 
             if (is_mobile) {
-                parsepage(pages['mobile']);
+                mobile.initDOM();
                 mobile.register.showConfirmAccountScreen(email);
             }
             else {
                 parsepage(pages['login']);
                 login_txt = l[378];
+
+                // I need this event handler to be triggered only in case of coming from confirmation
+                mBroadcaster.once('fm:initialized', function () {
+                    if (u_attr && u_attr.b && u_attr.b.m) {
+                        M.require('businessAcc_js', 'businessAccUI_js').done(function () {
+                            var business = new BusinessAccountUI();
+                            business.showWelcomeDialog();
+                        });
+                    }
+                });
+
                 init_login();
-                $('#login-name2').val(email);
-                $('.register-st2-button').addClass('active');
-                $('#login-name2').prop('readonly', true);
+                if (email) {
+                    $('#login-name2').val(email).blur();
+                    $('.register-st2-button').addClass('active');
+                    $('#login-name2').prop('readonly', true);
+                }
                 topmenuUI();
             }
         };
@@ -765,7 +850,7 @@ function init_page() {
                     alert(l[703]);
                 }
                 else if (result === ENOENT) {
-                    login_txt = l[704];
+                    login_txt = l[19788];
                 }
                 else {
                     alert(l[705] + result);
@@ -773,8 +858,6 @@ function init_page() {
 
                 parsepage(pages['login']);
                 init_login();
-                $('.register-st2-button').addClass('active');
-                $('#login-name2').prop('readonly', true);
                 topmenuUI();
             }
         };
@@ -784,6 +867,24 @@ function init_page() {
 
         // Check if they registered using the new registration process (version 2)
         if (decodedConfirmCode.substr(0, 13) === 'ConfirmCodeV2') {
+
+            // If already logged into an account
+            if (u_type === 3) {
+
+                // Ask them to log out and click on the confirmation link again
+                if (is_mobile) {
+                    parsepage(pages['mobile']);
+                    mobile.messageOverlay.show(l[2480], l[12440], function () {
+                        loadSubPage('fm');
+                    });
+                }
+                else {
+                    msgDialog('warningb', l[2480], l[12440], false, function () {
+                        loadSubPage('fm');
+                    });
+                }
+                return false;
+            }
 
             // Verify the confirm code using the new process
             security.register.verifyEmailConfirmCode(confirmcode, function(result, email) {
@@ -805,6 +906,9 @@ function init_page() {
             });
         }
     }
+    else if (page.startsWith('emailverify')) {
+        return security.showVerifyEmailDialog('login-to-account');
+    }
     else if (u_type == 2) {
         if (is_mobile) {
             parsepage(pages['mobile']);
@@ -822,13 +926,24 @@ function init_page() {
         }
 
         if (is_mobile) {
-            parsepage(pages['mobile']);
+            mobile.initDOM();
             mobile.signin.show();
         }
         else {
             parsepage(pages['login']);
             init_login();
         }
+    }
+    else if (is_mobile && isEphemeral() && is_fm()) {
+        // Log out and redirect to start page it's the ephemeral session on mobile web
+        u_logout(true);
+        page = '';
+        loadSubPage('start');
+        return false;
+    }
+    else if (is_mobile && u_type && page === 'fm/dashboard') {
+        loadSubPage('fm');
+        return false;
     }
     else if (is_mobile && u_type && page === 'fm/account/invites/how-it-works') {
         parsepage(pages['mobile']);
@@ -855,43 +970,102 @@ function init_page() {
         mobile.account.history.init();
         return false;
     }
+    else if (is_mobile && u_type && page === 'fm/account/email-and-pass') {
+        parsepage(pages['mobile']);
+        mobile.account.changePassword.init();
+        return false;
+    }
+    else if (is_mobile && fminitialized && u_type && page === 'fm/account/notifications') {
+        mobile.initDOM();
+        mobile.account.notifications.init();
+        return false;
+    }
     else if (page === 'achievements') {
         loadSubPage('fm/account/achievements');
         return false;
     }
-    else if (is_mobile && page === 'twofactor/intro') {
-        parsepage(pages['mobile']);
-        mobile.twofactor.intro.init();
+    else if (page === 'fm/account/achievements') {
+        $.openAchievemetsDialog = true;
+        loadSubPage('fm/account/plan');
         return false;
     }
-    else if (is_mobile && page === 'twofactor/setup') {
-        parsepage(pages['mobile']);
-        mobile.twofactor.setup.init();
+    else if (!mega.flags.refpr && page.substr(0, 8) === 'fm/refer') {
+        loadSubPage('fm');
         return false;
     }
-    else if (is_mobile && page === 'twofactor/verify-setup') {
-        parsepage(pages['mobile']);
-        mobile.twofactor.verifySetup.init();
+    else if (is_mobile && u_type && page === 'fm/refer') {
+        parsepage(pages.mobile);
+        mobile.affiliate.initMainPage();
         return false;
     }
-    else if (is_mobile && page === 'twofactor/enabled') {
-        parsepage(pages['mobile']);
-        mobile.twofactor.enabled.init();
+    else if (is_mobile && u_type && page === 'fm/refer/redeem') {
+        parsepage(pages.mobile);
+        mobile.affiliate.initRedeemPage();
         return false;
     }
-    else if (is_mobile && page === 'twofactor/verify-disable') {
-        parsepage(pages['mobile']);
-        mobile.twofactor.verifyDisable.init();
+    else if (is_mobile && u_type && page === 'fm/refer/guide') {
+        parsepage(pages.mobile);
+        mobile.affiliate.initGuidePage();
         return false;
     }
-    else if (is_mobile && page === 'twofactor/disabled') {
-        parsepage(pages['mobile']);
-        mobile.twofactor.disabled.init();
+    else if (is_mobile && u_type && page === 'fm/refer/history') {
+        parsepage(pages.mobile);
+        mobile.affiliate.initHistoryPage();
         return false;
     }
-    else if (is_mobile && page === 'twofactor/verify-login') {
+    else if (is_mobile && u_type && page === 'fm/refer/distribution') {
+        parsepage(pages.mobile);
+        mobile.affiliate.initDistributionPage();
+        return false;
+    }
+    else if (is_mobile && page.substr(0, 9) === 'twofactor') {
+
         parsepage(pages['mobile']);
-        mobile.twofactor.verifyLogin.init();
+
+        if (page.indexOf('intro') > -1) {
+            mobile.twofactor.intro.init();
+        }
+        else if (page.indexOf('verify-setup') > -1) {
+            mobile.twofactor.verifySetup.init();
+        }
+        else if (page.indexOf('setup') > -1) {
+            mobile.twofactor.setup.init();
+        }
+        else if (page.indexOf('enabled') > -1) {
+            mobile.twofactor.enabled.init();
+        }
+        else if (page.indexOf('verify-disable') > -1) {
+            mobile.twofactor.verifyDisable.init();
+        }
+        else if (page.indexOf('disabled') > -1) {
+            mobile.twofactor.disabled.init();
+        }
+        else if (page.indexOf('verify-login') > -1) {
+            mobile.twofactor.verifyLogin.init();
+        }
+
+        return false;
+    }
+    else if (is_mobile && !isEphemeral() && page.substr(0, 3) === 'sms') {
+
+        parsepage(pages['mobile']);
+
+        if (page.indexOf('add-phone-suspended') > -1) {
+            mobile.sms.phoneInput.init();
+        }
+        else if (page.indexOf('verify-code') > -1) {
+            mobile.sms.verifyCode.init();
+        }
+        else if (page.indexOf('verify-success') > -1) {
+            mobile.sms.verifySuccess.init();
+        }
+        else if (page.indexOf('phone-achievement-intro') > -1) {
+            mobile.sms.achievement.init();
+        }
+        else if (page.indexOf('add-phone-achievement') > -1) {
+            mobile.sms.phoneInput.init();
+        }
+
         return false;
     }
     else if (page === 'fm/account/profile') {
@@ -912,12 +1086,9 @@ function init_page() {
     else if (page.substr(0, 8) === 'megadrop') {
         if (is_mobile) {
             parsepage(pages['mobile']);
-            mobile.megadrop.show();
         }
-        else {
-            var pupHandle = page.substr(9, 11);
-            mega.megadrop.pupCheck(pupHandle);
-        }
+        var pupHandle = page.substr(9, 11);
+        mega.megadrop.pupCheck(pupHandle);
     }
     else if (page == 'dashboard') {
         loadSubPage('fm/dashboard');
@@ -930,7 +1101,7 @@ function init_page() {
         }
 
         if (is_mobile) {
-            parsepage(pages['mobile']);
+            mobile.initDOM();
             mobile.register.show();
         }
         else {
@@ -938,9 +1109,25 @@ function init_page() {
             init_register();
         }
     }
+    else if ((page.substr(0, 9) === 'registerb')) { // business register
+        getUAOParameter(page, 'registerb');
+
+        parsepage(pages['registerb']);
+        $('body').addClass('business');
+        var regBusiness = new BusinessRegister();
+        regBusiness.initPage();
+    }
+    else if (page === 'fm/account/history') {
+        loadSubPage('fm/account/security');
+        return false;
+    }
+    else if (page === 'fm/links') {
+        loadSubPage('fm/public-links');
+        return false;
+    }
     else if (page == 'key') {
         if (is_mobile) {
-            parsepage(pages['mobile']);
+            mobile.initDOM();
             mobile.register.showGeneratingKeysScreen();
         }
         else {
@@ -950,8 +1137,12 @@ function init_page() {
     }
     else if (page === 'support') {
         if (is_mobile) {
-            parsepage(pages['mobile']);
+            mobile.initDOM();
             mobile.support.init();
+        }
+        else if (u_type === 0) {
+            loadSubPage('register');
+            return false;
         }
         else {
             parsepage(pages['support']);
@@ -964,6 +1155,17 @@ function init_page() {
             $('.account-mid-block').addClass('high');
         }
 
+        // if this is a business user
+        var $supportLink = $('#contact-email-support-btn');
+        if (u_attr && u_attr.b) {
+            $supportLink.text('business@mega.nz');
+            $supportLink.prop('href', 'mailto:business@mega.nz');
+        }
+        else {
+            $supportLink.text('support@mega.nz');
+            $supportLink.prop('href', 'mailto:support@mega.nz');
+        }
+
         // On clicking the directory buttons
         $('.directory-buttons li').rebind('click', function() {
 
@@ -971,7 +1173,7 @@ function init_page() {
             var link = $(this).attr('data-link');
 
             // Scroll to the element's parent (not the element itself because it's hidden by the header)
-            $('.contact-new-title.' + link).parent().get(0).scrollIntoView();
+            $('.contact-new-title.' + link).parent().get(0).scrollIntoView({behavior: "smooth"});
         });
     }
     else if (page.substr(0, 4) == 'help') {
@@ -983,10 +1185,6 @@ function init_page() {
     else if (page === 'gdpr') {
         parsepage(pages['gdpr']);
         gdpr.init();
-    }
-    else if (page == 'mega') {
-        parsepage(pages['mega']);
-        megainfotxt();
     }
     else if (page == 'privacycompany') {
         parsepage(pages['privacycompany']);
@@ -1013,7 +1211,7 @@ function init_page() {
     }
     else if (page == 'backup') {
         if (is_mobile) {
-            parsepage(pages['mobile']);
+            mobile.initDOM();
             mobile.backup.init();
         }
         else {
@@ -1022,35 +1220,55 @@ function init_page() {
         }
     }
     else if (page.substr(0, 6) === 'cancel' && page.length > 24) {
-        if (is_mobile) {
-            if (u_type) {
-                parsepage(pages['mobile']);
-                mobile.account.cancel.init();
-            }
-            else {
-                login_next = page;
-                loadSubPage('login');
-            }
+
+        // If logged in
+        if (u_type) {
+            var ac = new mega.AccountClosure();
+
+            // Validate code with current logged in session
+            ac.validateCodeWithSession().done(function() {
+                if (is_mobile) {
+                    mobile.initDOM();
+                    mobile.account.cancel.init();
+                }
+                else {
+                    ac.handleFeedback();
+                }
+            })
+            .fail(function(res) {
+
+                // If this is not errored from server but failed verification
+                if (typeof res !== 'number') {
+                    if (is_mobile) {
+                        mobile.initDOM();
+                    }
+                    msgDialog('warninga', l[135], l[22001], false, function () {
+                        loadSubPage('fm');
+                    });
+                }
+            });
         }
         else {
-            // If desktop and logged in
-            if (u_type) {
-                var ac = new mega.AccountClosure();
-                ac.handleFeedback();
+            // Unable to cancel, not logged in
+            if (is_mobile) {
+                mobile.initDOM();
+                login_next = page;
+                msgDialog('warninga', l[6186], l[5841], false, function () {
+                    loadSubPage('login');
+                });
             }
             else {
-                // Unable to cancel, not logged in
                 mega.ui.showLoginRequiredDialog({
                     title: l[6186],
                     textContent: l[5841]
                 })
-                    .done(init_page)
-                    .fail(function (aError) {
-                        if (aError) {
-                            alert(aError);
-                        }
-                        loadSubPage('start');
-                    });
+                .done(init_page)
+                .fail(function (aError) {
+                    if (aError) {
+                        alert(aError);
+                    }
+                    loadSubPage('start');
+                });
             }
         }
     }
@@ -1095,7 +1313,7 @@ function init_page() {
         }
         else {
             if (u_type) {
-                loadSubPage('fm/account/email-and-pass');
+                loadSubPage('fm/account/security');
                 return false;
             }
             else {
@@ -1111,20 +1329,20 @@ function init_page() {
 
     // Page for mobile to let them recover by Master/Recovery Key
     else if (is_mobile && page === 'recoverybykey') {
-        parsepage(pages['mobile']);
+        mobile.initDOM();
         mobile.recovery.sendEmail.init(mobile.recovery.sendEmail.RECOVERY_TYPE_KEY);
     }
 
     // Page for mobile to let them park their account (start a new account with the same email)
     else if (is_mobile && page === 'recoverybypark') {
-        parsepage(pages['mobile']);
+        mobile.initDOM();
         mobile.recovery.sendEmail.init(mobile.recovery.sendEmail.RECOVERY_TYPE_PARK);
     }
 
     // Code for handling the return from a #recover email link
     else if (page.substr(0, 7) === 'recover' && page.length > 25) {
         if (is_mobile) {
-            parsepage(pages['mobile']);
+            mobile.initDOM();
             mobile.recovery.fromEmailLink.init();
         }
         else {
@@ -1135,19 +1353,19 @@ function init_page() {
 
     // Page for mobile to enter (or upload) their Master/Recovery Key
     else if (is_mobile && page === 'recoveryenterkey') {
-        parsepage(pages['mobile']);
+        mobile.initDOM();
         mobile.recovery.enterKey.init();
     }
 
     // Page for mobile to let them change their password after they have entered their Master/Recovery key
     else if (is_mobile && page === 'recoverykeychangepass') {
-        parsepage(pages['mobile']);
+        mobile.initDOM();
         mobile.recovery.changePassword.init('key');
     }
 
     // Page for mobile to let the user change their password and finish parking their account
     else if (is_mobile && page === 'recoveryparkchangepass') {
-        parsepage(pages['mobile']);
+        mobile.initDOM();
         mobile.recovery.changePassword.init('park');
     }
     else if (page == 'sdkterms') {
@@ -1162,51 +1380,33 @@ function init_page() {
             dev_init('sdk');
         }
     }
-    else if (page == 'about') {
-        loadingDialog.show();
-        CMS.get("team", function (err, content) {
-            parsepage(pages['about']);
-
-            var html = '';
-            var a = 4;
-
-            $('.new-bottom-pages.about').safeHTML(content.html);
-            $('.team-person-block').sort(function () {
-                return (Math.round(Math.random()) - 0.5);
-            }).each(function (i, element) {
-                if (a == 4) {
-                    html += element.outerHTML.replace('team-person-block', 'team-person-block first');
-                    a = 0;
-                }
-                else {
-                    html += element.outerHTML;
-                }
-                a++;
-            });
-
-            $('#emailp').safeHTML($('#emailp').text().replace('jobs@mega.nz',
-                '<a href="mailto:jobs@mega.nz">jobs@mega.nz</a>'));
-            $('.new-bottom-pages.about').safeHTML(html + '<div class="clear"></div>');
-            topmenuUI();
-            loadingDialog.hide();
-
-        });
-        return;
+    else if (page.substr(0, 5) === 'about') {
+        parsepage(pages.about);
+        aboutus.init();
     }
     else if (page === 'sourcecode') {
         parsepage(pages['sourcecode']);
     }
-    else if (page === 'terms') {
+    else if (page.substr(0, 5) === 'terms') {
         if (is_mobile) {
-            parsepage(pages['mobile']);
+            mobile.initDOM();
             mobile.terms.show();
         }
         else {
             parsepage(pages['terms']);
         }
+
+        if (page.substr(5, 1) === '/') {
+            delay('waitTermLoad', function() {
+                var anchor = page.split('/')[1];
+                page = 'terms';
+                $('a[data-scrollto="#' + anchor + '"]').click();
+            });
+        }
     }
-    else if (page === 'general') {
-        parsepage(pages['general']);
+    else if (page === 'security') {
+        parsepage(pages['securitypractice']);
+        securityPractice.init();
     }
     else if (page == 'takedown') {
         parsepage(pages['takedown']);
@@ -1215,9 +1415,24 @@ function init_page() {
         parsepage(pages['blog']);
         init_blog();
     }
-    else if (page == 'copyright') {
+    else if (is_mobile && (page === 'copyright' || page === 'copyrightnotice')) {
+
+        // Show message that the copyright takedown should be submitted in a desktop browser
+        mobile.initDOM();
+        mobile.messageOverlay.show(l[621], l[19628]).always(function() {
+
+            // On clicking OK in the dialog, go to the file manager if logged in, or start page if not
+            loadSubPage(u_type === 3 ? 'fm' : 'start');
+        });
+        return false;
+    }
+    else if (page === 'copyrightnotice') {
+        parsepage(pages['copyrightnotice']);
+        copyright.init_cn();
+    }
+    else if (page === 'copyright') {
         parsepage(pages['copyright']);
-        $('.reg-st5-complete-button').rebind('click', function (e) {
+        $('.reg-st5-complete-button').rebind('click', function () {
             loadSubPage('copyrightnotice');
         });
     }
@@ -1231,34 +1446,47 @@ function init_page() {
             loadSubPage('disputenotice');
         });
     }
-    else if (page.substr(0, 6) === 'propay') {
-        if (is_mobile) {
-            parsepage(pages['mobile']);
+    else if (page.substr(0, 3) === 'pro') {
+        /* jshint -W018 */
+        if (page.substr(0, 6) === 'propay') {
+            parsepage(pages[is_mobile ? 'mobile' : 'propay']);
+            pro.propay.init();
         }
         else {
-            parsepage(pages['propay']);
+            parsepage(pages['proplan']);
+            pro.proplan.init();
         }
-        pro.propay.init();
-    }
-    else if (page.substr(0, 3) === 'pro') {
-        var tmp = page.split('/uao=');
-        if (tmp.length > 1) {
-            mega.uaoref = decodeURIComponent(tmp[1]);
-            loadSubPage(tmp[0]);
-            return;
-        }
-
-        parsepage(pages['proplan']);
-        pro.proplan.init();
     }
     else if (page.substr(0, 7) === 'payment') {
+        var isBussiness = page.indexOf('-b') !== -1;
 
-        // Load the Pro page in the background
-        parsepage(pages['proplan']);
-        pro.proplan.init();
+        if (!isBussiness || is_mobile) {
+            // Load the Pro page in the background
+            parsepage(pages['proplan']);
+            if (!isBussiness) {
+                pro.proplan.init();
+            }
+        }
+        else {
+            parsepage(pages['business']);
+            $('body').addClass('business');
+        }
 
         // Process the return URL from the payment provider and show a success/failure dialog if applicable
         pro.proplan.processReturnUrlFromProvider(page);
+    }
+    else if (page.substr(0, 5) === 'repay') {
+        if (u_attr && u_attr.b && u_attr.b.m && (u_attr.b.s === -1 || u_attr.b.s === 2)) {
+            getUAOParameter(page, 'repay');
+            parsepage(pages['repay']);
+            var repayPage = new RepayPage();
+            repayPage.initPage();
+        }
+        else {
+            loadSubPage('start');
+            return;
+        }
+
     }
     else if (page == 'credits') {
         parsepage(pages['credits']);
@@ -1270,27 +1498,43 @@ function init_page() {
         });
         $('.credits-main-pad').html(html + '<div class="clear"></div>');
     }
+    else if (page === 'mobile' || page === 'android' || page === 'ios' || page === 'uwp' || page === 'wp') {
+        parsepage(pages['mobileapp']);
+
+        // On clicking the 'Learn more' button
+        $('.bottom-page.big-link', '.top-bl').rebind('click.scrollToContent', function() {
+
+            // Scroll to the Windows Phone section
+            $('.full-block', '.scroll-block').get(0).scrollIntoView({behavior: "smooth"});
+        });
+    }
+    else if (page === 'nas') {
+        parsepage(pages.nas);
+    }
+    else if (page === 'nzippmember' || page === 'nziphotographer') {
+        parsepage(pages.nzipp);
+        nzippCampaign.init();
+    }
+    else if (page === 'refer') {
+        parsepage(pages.affiliate);
+        affiliateprogram.init();
+    }
     else if (page === 'extensions') {
         parsepage(pages['browsers']);
         browserspage.init();
     }
-    else if (page === 'ios') {
-        parsepage(pages['ios']);
-    }
-    else if (page === 'android') {
-        parsepage(pages['android']);
-    }
-    else if (page === 'wp') {
-        parsepage(pages['wp']);
-        bottompage.initTabs();
-    }
-    else if (page === 'bird') {
-        parsepage(pages['megabird']);
+    else if (page === 'business') {
+        parsepage(pages['business']);
+        $('body').addClass('business');
+        var businessP = new BusinessProductPage();
+        businessP.init();
     }
     else if (page.substr(0, 4) == 'sync') {
         parsepage(pages['sync']);
-        init_sync();
-        topmenuUI();
+        M.require('sync_js').then(function() {
+            onIdle(topmenuUI);
+            initMegasync();
+        });
     }
     else if (page == 'cmd') {
         parsepage(pages['cmd']);
@@ -1299,6 +1543,22 @@ function init_page() {
     else if (page == 'resellers') {
         parsepage(pages['resellers']);
     }
+    // else if (page === 'storage') {
+    //     parsepage(pages.feature_storage);
+    //     featurePages('storage');
+    // }
+    // else if (page === 'securechat') {
+    //     parsepage(pages.feature_chat);
+    //     featurePages('securechat');
+    // }
+    // else if (page === 'collaboration') {
+    //     parsepage(pages.feature_collaboration);
+    //     featurePages('collaboration');
+    // }
+    else if (page === 'downloadapp') {
+        parsepage(pages.downloadapp);
+        desktopOnboarding();
+    }
     else if (page == 'takedown') {
         parsepage(pages['takedown']);
     }
@@ -1306,9 +1566,41 @@ function init_page() {
         parsepage(pages['done']);
         init_done();
     }
-    else if (page == 'copyrightnotice') {
-        parsepage(pages['copyrightnotice']);
-        copyright.init_cn();
+    else if (page === 'cookie') {
+        parsepage(pages.cookie);
+    }
+    // Temporary pages
+    else if (page.substr(0, 12) === 'updatedterms') {
+        if (is_mobile) {
+            mobile.initDOM();
+            mobile.terms.show();
+        }
+        else {
+            parsepage(pages.updatedterms);
+        }
+
+        if (page.substr(12, 1) === '/') {
+            delay('waitTermLoad', function() {
+                var anchor = page.split('/')[1];
+                page = 'updatedterms';
+                $('a[data-scrollto="#' + anchor + '"]').click();
+            });
+        }
+    }
+    else if (page === 'updatedprivacy') {
+        parsepage(pages.updatedprivacy);
+    }
+    else if (page === 'updatedtakedown') {
+        parsepage(pages.updatedtakedown);
+    }
+    else if (page.substr(0, 5) === 'unsub') {
+        // Non-registered user unsubsribe from emails.
+        if (is_mobile) {
+            mobile.initDOM();
+        }
+        M.require('unsub_js').done(function() {
+            EmailUnsubscribe.unsubscribe();
+        });
     }
     else if (dlid) {
         page = 'download';
@@ -1325,14 +1617,30 @@ function init_page() {
                 }
             }
         }
+
         if (is_mobile) {
-            parsepage(pages['mobile']);
+            parsepage(pages.mobile);
         }
         else {
-            parsepage(pages['download']);
+            parsepage(pages.download);
         }
         dlinfo(dlid, dlkey, false);
         topmenuUI();
+    }
+    else if (page.substr(0, 5) === 'reset') {
+        localStorage.clear();
+        sessionStorage.clear();
+        loadSubPage(page.substr(6) || 'fm');
+        return location.reload(true);
+    }
+    else if (page.substr(0, 5) === 'debug') {
+        localStorage.d = 1;
+        localStorage.minLogLevel = 0;
+        loadSubPage(page.substr(6) || 'fm');
+        return location.reload(true);
+    }
+    else if (page.substr(0, 4) === 'test') {
+        test(page.substr(4));
     }
 
     /**
@@ -1340,17 +1648,35 @@ function init_page() {
      */
     else if (page.substr(0, 7) === 'voucher') {
 
-        // Get the voucher code from the URL which is 20 characters in length
-        var voucherCode = page.substr(7, 20);
+        if (mega.voucher && mega.voucher.redeemSuccess) {
+            return loadSubPage('pro');
+        }
+
+        // Get the voucher code from the URL.
+        var voucherCode = page.substr(7);
 
         // Store in localStorage to be used by the Pro page or when returning from login
         localStorage.setItem('voucher', voucherCode);
+        localStorage.setItem('voucherExpiry', Date.now() + 36e5);
 
         // If not logged in, direct them to login or register first
-        if (u_type === false) {
-            login_txt = l[7712];
-            loadSubPage('login');
-            return false;
+        if (!u_type) {
+            if (typeof redeem === 'undefined') {
+                // we have voucher directly
+                if (u_wasloggedin()) {
+                    login_txt = l[7712];
+                    loadSubPage('login');
+                }
+                else {
+                    register_txt = l[7712];
+                    loadSubPage('register');
+                }
+                return false;
+            }
+            else {
+                // we are coming form redeem page
+                redeem.showVoucherInfoDialog();
+            }
         }
         else if (u_type < 3) {
             // If their account is ephemeral and the email is not confirmed, then show them a dialog to warn them and
@@ -1360,6 +1686,10 @@ function init_page() {
             });
         }
         else {
+            // Show the voucher info to the user before proceeding to redeem.
+            if (typeof redeem !== 'undefined' && mega.voucher && mega.voucher.businessmonths) {
+                return redeem.showVoucherInfoDialog();
+            }
             // Otherwise go to the Redeem page which will detect the voucher code and show a dialog
             loadSubPage('redeem');
             return false;
@@ -1368,9 +1698,17 @@ function init_page() {
 
     // Load the direct voucher redeem page
     else if (page.substr(0, 6) === 'redeem') {
-        loadingDialog.show();
-        parsepage(pages['redeem']);
-        redeem.init();
+        if (localStorage.voucher && (u_type > 2 || window.bCreatedVoucher)) {
+            // To complete the redeem voucher process after user logs in if the voucher code exists
+            parsepage(pages[is_mobile ? 'mobile' : 'redeem']);
+            redeem.init();
+        }
+        else {
+            // No voucher found, ask to enter it.
+            // Or back to the voucher redeem page without completion of login or register if entered code before
+            parsepage(pages.redeem);
+            redeem.setupVoucherInputbox(localStorage.voucher);
+        }
     }
 
     // If they recently tried to redeem their voucher but were not logged in or registered then direct them to the
@@ -1379,7 +1717,35 @@ function init_page() {
         loadSubPage('redeem');
         return false;
     }
-    else if (is_fm()) {
+    else if (localStorage.getItem('addContact') !== null && u_type === 3) {
+        var contactRequestInfo = JSON.parse(localStorage.getItem('addContact'));
+        var contactHandle = contactRequestInfo.u;
+        var contactRequestTime = contactRequestInfo.unixTime;
+        M.setUser(contactHandle, {
+            u: contactHandle,
+            h: contactHandle,
+            c: undefined
+        });
+
+        var TWO_HOURS_IN_SECONDS = 7200;
+
+        var addContact = function (ownerEmail, targetEmail) {
+            M.inviteContact(ownerEmail, targetEmail);
+            localStorage.removeItem('addContact');
+            return init_page();
+        };
+
+        if ((unixtime() - TWO_HOURS_IN_SECONDS) < contactRequestTime) {
+            M.syncContactEmail(contactHandle, new MegaPromise(), true)
+                .then(function(email) {
+                    addContact(u_attr.email, email);
+                })
+                .catch(function(ex) {
+                    console.error(ex);
+                    localStorage.removeItem('addContact');
+                });
+        }
+    } else if (is_fm()) {
         var id = false;
         if (page.substr(0, 2) === 'fm') {
             id = page.replace('fm/', '');
@@ -1410,7 +1776,6 @@ function init_page() {
             fminitialized = false;
             loadfm.loaded = false;
             loadfm.loading = false;
-            fmconfig = Object.create(null);
 
             stopapi();
             api_reset();
@@ -1433,6 +1798,36 @@ function init_page() {
             }
         }
 
+        if (page.substr(0, 4) === "chat") {
+            id = page;
+            page = "chat";
+            if (u_type === false) {
+                anonymouschat = true;
+                u_handle = "AAAAAAAAAAA";
+                pchandle = id.substr(5, 8);
+
+                loadingInitDialog.show();
+                init_chat(0x104DF11E5)
+                    .always(function() {
+                        M.chat = true;
+                        megaChat.renderListing(id)
+                            .always(function() {
+                                // @todo is this needed?..
+                                megaChat.renderMyStatus();
+                            });
+                    })
+                    .dump('init_chat');
+            }
+            else if (u_type === 0) {
+                // ephemeral
+                mega.ui.sendSignupLinkDialog({}, false);
+            }
+            else {
+                anonymouschat = false;
+                pchandle = false;
+            }
+        }
+
         if (!fminitialized) {
             if (id) {
                 M.currentdirid = id;
@@ -1440,15 +1835,17 @@ function init_page() {
             if (is_mobile) {
                 $('#fmholder').safeHTML(translate(pages['mobile'].replace(/{staticpath}/g, staticpath)));
             }
-            else if ($('#fmholder').html() === '') {
-                $('#fmholder').safeHTML(translate(pages['fm'].replace(/{staticpath}/g, staticpath)));
+            else {
+                fm_addhtml();
             }
 
-            mega.initLoadReport();
-            loadfm();
+            if (!anonymouschat) {
+                mega.initLoadReport();
+                loadfm();
+            }
         }
-        else if ((!pfid || flhashchange) && id && id !== M.currentdirid) {
-            M.openFolder(id);
+        else if ((!pfid || flhashchange) && (id && id !== M.currentdirid || page === 'start')) {
+            M.openFolder(id, true);
         }
         else {
             if (ul_queue.length > 0) {
@@ -1490,8 +1887,7 @@ function init_page() {
         }
         $('#topmenu').safeHTML(parsetopmenu());
 
-        $('#pageholder').hide();
-        $('#startholder').hide();
+        $('#pageholder, #startholder').addClass('hidden');
 
         // Prevent duplicate HTML content breaking things
         // what a strange solution!  [emptying #startholder!]
@@ -1500,8 +1896,13 @@ function init_page() {
             $('#startholder').empty();
         }
 
+        $('.nw-fm-left-icons-panel').removeClass('hidden');
         if ($('#fmholder:visible').length == 0) {
-            $('#fmholder').show();
+            if (anonymouschat) {
+                $('.nw-fm-left-icons-panel').addClass('hidden');
+                $('.top-head .logo').css("display", "block");
+            }
+            $('#fmholder').removeAttr('style').removeClass('hidden');
             if (fminitialized && !is_mobile) {
                 M.addViewUI();
 
@@ -1515,6 +1916,7 @@ function init_page() {
             if (!$('.transfer-table tr#dl_' + Object(fdl_queue_var).ph).length) {
                 var fdl = dlmanager.getDownloadByHandle(Object(fdl_queue_var).ph);
                 if (fdl && fdl_queue_var.dlkey === dlpage_key) {
+                    $.tapioca = Array.isArray(fdl.url);
 
                     Soon(function () {
                         M.putToTransferTable(fdl);
@@ -1534,13 +1936,13 @@ function init_page() {
         pagemetadata();
     }
     else if (page.substr(0, 2) == 'fm' && !u_type) {
-        if (loggedout) {
-            loadSubPage('start');
+        if (loggedout || (u_type === false && page !== 'fm/refer')) {
+            loadSubPage('start', 'override');
             return false;
         }
         login_next = page;
         login_txt = l[1298];
-        loadSubPage('login');
+        loadSubPage('login', 'override');
     }
     else if (typeof init_start === 'function') {
         page = 'start';
@@ -1563,47 +1965,102 @@ function init_page() {
         alarm.siteUpdate.init();
     }
 
+    // Hide click-tooltip
+    if (mega.cttHintTimer) {
+        M.hideClickHint();
+    }
+
     topmenuUI();
+
+    if (!window.is_karma && mega.metatags) {
+        mega.metatags.checkPageMatchesURL();
+    }
 
     loggedout = false;
     flhashchange = false;
+
+    onIdle(blockChromePasswordManager);
 }
 
 function topmenuUI() {
+    'use strict';
 
-    var $topMenu = $('.top-menu-popup');
-    var $topHeader = $('.top-head');
+    var $topMenu = $('.top-menu-popup', 'body');
+    var $topHeader = is_mobile ? $('.fm-header', 'body') : $('.top-head', 'body');
+    var $loginButton = $('.top-login-button', $topHeader);
+    var $menuFmItem = $('.top-menu-item.fm', $topMenu);
+    var $menuLogoutButton = $('.top-white-button.logout', $topMenu);
+    var $menuAuthButtons = $('.top-menu-item.register,.top-menu-item.login', $topMenu);
+    var $menuLoggedBlock = $('.top-menu-logged', $topMenu);
+    var $menuRefreshItem = $('.top-menu-item.refresh-item', $topMenu);
+    var $menuHomeItem = $('.top-menu-item.start', $topMenu);
+    var $menuPricingItem = $('.top-menu-item.pro', $topMenu);
+    var $menuBackupItem = $('.top-menu-item.backup', $topMenu);
+    var $menuAffiliateItem = $('.top-menu-item.affiliate', $topMenu);
+    var $menuFeedbackItem = $('.top-menu-item.feedback', $topMenu);
+    var $menuUserinfo = $('.user-info', $menuLoggedBlock);
+    var $menuUsername = $('.name', $menuUserinfo);
+    var $menuAvatar = $('.avatar-block', $menuLoggedBlock);
+    var $menuUpgradeAccount = $('.upgrade-your-account', $topMenu);
+    var $headerWarningIcon = $('.top-icon.warning', $topHeader);
+    var $headerActivityBlock = $('.activity-status-block .activity-status,.activity-status-block', $topHeader);
+    var $headerActivityStatus = $('.activity-status-block', $headerActivityBlock);
+    var $headerPlanIcon = $('.membership-status-block i', $topHeader);
+    var $headerIndividual = $('.left.individual', $topHeader);
+    var $headerSearch = $('.top-search-bl', $topHeader);
+    var $headerNotificationIcon = $('.top-icon.notification', $topHeader);
+    var $headerAvatar = $('.fm-avatar', $topHeader);
+    var $headerRegisterBotton = $('.create-account-button', $topHeader);
+    var $headerAchievements = $('.top-icon.achievements', $topHeader);
 
     if (u_type === 0) {
-        $topHeader.find('.top-login-button').text(l[967]);
+        $loginButton.text(l[967]);
     }
 
-    $topMenu.find('.top-menu-item.upgrade-your-account,.top-menu-item.backup').addClass('hidden');
-    $topMenu.find('.top-menu-item.start').removeClass('hidden');
-    $topMenu.find('.top-menu-item.fm').addClass('hidden');
-    $topMenu.find('.top-menu-item.logout').addClass('hidden');
-    $topMenu.find('.top-menu-item.register,.top-menu-item.login').addClass('hidden');
-    $topMenu.find('.top-menu-item.account').addClass('hidden');
-    $topMenu.find('.top-menu-item.refresh-item').addClass('hidden');
-    $topHeader.find('.top-icon.warning').addClass('hidden');
-    $topHeader.find('.activity-status-block .activity-status,.activity-status-block').addClass('hidden');
-    $topHeader.find('.membership-status-block i').attr('class', 'tiny-icon membership-status free');
-    $topHeader.find('.membership-status, .top-head .user-name, .top-icon.achievements').addClass('hidden');
+    $menuLoggedBlock.addClass('hidden').removeClass('business-acc');
+    $menuBackupItem.addClass('hidden').next('.top-menu-divider').addClass('hidden');
+    $menuHomeItem.removeClass('hidden');
+    $menuPricingItem.removeClass('hidden');
+    $menuFmItem.addClass('hidden');
+    $menuLogoutButton.addClass('hidden');
+    $menuAuthButtons.addClass('hidden');
+    $menuRefreshItem.addClass('hidden');
+    $menuAffiliateItem.addClass('hidden');
+    $menuUsername.addClass('hidden');
+    $menuUpgradeAccount.removeClass('hidden');
+    $menuAvatar.removeClass('presence');
+
+    $headerWarningIcon.addClass('hidden');
+    $headerActivityBlock.addClass('hidden');
+    $headerActivityStatus.addClass('hidden');
+    $headerPlanIcon.attr('class', 'tiny-icon membership-status free');
+    $headerIndividual.text(l[19702]).removeClass('hidden'); // try Mega Business
+    $headerAchievements.addClass('hidden');
+    $('.membership-status, .top-head .user-name', $topHeader).addClass('hidden');
 
     if (fminitialized) {
-        $topHeader.find('.top-search-bl').removeClass('hidden');
+        $headerSearch.removeClass('hidden');
+        $headerNotificationIcon.removeClass('hidden');
     }
     else {
-        $topHeader.find('.top-search-bl').addClass('hidden');
+        $headerSearch.addClass('hidden');
+        $headerNotificationIcon.addClass('hidden');
     }
 
+    if (folderlink) {
+        $headerNotificationIcon.addClass('hidden');
+    }
     if (page === 'download') {
-        $topMenu.find('.top-menu-item.refresh-item').removeClass('hidden');
+        $menuRefreshItem.removeClass('hidden');
+    }
+    if (page === 'business' || page ==='registerb') {
+        $headerIndividual.text(l[19529]); // try Mega MEGA Indivisual
     }
 
     var avatar = window.useravatar && useravatar.mine();
     if (!avatar) {
-        $topHeader.find('.fm-avatar').addClass('hidden');
+        $headerAvatar.addClass('hidden');
+        $menuAvatar.addClass('hidden');
     }
 
     // Show active item in main menu
@@ -1612,18 +2069,21 @@ function topmenuUI() {
         section = page.split('/')[1];
     }
 
+    if (page.indexOf('fm/refer') === 0) {
+        section = 'affiliate-dashboard';
+    }
+    else if (page === 'refer') {
+        section = 'affiliate';
+    }
+
     // Get all menu items
-    var $topMenuItems = $topMenu.find('.top-menu-item');
+    var $topMenuItems = $('.top-menu-item', $topMenu);
 
     // Remove red bar from all menu items
     $topMenuItems.removeClass('active');
 
     // If in mobile My Account section, show red bar
-    if (is_mobile && page.indexOf('fm/account') === 0) {
-        $topMenuItems.filter('.account').addClass('active');
-    }
-    // If in mobile Cloud Drive, show red bar
-    else if (is_mobile && page.indexOf('fm') === 0) {
+    if (is_mobile && page.indexOf('fm') === 0) {
         $topMenuItems.filter('.fm').addClass('active');
     }
     else if (section) {
@@ -1641,43 +2101,66 @@ function topmenuUI() {
     }
 
     if (u_type === 3 && u_attr.fullname) {
-        $topHeader.find('.user-name').text(u_attr.fullname).removeClass('hidden');
+        $('.user-name', $topHeader).text(u_attr.fullname).removeClass('hidden');
+        $menuUsername.text(u_attr.fullname).removeClass('hidden');
+    }
+
+    if (mega.flags.refpr) {
+        $menuAffiliateItem.removeClass('hidden');
     }
 
     // Show language in top menu
-    $topMenu.find('.top-menu-item.languages .right-el').text(lang);
+    $('.top-menu-item.languages span', $topMenu).text(languages[lang][2]);
 
     // Show version in top menu
-    $topMenu.find('.top-mega-version').text('v. ' + M.getSiteVersion());
+    var $versionButton = $('.top-mega-version', $topMenu).text('v. ' + M.getSiteVersion());
+    var versionClickCounter = 0;
+    var versionClickTimeout = null;
+    $versionButton.rebind('click.versionupdate', function() {
+        clearTimeout(versionClickTimeout);
+        if (++versionClickCounter >= 3) {
+            mega.developerSettings.show();
+        }
+        versionClickTimeout = setTimeout(function() {
+            versionClickCounter = 0;
+        }, 1000);
+    });
 
-    if (u_type) {
+    if (u_type > 0) {
         $('body').removeClass('not-logged').addClass('logged');
 
-        $topMenu.find('.top-menu-item.start').addClass('hidden');
-        $topMenu.find('.top-menu-item.fm').removeClass('hidden');
-        $topMenu.find('.top-menu-item.logout,.top-menu-item.backup').removeClass('hidden');
-        $topMenu.find('.top-menu-item.account').removeClass('hidden');
-        $topMenu.find('.upgrade-your-account').removeClass('hidden');
+        $menuHomeItem.addClass('hidden');
+        $menuFmItem.removeClass('hidden');
+        $menuLogoutButton.removeClass('hidden');
+        $menuBackupItem.removeClass('hidden').next('.top-menu-divider').removeClass('hidden');
+        $menuLoggedBlock.removeClass('hidden');
+        $menuFeedbackItem.removeClass('hidden');
+
         // for top menu, load avatar and show for logged in user
         useravatar.loadAvatar(u_handle).always(function(){
-            $topHeader.find('.fm-avatar').safeHTML(useravatar.contact(u_handle));
+            $headerAvatar.safeHTML(useravatar.contact(u_handle));
+            $menuAvatar.safeHTML(useravatar.contact(u_handle));
         });
 
-        $topHeader.find('.top-login-button').addClass('hidden');
-        $topHeader.find('.membership-status').removeClass('hidden');
-        $topHeader.find('.top-change-language').addClass('hidden');
-        $topHeader.find('.create-account-button').addClass('hidden');
-        $topHeader.find('.membership-status-block').removeClass('hidden');
-        $topHeader.find('.top-icon.notification').removeClass('hidden');
+        $loginButton.addClass('hidden');
+        $('.membership-status', $topHeader).removeClass('hidden');
+        $('.top-change-language', $topHeader).addClass('hidden');
+        $headerRegisterBotton.addClass('hidden');
+        $('.membership-status-block', $topHeader).removeClass('hidden');
+        $headerIndividual.addClass('hidden');
 
         // Show the rocket icon if achievements are enabled
         mega.achievem.enabled()
             .done(function () {
-                $topHeader.find('.top-icon.achievements').removeClass('hidden');
+                $headerAchievements.removeClass('hidden');
             })
             .fail(function () {
-                $topHeader.find('.top-icon.achievements').addClass('hidden');
+                $headerAchievements.addClass('hidden');
             });
+
+        if (u_attr.email) {
+            $('.email', $menuUserinfo).text(u_attr.email);
+        }
 
         // If a Lite/Pro plan has been purchased
         if (u_attr.p) {
@@ -1693,31 +2176,53 @@ function topmenuUI() {
             if (proNum === 4) {
                 cssClass = 'lite';
                 $('body').addClass('lite');
-            } else {
+            }
+            else {
                 cssClass = 'pro' + proNum;
             }
 
             // Show the Pro badge
-            $topMenu.find('.top-menu-item.account .right-el').text(purchasedPlan);
-            $topHeader.find('.membership-status-block i').attr('class', 'tiny-icon membership-status ' + cssClass);
+            $('.plan', $menuLoggedBlock).text(purchasedPlan);
+            $headerPlanIcon.attr('class', 'tiny-icon membership-status ' + cssClass);
+            $('body').addClass('pro-user');
         }
         else {
             // Show the free badge
-            $topMenu.find('.top-menu-item.account .right-el').text(l[435]);
-            $topHeader.find('.membership-status').attr('class', 'tiny-icon membership-status free');
-            $('body').removeClass('lite').addClass('free');
+            $('.plan', $menuLoggedBlock).text(l[1150]);
+            $('.membership-status', $topHeader).attr('class', 'tiny-icon membership-status free');
+            $('body').removeClass('lite pro-user').addClass('free');
         }
 
         if (is_fm()) {
-            $topMenu.find('.top-menu-item.refresh-item').removeClass('hidden');
+            $menuRefreshItem.removeClass('hidden');
         }
 
         // If the chat is disabled don't show the green status icon in the header
         if (!pfid && !megaChatIsDisabled) {
-            $topHeader.find('.activity-status-block, .activity-status-block .activity-status').removeClass('hidden');
+            $headerActivityBlock.removeClass('hidden');
+            $headerActivityStatus.removeClass('hidden');
+            $menuAvatar.addClass('presence');
             if (megaChatIsReady) {
-                megaChat.renderMyStatus();
+                megaChat._renderMyStatus();
             }
+        }
+
+        // if this is a business account sub-user
+        if (u_attr && u_attr.b) {
+            $menuLoggedBlock.addClass('business-acc');
+
+            if (u_attr.b.s !== -1) {
+
+                $headerAchievements.addClass('hidden');
+                $menuUpgradeAccount.addClass('hidden');
+
+                // Hide Pricing menu item for Business sub accounts and admin expired
+                $menuPricingItem.addClass('hidden');
+            }
+            $('body').addClass('business-user');
+        }
+        else {
+            $('body').removeClass('business-user');
         }
 
         // Show PRO plan expired warning popup (if applicable)
@@ -1729,7 +2234,7 @@ function topmenuUI() {
         }
         else if (!confirmok && page !== 'key') {
 
-            $topMenu.find('.top-menu-item.register').text(l[968]);
+            $('.top-menu-item.register span', $topMenu).text(l[968]);
 
             // If they have purchased Pro but not activated yet, show a warning
             if (isNonActivatedAccount()) {
@@ -1744,22 +2249,31 @@ function topmenuUI() {
             }
         }
 
-        $topMenu.find('.top-menu-item.upgrade-your-account.pro').removeClass('hidden');
-        $topHeader.find('.membership-status-block').addClass('hidden');
-        $topHeader.find('.top-icon.notification').addClass('hidden');
-        $topHeader.find('.top-icon.achievements').addClass('hidden');
-        $topHeader.find('.create-account-button').removeClass('hidden');
+        $menuLoggedBlock.addClass('hidden');
+        $('.membership-status-block', $topHeader).addClass('hidden');
+        $headerNotificationIcon.addClass('hidden');
+        $headerAchievements.addClass('hidden');
+        $headerRegisterBotton.removeClass('hidden');
 
-        $('.create-account-button').rebind('click', function () {
-            loadSubPage('register');
+        if (u_type === 0 && is_fm()) {
+            $headerIndividual.addClass('hidden');
+        }
+
+        $headerRegisterBotton.rebind('click.register', function() {
+            if ($(this).hasClass('business-reg')) {
+                loadSubPage('registerb');
+            }
+            else {
+                loadSubPage('register');
+            }
         });
-        $topHeader.find('.top-login-button').removeClass('hidden');
-        $('.top-login-button').rebind('click', function () {
+
+        $loginButton.removeClass('hidden').rebind('click.auth', function() {
             if (u_type === 0) {
                 mLogout();
             }
             else {
-                var c = $topHeader.find('.dropdown.top-login-popup').attr('class');
+                var c = $('.dropdown.top-login-popup', $topHeader).attr('class');
                 if (c && c.indexOf('hidden') > -1) {
                     tooltiplogin.init();
                 }
@@ -1769,12 +2283,19 @@ function topmenuUI() {
             }
         });
 
+        if (page === 'login') {
+            $loginButton.addClass('hidden');
+        }
+        if (page === 'register' || page === 'registerb') {
+            $headerRegisterBotton.addClass('hidden');
+        }
+
         // Only show top language change icon if not logged in
         if (u_type === false) {
 
             // Get current language
             var $topChangeLang = $('.top-change-language', $topHeader);
-            var $topChangeLangName = $topChangeLang.find('.top-change-language-name');
+            var $topChangeLangName = $('.top-change-language-name', $topChangeLang);
 
             //TODO: Change translated values on short translated
             //var languageName = ln[lang];
@@ -1782,7 +2303,7 @@ function topmenuUI() {
             // Init the top header change language button
             $topChangeLangName.text(lang);
             $topChangeLang.removeClass('hidden');
-            $topChangeLang.rebind('click', function () {
+            $topChangeLang.rebind('click.changelang', function() {
 
                 // Add log to see how often they click to change language
                 api_req({ a: 'log', e: 99600, m: 'Language menu opened from top header' });
@@ -1792,13 +2313,12 @@ function topmenuUI() {
             });
         }
 
-        $topMenu.find('.top-menu-item.register,.top-menu-item.login').removeClass('hidden');
+        $menuAuthButtons.removeClass('hidden');
 
         if (u_type === 0) {
-            $topMenu.find('.top-menu-item.login').addClass('hidden');
-            $topMenu.find('.top-menu-item.logout').removeClass('hidden');
+            $('.top-menu-item.login', $topMenu).addClass('hidden');
+            $menuLogoutButton.removeClass('hidden');
         }
-
     }
 
     $.hideTopMenu = function (e) {
@@ -1808,31 +2328,32 @@ function topmenuUI() {
         if (e) {
             c = $(e.target).attr('class');
         }
-        if (!e || ($(e.target).parents('.top-menu-popup').length == 0
+        if (!e || ($(e.target).parents('.top-menu-popup').length === 0
             && !$(e.target).hasClass('top-menu-popup')
+            && !$('.top-menu-popup', 'body').hasClass('hidden')
             && ((c && c.indexOf('top-icon menu') == -1) || !c))) {
             topMenu(1);
         }
-        if (!e || ($(e.target).parents('.top-warning-popup').length == 0
+        if (!e || ($(e.target).parents('.top-warning-popup').length === 0
             && !$(e.target).hasClass('top-menu-popup')
             && ((c && c.indexOf('top-icon warning') == -1) || !c))) {
             $topHeader.find('.top-warning-popup').addClass('hidden');
-            $topHeader.find('.top-icon.warning').removeClass('active');
+            $headerWarningIcon.removeClass('active');
         }
-        if (!e || ($(e.target).parents('.top-user-status-popup').length == 0
-            && ((c && c.indexOf('activity-status') == -1 && c.indexOf('loading') == -1) || !c))) {
+        if (!e || ($(e.target).parents('.top-user-status-popup').length === 0
+            && ((c && c.indexOf('activity-status') === -1 && c.indexOf('loading') === -1) || !c))) {
             $topHeader.find('.top-user-status-popup').addClass('hidden');
-            $topHeader.find('.activity-status-block').removeClass('active');
+            $headerActivityBlock.removeClass('active');
         }
         if (!e || ($(e.target).parents('.notification-popup').length == 0
-            && ((c && c.indexOf('top-icon notification') == -1) || !c))) {
+            && ((c && c.indexOf('top-icon notification') === -1) || !c))) {
 
             if (typeof notify === 'object') {
                 notify.closePopup();
             }
         }
-        if (!e || ($(e.target).parents('.dropdown.top-login-popup').length == 0
-            && ((c && c.indexOf('top-login-button') == -1) || !c))) {
+        if (!e || ($(e.target).parents('.dropdown.top-login-popup').length === 0
+            && ((c && c.indexOf('top-login-popup') === -1 && c.indexOf('top-login-button') === -1) || !c))) {
             $topHeader.find('.dropdown.top-login-popup').addClass('hidden');
         }
         if ((!e || $(e.target).parents('.create-new-folder').length == 0)
@@ -1854,25 +2375,42 @@ function topmenuUI() {
         }
     };
 
-    $('#pageholder, #startholder').rebind('click', function (e) {
+    $('#pageholder, #startholder', 'body').rebind('mousedown.hidetopmenu', function(e) {
         if (typeof $.hideTopMenu === 'function') {
             $.hideTopMenu(e);
         }
     });
 
-    $topHeader.find('.top-icon.achievements').rebind('click', function () {
+    $headerAchievements.rebind('click.achievements', function() {
         mega.achievem.achievementsListDialog();
     });
 
-    $('.top-icon.menu, .top-icon.close').rebind('click', function () {
+    // try individual button in business mode
+    $headerIndividual.rebind('click.individual', function() {
+        if (page === 'business') {
+            sessionStorage.setItem('pro.subsection', 'individual');
+            loadSubPage('pro');
+        }
+        else if (page === 'registerb') {
+            loadSubPage('register');
+        }
+        else if (page === 'register') {
+            loadSubPage('registerb');
+        }
+        else {
+            loadSubPage('business');
+        }
+    });
+
+    $('.top-icon.menu', 'body').rebind('click.openmenu', function() {
         topMenu();
     });
 
-    $topMenu.find('.top-icon.close').rebind('click', function () {
+    $('.top-menu-icon.close', $topMenu).rebind('click.closemenu', function() {
         topMenu(1);
     });
 
-    $topHeader.find('.activity-status-block').rebind('click.topui', function (e) {
+    $headerActivityBlock.rebind('click.topui', function() {
         var $this = $(this);
         if ($this.attr('class').indexOf('active') == -1) {
             $this.addClass('active');
@@ -1886,94 +2424,123 @@ function topmenuUI() {
             $topHeader.find('.top-user-status-popup').addClass('hidden');
         }
     });
-    $topHeader.find('.top-user-status-popup .dropdown-item')
+    $('.top-user-status-popup .dropdown-item', $topHeader)
         .rebind('click.topui', function (e) {
-            if ($(this).attr('class').indexOf('active') == -1) {
+            var $this = $(this);
+
+            if ($this.attr('class').indexOf('active') === -1) {
                 $topHeader.find('.top-user-status-popup .dropdown-item')
                     .removeClass('active');
                 $(this).addClass('active');
-                $topHeader.find('.activity-status-block .activity-status')
-                    .attr('class', 'top ' + $(this).find('.activity-status').attr('class'));
-                $topHeader.find('.activity-status-block').removeClass('active');
+                $headerActivityStatus.attr('class', 'top ' + $('.activity-status', $this).attr('class'));
+                $headerActivityBlock.removeClass('active');
 
-                $topHeader.find('.top-user-status-popup').addClass('hidden');
+                $('.top-user-status-popup', $topHeader).addClass('hidden');
 
                 if (!megaChatIsReady && !megaChatIsDisabled) {
                     var presence = $(this).data("presence");
                     localStorage.megaChatPresence = presence;
                     localStorage.megaChatPresenceMtime = unixtime();
 
-                    mega.initLoadReport();
-                    loadfm();
-                    $topHeader.find('.activity-status-block').addClass("fadeinout");
+                    $headerActivityBlock.addClass("fadeinout");
+                    loadSubPage('fm/chat');
                 }
             }
         });
 
-    $topMenu.find('.top-menu-item').rebind('click', function () {
-        var className = $(this).attr('class') || '';
+    $('.top-menu-item', $topMenu)
+        .rebind('click.menuitem tap.menuitem', function() {
+            var $this = $(this);
+            var className = $this.attr('class') || '';
 
-        if (className.indexOf('submenu-item') > -1) {
-            if (className.indexOf('expanded') > -1) {
-                $(this).removeClass('expanded');
-            } else {
-                $(this).addClass('expanded');
-            }
-            if (!is_mobile) {
-                setTimeout(topMenuScroll, 200);
-            }
-        }
-        else {
-            if ($('.light-overlay').is(':visible')) {
-                loadingInitDialog.hide();
-            }
-            topMenu(1);
-
-            var subpage;
-            var subPages = [
-                'about', 'account', 'android', 'backup', 'blog', 'cmd', 'contact',
-                'copyright', 'corporate', 'credits', 'doc', 'extensions', 'general',
-                'help', 'ios', 'login', 'mega', 'bird', 'privacy', 'gdpr', 'privacycompany',
-                'register', 'resellers', 'sdk', 'sync', 'sitemap', 'sourcecode', 'support',
-                'sync', 'takedown', 'terms', 'wp', 'start'
-            ];
-            var moveTo = {'account': 'fm/account'};
-
-            for (var i = subPages.length; i--;) {
-                if (className.indexOf(subPages[i]) > -1) {
-                    subpage = subPages[i];
-                    break;
+            if (className.indexOf('submenu-item') > -1) {
+                if (className.indexOf('expanded') > -1) {
+                    $(this).removeClass('expanded');
+                }
+                else {
+                    $(this).addClass('expanded');
+                }
+                if (!is_mobile) {
+                    setTimeout(topMenuScroll, 200);
                 }
             }
+            else {
+                if ($('.light-overlay', 'body').is(':visible')) {
+                    loadingInitDialog.hide();
+                }
+                topMenu(1);
 
-            if (className.indexOf('upgrade-your-account') > -1) {
-                loadSubPage('pro');
+                var subpage;
+                /*  TODO: Add bird when its done */
+                var subPages = [
+                    'about', 'account', 'backup', 'blog', 'cmd', 'contact',
+                    'copyright', 'corporate', 'credits', 'doc', 'extensions',
+                    'help', 'login', 'mega', 'nzippmember', 'nziphotographer', 'privacy', 'gdpr', 'mobileapp',
+                    'mobile', 'privacycompany', 'register', 'resellers', 'sdk', 'sync', 'sitemap', 'sourcecode',
+                    'support', 'sync', 'takedown', 'terms', 'start', 'security', 'downloadapp', 'affiliate',
+                    'nas', 'pro', 'cookie', //'securechat', 'collaboration', 'storage',
+                    'updatedterms', 'updatedprivacy', 'updatedtakedown' // This will be removed on future
+                ];
+                var moveTo = {
+                    'account': 'fm/account',
+                    'affiliate': 'refer',
+                    'about': 'about/main',
+                    'corporate': 'corporate/media'
+                };
+
+                for (var i = subPages.length; i--;) {
+                    if (className.indexOf(subPages[i]) > -1) {
+                        subpage = subPages[i];
+                        break;
+                    }
+                }
+
+                if (is_mobile && className.indexOf('fm') > -1) {
+                    mobile.loadCloudDrivePage();
+                }
+                else if (!is_mobile && subpage === 'backup') {
+                    M.showRecoveryKeyDialog(2);
+                }
+                else if (subpage) {
+                    // Clear login_next variable before load subpages each time
+                    login_next = false;
+                    loadSubPage(moveTo[subpage] || subpage);
+                }
+                else if (className.indexOf('feedback') > -1) {
+                    // Show the Feedback dialog
+                    var feedbackDialog = mega.ui.FeedbackDialog.singleton($(this));
+                    feedbackDialog._type = 'top-button';
+                }
+                else if (className.indexOf('refresh') > -1) {
+                    M.reload();
+                }
+                else if (!is_mobile && className.indexOf('languages') > -1) {
+                    langDialog.show();
+                }
+                else if (className.indexOf('logout') > -1) {
+                    mLogout();
+                }
+                else if (className.indexOf('transparency') > -1) {
+                    window.open('https://mega.nz/Mega_Transparency_Report_202009.pdf', '_blank');
+                }
             }
-            else if (is_mobile && className.indexOf('fm') > -1) {
-                mobile.loadCloudDrivePage();
-            }
-            else if (subpage) {
-                loadSubPage(moveTo[subpage] || subpage);
-            }
-            else if (className.indexOf('feedback') > -1) {
-                // Show the Feedback dialog
-                var feedbackDialog = mega.ui.FeedbackDialog.singleton($(this));
-                feedbackDialog._type = 'top-button';
-            }
-            else if (className.indexOf('refresh') > -1) {
-                M.reload();
-            }
-            else if (!is_mobile && className.indexOf('languages') > -1) {
-                langDialog.show();
-            }
-            else if (className.indexOf('logout') > -1) {
-                mLogout();
-            }
-        }
-        return false;
+            return false;
+        });
+
+    $menuAvatar.rebind('click.openaccount', function() {
+        loadSubPage('fm/account');
     });
 
-    $topMenu.find('.top-social-bl a').rebind('click', function () {
+    $menuUserinfo.rebind('click.openaccount', function() {
+        loadSubPage('fm/account');
+    });
+
+    $menuUpgradeAccount.rebind('click.openpricing', function() {
+        loadSubPage('pro');
+    });
+
+    $('.top-social-bl a', $topMenu).rebind('click.opensocialnw', function(e) {
+        e.preventDefault();
         window.open($(this).attr('href'));
     });
 
@@ -1982,108 +2549,80 @@ function topmenuUI() {
         mobile.languageMenu.init();
     }
 
-    $topHeader.find('.top-search-bl').rebind('click', function () {
-        $(this).addClass('active');
-        $('.top-search-input').trigger("focus");
+    $headerSearch.rebind('click.resetval', function() {
+        if ($.trim($('.top-search-input').val()) === "") {
+            $(this).addClass('active');
+            $('.top-search-input').trigger("focus");
+        }
     });
 
-    $topHeader.find('.top-search-input').rebind('blur', function () {
-        $(this).closest('.top-search-bl').removeClass('active');
+    $('.top-search-input', $headerSearch).rebind('blur.searchblur', function() {
+        $headerSearch.removeClass('active');
         if ($(this).val() == '') {
-            $topHeader.find('.top-search-bl').removeClass('contains-value');
+            $headerSearch.removeClass('contains-value');
+            $('.top-search-button', $headerSearch).addClass('hidden');
+            $('.top-clear-button', $headerSearch).addClass('hidden');
         }
         else {
-            $topHeader.find('.top-search-bl').addClass('contains-value');
+            $headerSearch.addClass('contains-value');
+            $('.top-search-button', $headerSearch).addClass('hidden');
+            $('.top-clear-button', $headerSearch).removeClass('hidden');
         }
     });
 
-    $topHeader.find('.top-clear-button').rebind('click', function () {
+    $('.top-clear-button', $headerSearch).rebind('click.searchclear', function(e) {
+
+        // stop propaation to not calling .top-search-bl click
+        e.stopPropagation();
+
+        // if this is folderlink, open folderlink root;
         if (folderlink) {
-            var dn = $(M.viewmode ? '.file-block-scrolling .file-block-title' : 'table.grid-table.fm .tranfer-filetype-txt');
-            var ct = M.viewmode ? 'a' : 'tr';
-            dn.closest(ct).show();
-            $(window).trigger('resize');
+            M.nn = false;
+            M.openFolder();
         }
-        $topHeader.find('.top-search-bl').removeClass('contains-value active');
-        $topHeader.find('.top-search-input').val('');
+        $headerSearch.removeClass('contains-value active');
+        $('.top-clear-button', $headerSearch).removeClass('hidden');
+        $('.top-search-input', $headerSearch).val('').trigger('blur');
         // if current page is search result reset it.
-        if(page.indexOf('/search/') !== -1) {
+        if (page.indexOf('/search/') !== -1) {
             loadSubPage(page.slice(0, page.indexOf('/search/')));
         }
     });
 
-    $topHeader.find('.top-search-input').rebind('keyup', function _topSearchHandler(e) {
-        if (e.keyCode == 13 || folderlink) {
+    $('.top-search-input', $headerSearch).rebind('focus.searchfocus', function() {
+        if ($(this).closest('.top-search-bl').hasClass('active')) {
+            $('.top-search-button', $headerSearch).removeClass('hidden');
+            $('.top-clear-button', $headerSearch).addClass('hidden');
+        }
+    });
 
-            if (folderlink) {
-                // Flush cached nodes, if any
-                $(window).trigger('dynlist.flush');
-            }
+    $('#search-fake-form', $headerSearch).rebind('submit.searchsumbit', function() {
+        return false;
+    })
 
-            if (!folderlink || !_topSearchHandler.logFired) {
-                // Add log to see how often they use the search
-                api_req({ a: 'log', e: 99603, m: 'Webclient top search used' });
-                _topSearchHandler.logFired = true;
-            }
+    $('.top-search-button', $headerSearch)
+        .rebind('click.search mousedown.search', function _topSearchHandler() {
 
-            var val = $.trim($('.top-search-input').val());
-            if (folderlink || val.length > 2 || !asciionly(val)) {
-                if (folderlink) {
-                    var dn = $(M.viewmode ? '.file-block-scrolling .file-block-title' : 'table.grid-table.fm .tranfer-filetype-txt');
-                    var ct = M.viewmode ? 'a' : 'tr';
-                    dn.closest(ct).show();
+            var val = $.trim($('.top-search-input', $headerSearch).val());
 
-                    if (val) {
-                        val = val.toLowerCase();
-                        dn.filter(function () {
-                            return !~$(this).text().toLowerCase().indexOf(val);
-                        }).closest(ct).hide();
-                    }
-                    $(window).trigger('resize');
-                    e.preventDefault();
-                    e.stopPropagation();
-                }
-                else {
-                    loadingDialog.show();
-                    var promise = new MegaPromise();
-
-                    if (!M.nn) {
-                        M.nn = Object.create(null);
-
-                        promise = fmdb.get('f')
-                            .always(function (r) {
-                                for (var i = r.length; i--;) {
-                                    if (!r[i].fv) {
-                                        M.nn[r[i].h] = r[i].name;
-                                    }
-                                }
-                            });
-                    }
-                    else {
-                        promise.resolve();
-                    }
-
-                    promise.always(function () {
-                        var handles = [];
-                        var filter = M.getFilterBySearchFn(val);
-
-                        for (var h in M.nn) {
-                            if (!M.d[h] && filter({ name: M.nn[h] })) {
-                                handles.push(h);
-                            }
-                        }
-
-                        dbfetch.geta(handles).always(function () {
-                            loadingDialog.hide();
-                            loadSubPage('fm/search/' + val);
-                        });
-                    });
-                }
-            }
             // if current page is search and value is empty result move to root.
-            else if (val === '' && page.indexOf('/search/') !== -1) {
+            if (!val && page.indexOf('/search/') !== -1) {
+                $('.top-clear-button', $headerSearch).addClass('hidden');
                 loadSubPage(page.slice(0, page.indexOf('/search/')));
             }
+            else if (val.length >= 2 || !asciionly(val)) {
+                var $this = $(this);
+
+                M.fmSearchNodes(val).then(function() {
+                    $this.trigger('blur');
+                });
+            }
+        });
+
+    // Press enter to start searching
+    $('.top-search-input', $headerSearch).rebind('keyup.search', function(e) {
+        if (e.keyCode === 13) {
+            $('.top-search-button', $headerSearch).click();
         }
     });
 
@@ -2125,7 +2664,7 @@ function topmenuUI() {
             clearTimeout($.liTooltipTimer);
         });
 
-    $topHeader.find('.fm-avatar').rebind('click', function () {
+    $headerAvatar.rebind('click.headeravatar', function() {
 
         // If the user has an avatar already set, take them to the profile page where they can change or remove it
         if ($(this).find('img').length > 0) {
@@ -2138,18 +2677,18 @@ function topmenuUI() {
     });
 
     // If the user name in the header is clicked, take them to the account overview page
-    $topHeader.find('.user-name').rebind('click', function () {
+    $('.user-name', $topHeader).rebind('click.showaccount', function() {
         loadSubPage('fm/account');
     });
 
     // If the main Mega M logo in the header is clicked
-    $topHeader.find('.logo').rebind('click', function () {
+    $('.top-head, .fm-main, .bar-table').find('.logo').rebind('click', function () {
         if (typeof loadingInitDialog === 'undefined' || !loadingInitDialog.active) {
             if (folderlink) {
                 M.openFolder(M.RootID, true);
             }
             else {
-                loadSubPage(typeof u_type !== 'undefined' && +u_type > 2 ? 'fm/dashboard' : 'start');
+                loadSubPage(typeof u_type !== 'undefined' && parseInt(u_type) > 2 ? 'fm' : 'start');
             }
         }
     });
@@ -2177,9 +2716,9 @@ function topmenuUI() {
             loadSubPage($.dlhash);
         }
         else if (folderlink && M.lastSeenFolderLink) {
-            mBroadcaster.once('mega:openfolder', function () {
+            mBroadcaster.once('mega:openfolder', SoonFc(function () {
                 $('.nw-fm-left-icon.transfers').click();
-            });
+            }));
             loadSubPage(M.lastSeenFolderLink);
         }
         else {
@@ -2188,12 +2727,13 @@ function topmenuUI() {
     });
 
     if (String(M.currentdirid).substr(0, 7) === 'search/' && M.currentdirid[7] !== '~') {
-        $topHeader.find('.top-search-bl').addClass('contains-value');
+        $headerSearch.addClass('contains-value');
+        $('.top-clear-button', $headerSearch).removeClass("hidden");
         var searchVal = M.currentdirid.substr(7);
         if (hashLogic) {
             searchVal = decodeURIComponent(searchVal);
         }
-        $topHeader.find('.top-search-bl input').val(searchVal);
+        $('input', $headerSearch).val(searchVal);
     }
 
     // Initialise the header icon for mobile
@@ -2206,8 +2746,11 @@ function topmenuUI() {
         notify.init();
     }
 
-    if (!is_mobile && u_type === 3) {
-        if (mega.ui.passwordReminderDialog) {
+    if (u_type === 3 && mega.ui.passwordReminderDialog) {
+        if (is_mobile) {
+            mega.ui.passwordReminderDialog.prepare();
+        }
+        else {
             mega.ui.passwordReminderDialog.onTopmenuReinit();
         }
     }
@@ -2219,6 +2762,10 @@ function is_fm() {
     if (!r && (u_type !== false)) {
         r = page === '' || page === 'start' || page === 'index'
             || page.substr(0, 2) === 'fm' || page.substr(0, 7) === 'account';
+    }
+
+    if (!r && page.substr(0, 4) === "chat") {
+        r = true;
     }
 
     if (d > 2) {
@@ -2241,121 +2788,70 @@ function getTemplate(name) {
 }
 
 function pagemetadata() {
-    var mega_desc = false;
+    'use strict';
+    if (window.is_karma) {
+        return;
+    }
+    var metas = mega.metatags.getPageMetaTags(page);
+    var mega_desc = metas.mega_desc || mega.whoami;
+    mega_title = metas.mega_title || 'MEGA';
 
-    if (page == 'android') {
-        mega_title = 'Android - MEGA';
-        mega_desc = 'The MEGA Android app puts the cloud in your pocket and allows you to communicate with other MEGA users while on the go.';
-    }
-    else if (page == 'ios') {
-        mega_title = 'iOS - MEGA';
-        mega_desc = 'The MEGA iOS app puts the cloud in your pocket and allows you to communicate with other MEGA users while on the go.';
-    }
-    else if (page == 'wp') {
-        mega_title = 'Windows Phone - MEGA';
-    }
-    else if (page == 'sync') {
-        mega_title = 'MEGAsync - Download';
-        mega_desc = 'MEGAsync securely synchronizes data between your computer and your MEGA account. Available for Windows, Mac and Linux.';
-    }
-    else if (page == 'extensions') {
-        mega_title = 'Browser Extensions - MEGA';
-    }
-    else if (page == 'bird') {
-        mega_title = 'MEGAbird - Download';
-    }
-    else if (page == 'cmd') {
-        mega_title = 'MEGAcmd - Download';
-        mega_desc = 'MEGAcmd is an interactive, text console based, scriptable MEGA client.';
-    }
-    else if (page == 'pro') {
-        mega_title = 'Plans & pricing - MEGA';
-        mega_desc = 'Upgrade to a MEGA PRO account for additional storage and transfer quota. MEGA provides one the cheapest cloud storage deals on the Internet.';
-    }
-    else if (page == 'register') {
-        mega_title = 'Register - MEGA';
-        mega_desc = 'Create your free MEGA account and get free 50 GB.';
-    }
-    else if (page == 'login') {
-        mega_title = 'Login - MEGA';
-    }
-    else if (page == 'recovery') {
-        mega_title = 'Recovery - MEGA';
-        mega_desc = 'Forgot your MEGA password? Start your recovery process here.';
-    }
-    else if (page == 'terms') {
-        mega_title = 'Terms of Service - MEGA';
-    }
-    else if (page == 'privacy') {
-        mega_title = 'Privacy Policy - MEGA';
-    }
-    else if (page === 'gdpr') {
-        mega_title = l[18421] + ' - MEGA';
-    }
-    else if (page == 'copyright') {
-        mega_title = 'Copyright - MEGA';
-    }
-    else if (page == 'takedown') {
-        mega_title = 'Takedown Guidance - MEGA';
-    }
-    else if (typeof Object(window.dlmanager).isStreaming === 'object') {
-        mega_title = 'MEGA - ' + dlmanager.isStreaming._megaNode.name;
-    }
-    else {
-        mega_title = 'MEGA';
-    }
-    if (!mega_desc) {
-        mega_desc = mega.whoami;
-    }
     $('meta[name=description]').remove();
     $('head').append('<meta name="description" content="' + String(mega_desc).replace(/[<">]/g, '') + '">');
     document.title = mega_title;
     megatitle();
+
+    if (pagemetadata.last !== page) {
+        mBroadcaster.sendMessage('pagemetadata', metas);
+    }
+    pagemetadata.last = page;
 }
 
+pagemetadata.last = null;
 
-function parsepage(pagehtml, pp) {
+
+function parsepage(pagehtml) {
+    'use strict';
+
+    var $body = $('body').removeClass('ads');
+    $('#fmholder, #pageholder, #startholder').addClass('hidden');
     pagemetadata();
-    $('body').removeClass('ads');
-    $('#fmholder').hide();
-    $('#pageholder').hide();
-    $('#startholder').hide();
 
     pagehtml = translate('' + pagehtml).replace(/{staticpath}/g, staticpath);
+
+    if (pagehtml.indexOf('((MEGAINFO))') > -1) {
+        pagehtml = pagehtml.replace(/\(\(MEGAINFO\)\)/g, translate(pages.megainfo));
+    }
+    if (pagehtml.indexOf('((TOP))') > -1) {
+        pagehtml = pagehtml.replace(/\(\(TOP\)\)/g, parsetopmenu());
+    }
+    if (pagehtml.indexOf('((BOTTOM))') > -1) {
+        pagehtml = pagehtml.replace(/\(\(BOTTOM\)\)/g, translate(pages.bottom2));
+    }
+    if (pagehtml.indexOf('((PAGESMENU))') > -1) {
+        pagehtml = pagehtml.replace(/\(\(PAGESMENU\)\)/g, translate(pages.pagesmenu));
+    }
     if (is_chrome_web_ext || is_firefox_web_ext) {
         pagehtml = pagehtml.replace(/\/#/g, '/' + urlrootfile + '#');
     }
 
-    var top = parsetopmenu();
-    var bmenu = pages['bottom'];
-    var bmenu2 = pages['bottom2'];
-    var pagesmenu = pages['pagesmenu'];
-    if (is_chrome_web_ext || is_firefox_web_ext) {
-        bmenu2 = bmenu2.replace(/\/#/g, '/' + urlrootfile + '#');
+    if (!$.mTransferWidgetPage && pages.transferwidget) {
+        $.mTransferWidgetPage = translate(pages.transferwidget);
     }
-    pagehtml = pagehtml
-        .replace(/\(\(MEGAINFO\)\)/g, translate(pages['megainfo'])
-            .replace(/{staticpath}/g, staticpath));
-    pagehtml = pagehtml.replace(/\(\(TOP\)\)/g, top);
-    pagehtml = pagehtml.replace(/\(\(BOTTOM\)\)/g, translate(bmenu2));
-    pagehtml = pagehtml.replace(/\(\(PAGESMENU\)\)/g, translate(pagesmenu));
+    pagehtml = (($.mTransferWidgetPage || '') + pagehtml).replace(/{staticpath}/g, staticpath);
 
-    var $container = $('#startholder');
-    $container
-        .safeHTML('<div class="nav-overlay"></div>' +
-        translate(pages['transferwidget']) + pagehtml)
-        .show();
+    $('#startholder', $body).safeHTML(pagehtml).removeClass('hidden');
 
-    $('body').addClass('bottom-pages');
-    $('body, html, .bottom-pages .fmholder').stop().animate({
-        scrollTop: 0
-    }, 0);
+    $body.addClass('bottom-pages');
+    $('body, html, .bottom-pages .fmholder').stop(true, true).scrollTop(0);
     bottompage.init();
 
     if (typeof M.initUIKeyEvents === 'function') {
         M.initUIKeyEvents();
     }
-    clickURLs();
+    onIdle(clickURLs);
+    onIdle(scrollToURLs);
+    onIdle(topmenuUI);
 }
 
 function parsetopmenu() {
@@ -2377,7 +2873,8 @@ function parsetopmenu() {
 
 
 function loadSubPage(tpage, event) {
-    pagemetadata();
+    'use strict';
+
     tpage = getCleanSitePath(tpage);
 
     if (typeof dlPageCleanup === 'function' && tpage[0] !== '!') {
@@ -2392,12 +2889,38 @@ function loadSubPage(tpage, event) {
         slideshow(0, 1);
     }
 
+    if (window.textEditorVisible) {
+        // if we are loading a page and text editor was visible, then hide it.
+        mega.textEditorUI.doClose();
+    }
+
+    if (window.versiondialogid) {
+        fileversioning.closeFileVersioningDialog(window.versiondialogid);
+    }
+
+    if (event && Object(event.state).view) {
+        onIdle(function() {
+            slideshow(event.state.view);
+        });
+        return false;
+    }
+
     if (folderlink) {
         flhashchange = true;
     }
-
-    if ((tpage === page) && !folderlink) {
+    else if (tpage === page) {
         return false;
+    }
+
+    if (M.chat && megaChatIsReady) {
+        // navigating within the chat, skip the bloatware
+        if (tpage !== 'securechat' && tpage.indexOf('chat') > -1) {
+            megaChat.navigate(tpage, event);
+            return false;
+        }
+
+        // clear the flag if navigating to an static page..
+        M.chat = tpage.substr(0, 2) === 'fm';
     }
 
     // TODO: check what this was for and its relevance
@@ -2417,30 +2940,59 @@ function loadSubPage(tpage, event) {
     }
 
     if (page) {
+        var tmp = [];
+
         for (var p in subpages) {
             if (page.substr(0, p.length) === p) {
                 for (var i in subpages[p]) {
                     if (!jsl_loaded[jsl2[subpages[p][i]].n]) {
-                        jsl.push(jsl2[subpages[p][i]]);
+                        tmp.push(jsl2[subpages[p][i]]);
                     }
                 }
             }
         }
+
+        if (tmp.length) {
+            if (d) {
+                console.info('loadSubPage: About to load required resources...', tmp);
+            }
+
+            if (jsl.length) {
+                if (d) {
+                    console.warn('loadSubPage: There are pending requests running, holding it..');
+                }
+
+                var oldSL = silent_loading;
+                silent_loading = function() {
+                    if (oldSL) {
+                        tryCatch(oldSL)();
+                    }
+                    page = false;
+                    loadSubPage(tpage, event);
+                };
+
+                return;
+            }
+
+            jsl = tmp;
+        }
     }
 
-    if (hashLogic || isPublicLink(page)) {
-        document.location.hash = '#' + page;
+    if (event && event.type === 'popstate' || event === 'override') {
+        // In case we navigated to a location.hash, clean it up replacing the current history entry.
+        pushHistoryState(true, page);
     }
-    else if (!event || event.type !== 'popstate') {
-        var isSearch = page.indexOf('fm/search/');
-        if (isSearch >= 0) {
-            var searchString = page.substring(isSearch + 10);
-            var tempPage = page.substring(0, isSearch + 10);
-            history.pushState({ subpage: tempPage, searchString: searchString }, "", "/" + tempPage);
+    else {
+        pushHistoryState(page);
+    }
+
+    // since hash changing above will fire popstate event, which in its turn will call
+    // loadsubpage again. We will end up in folderlinks issue when they are decrypted with a provided key.
+    if (page !== '' && page !== tpage) {
+        if (d) {
+            console.warn('LoadSubPage arrived to IF statement proving race-condition');
         }
-        else {
-            history.pushState({ subpage: page }, "", "/" + page);
-        }
+        return false;
     }
 
     if (jsl.length > 0) {
@@ -2450,32 +3002,39 @@ function loadSubPage(tpage, event) {
     else {
         init_page();
     }
-    mBroadcaster.sendMessage('pagechange');
+    mBroadcaster.sendMessage('pagechange', tpage);
 }
 
+window.addEventListener('popstate', function(event) {
+    'use strict';
 
-window.onhashchange = function () {
-    if (window.skipHashChange) {
-        delete window.skipHashChange;
-        return false;
-    }
-    if (hashLogic) {
-        hash = getCleanSitePath(location.hash);
-        if (hash !== page) {
-            loadSubPage(hash);
-        }
-    }
-};
+    var state = event.state || {};
+    var add = state.searchString || '';
+    loadSubPage((state.subpage || state.fmpage || getCleanSitePath() || location.hash) + add, event);
+}, {
+    capture: true,
+    passive: true,
+});
 
 window.onbeforeunload = function () {
-    if (dlmanager.isDownloading || ulmanager.isUploading) {
+    'use strict';
+
+    if (window.dlmanager && (dlmanager.isDownloading || ulmanager.isUploading)) {
         return $.memIOSaveAttempt ? null : l[377];
     }
 
+    if (window.doUnloadLogOut) {
+        u_logout();
+        delete window.doUnloadLogOut;
+    }
     mBroadcaster.crossTab.leave();
 };
 
 window.onunload = function () {
+    'use strict';
+    if (window.doUnloadLogOut) {
+        u_logout();
+    }
     mBroadcaster.crossTab.leave();
 
     if (typeof dlpage_ph === 'string') {
@@ -2484,8 +3043,45 @@ window.onunload = function () {
     }
 };
 
-mBroadcaster.once('boot_done', function () {
+mBroadcaster.once('boot_done', function() {
+    'use strict';
     M = new MegaData();
-    attribCache = new IndexedDBKVStorage('ua', { murSeed: 0x800F0002 });
-    attribCache.bitMapsManager = new MegaDataBitMapManager();
+
+    if (d) {
+        if (!window.crossOriginIsolated) {
+            if (window.crossOriginIsolated === false) {
+                console.warn('cross-origin isolation is not enabled...');
+            }
+            return;
+        }
+
+        (function memoryMeasurement() {
+            var performMeasurement = tryCatch(function() {
+                performance.measureMemory()
+                    .then(function(result) {
+                        onIdle(memoryMeasurement);
+                        console.info('Memory usage:', result);
+                    });
+            });
+
+            if (!performance.measureMemory) {
+                console.debug('performance.measureMemory() is not available.');
+                return;
+            }
+            var interval = -Math.log(Math.random()) * 2e4;
+            console.info('Scheduling memory measurement in %d seconds.', Math.round(interval / 1e3));
+            setTimeout(performMeasurement, interval);
+        })();
+    }
+});
+
+// After open folder call, check if we should restore any previously opened preview node.
+mBroadcaster.once('mega:openfolder', function() {
+    'use strict';
+
+    if (sessionStorage && sessionStorage.previewNode) {
+        var previewNode = sessionStorage.previewNode;
+        sessionStorage.removeItem('previewNode');
+        slideshow(previewNode);
+    }
 });

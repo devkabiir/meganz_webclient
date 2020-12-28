@@ -43,7 +43,8 @@ var gfsttfbhosts = Object.create(null);
 var __ccXID = 0;
 
 if (localStorage.aTransfers) {
-    Soon(function() {
+    onIdle(function() {
+        'use strict';
         var data = {};
         var now = Date.now();
         try {
@@ -185,6 +186,10 @@ ClassChunk.prototype.updateProgress = function(force) {
     this.Progress.dl_prevprogress = _progress;
     this.Progress.dl_lastprogress = Date.now();
 
+    if (force !== 2 && dlmanager.isOverQuota) {
+        dlmanager.onNolongerOverquota();
+    }
+
     return r;
 };
 
@@ -238,8 +243,7 @@ ClassChunk.prototype.onXHRerror = function(args, xhr) {
         dlmanager.logger.error('ClassChunk.onXHRerror', this.task && this.task.chunk_id, args, xhr, this);
     }
     if (this.isCancelled()) {
-        ASSERT(0, 'This chunk should have been destroyed before reaching XHR.onerror..');
-        return;
+        return console.warn('This chunk should have been destroyed before reaching onerror...');
     }
 
     this.Progress.data[this.xid][0] = 0; /* reset progress */
@@ -262,6 +266,7 @@ ClassChunk.prototype.onXHRready = function(xhrEvent) {
     var xhr = xhrEvent.target;
     try {
         r = xhr.response || {};
+        xhr.response = false;
     }
     catch (e) {}
     if (r && r.byteLength === this.size) {
@@ -285,7 +290,7 @@ ClassChunk.prototype.onXHRready = function(xhrEvent) {
     else if (!this.dl.cancelled) {
         if (d) {
             dlmanager.logger.error("HTTP FAILED",
-                this.dl.n, xhr.status, "am i done? " + this.done, r && r.bytesLength, this.size);
+                this.dl.n, xhr.status, "am i done? " + this.done, r && r.byteLength, this.size);
         }
         if (dlMethod === MemoryIO) {
             try {
@@ -421,8 +426,15 @@ ClassFile.prototype.destroy = function() {
         }
     }
     else {
-        if (!this.emptyFile && !dlmanager.checkLostChunks(this.dl)
-                && (typeof skipcheck === 'undefined' || !skipcheck)) {
+        var skipMacIntegrityCheck = typeof skipcheck !== 'undefined' && skipcheck;
+        var macIntegritySuccess = this.emptyFile || dlmanager.checkLostChunks(this.dl);
+
+        if (skipMacIntegrityCheck && !macIntegritySuccess) {
+            console.warn('MAC Integrity failed, but ignoring...', this.dl);
+            dlmanager.logDecryptionError(this.dl, true);
+        }
+
+        if (!macIntegritySuccess && !skipMacIntegrityCheck) {
             dlmanager.dlReportStatus(this.dl, EKEY);
 
             if (this.dl.zipid) {
@@ -433,6 +445,8 @@ ClassFile.prototype.destroy = function() {
             Zips[this.dl.zipid].done(this);
         }
         else {
+            mBroadcaster.sendMessage('trk:event', 'download', 'completed');
+
             this.dl.onDownloadProgress(
                 this.dl.dl_id, 100,
                 this.dl.size,
@@ -486,6 +500,9 @@ ClassFile.prototype.run = function(task_done) {
     if (!GlobalProgress[this.gid].started) {
         GlobalProgress[this.gid].started = true;
         this.dl.onDownloadStart(this.dl);
+        if (!this.dl.zipid) {
+            mBroadcaster.sendMessage('trk:event', 'download', 'started');
+        }
     }
 
     this.dl.ready = function() {
@@ -539,7 +556,7 @@ ClassFile.prototype.run = function(task_done) {
                         this.dl.byteOffset, resumeOffset);
                 }
 
-                this.dl.mac = this.dl.resumeInfo.mac = [0, 0, 0, 0];
+                this.dl.macs = this.dl.resumeInfo.macs = Object.create(null);
                 this.dl.byteOffset = this.dl.resumeInfo.byteOffset = 0;
 
                 api_req({a: 'log', e: 99651, m: 'download resume attempt failed'});
@@ -637,7 +654,7 @@ ClassFile.prototype.run = function(task_done) {
             error = true;
         }
         else if (error) {
-            var fatal = (error === EBLOCKED);
+            var fatal = (error === EBLOCKED || error === ETOOMANY);
 
             this.dlGetUrlErrors = (this.dlGetUrlErrors | 0) + 1;
 
@@ -645,6 +662,11 @@ ClassFile.prototype.run = function(task_done) {
                 // Prevent stuck ZIP downloads if there are repetitive errors for some of the files
                 // TODO: show notification to the user about empty files in the zip?
                 console.error('Too many errors for "' + this.dl.n + '", saving as 0-bytes...');
+
+                if (error === EBLOCKED) {
+                    Zips[this.dl.zipid].eblocked++;
+                }
+
                 try {
                     this.dl.size = 0;
                     this.dl.urls = [];

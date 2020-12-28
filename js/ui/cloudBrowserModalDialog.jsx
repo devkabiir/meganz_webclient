@@ -1,57 +1,47 @@
-var React = require("react");
-var ReactDOM = require("react-dom");
-var utils = require("./utils.jsx");
-var MegaRenderMixin = require("../stores/mixins.js").MegaRenderMixin;
-var ModalDialogsUI = require('./modalDialogs.jsx');
-var Tooltips = require("./tooltips.jsx");
+import React from 'react';
+import utils from "./utils.jsx";
+import {MegaRenderMixin} from "../stores/mixins.js";
+import ModalDialogsUI from './modalDialogs.jsx';
+import Tooltips from "./tooltips.jsx";
 
-var BrowserCol = React.createClass({
-    mixins: [MegaRenderMixin],
-    getDefaultProps: function() {
-        return {
-            'hideable': true
-        }
-    },
-    render: function() {
-        var self = this;
+function BrowserCol({ id, className = '', label, sortBy, onClick }) {
+    let classes = `${id} ${className}`;
 
-        var classes = self.props.id + " " + (self.props.className ? self.props.className : "");
-
-        if (self.props.sortBy[0] === self.props.id) {
-            var ordClass = self.props.sortBy[1] == "desc" ? "asc" : "desc";
-            classes = classes + " " + ordClass;
-        }
-        return (
-            <th onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                self.props.onClick(self.props.id);
-            }}>
-                <span className={"arrow " + classes}>{self.props.label}</span>
-            </th>
-        );
+    if (sortBy[0] === id) {
+        const ordClass = sortBy[1] == "desc" ? "asc" : "desc";
+        classes = `${classes} ${ordClass}`;
     }
-});
-var BrowserEntries = React.createClass({
-    mixins: [MegaRenderMixin],
-    getDefaultProps: function() {
-        return {
-            'hideable': true
-        }
-    },
-    getInitialState: function() {
 
-        return {
-            'highlighted': [],
-            'selected': []
+    return (
+        <th onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onClick(id);
+        }}>
+            <span className={`arrow ${classes}`}>{label}</span>
+        </th>
+    );
+};
+
+class BrowserEntries extends MegaRenderMixin {
+    static defaultProps = {
+        'hideable': true,
+        'requiresUpdateOnResize': true
+    };
+    constructor(props) {
+        super(props);
+
+        this.state = {
+            'highlighted': this.props.initialHighlighted || [],
+            'selected': this.props.initialSelected || []
         }
-    },
-    componentWillMount: function() {
+    }
+    componentWillMount() {
         this.lastCursor = false;
         this.lastCharKeyPressed = false;
         this.lastCharKeyIndex = -1;
-    },
-    componentDidUpdate: function() {
+    }
+    componentDidUpdate() {
         var self = this;
 
         if (!self.lastCursor || self.lastCursor !== self.state.cursor) {
@@ -62,14 +52,16 @@ var BrowserEntries = React.createClass({
                 $jsp.scrollToElement(tr, undefined, false);
             }
         }
-    },
-    componentDidMount: function() {
+    }
+    componentDidMount() {
+        super.componentDidMount();
         this.bindEvents();
-    },
-    componentWillUnmount: function() {
+    }
+    componentWillUnmount() {
+        super.componentWillUnmount();
         this.unbindEvents();
-    },
-    getNodesInIndexRange: function(firstIndex, lastIndex) {
+    }
+    getNodesInIndexRange(firstIndex, lastIndex) {
         var self = this;
         return self.props.entries
             .filter((node, index) => {
@@ -78,8 +70,8 @@ var BrowserEntries = React.createClass({
                 );
             })
             .map((node) => { return node.h });
-    },
-    getIndexByNodeId: function(nodeId, notFoundValue) {
+    }
+    getIndexByNodeId(nodeId, notFoundValue) {
         var self = this;
         var foundIndex = typeof(notFoundValue) === 'undefined' ? -1 : notFoundValue;
         self.props.entries.find(function (r, index) {
@@ -89,8 +81,8 @@ var BrowserEntries = React.createClass({
             }
         });
         return foundIndex;
-    },
-    setSelectedAndHighlighted: function(highlighted, cursor) {
+    }
+    setSelectedAndHighlighted(highlighted, cursor) {
         var self = this;
 
         // highlighted requires to be sorted!
@@ -124,8 +116,8 @@ var BrowserEntries = React.createClass({
 
         self.setState({'selected': selected});
         self.props.onSelected(selected);
-    },
-    _doSelect: function(selectionIncludeShift, currentIndex, targetIndex) {
+    }
+    _doSelect(selectionIncludeShift, currentIndex, targetIndex) {
         var self = this;
         if (targetIndex >= self.props.entries.length) {
             if (selectionIncludeShift) {
@@ -213,8 +205,8 @@ var BrowserEntries = React.createClass({
             highlighted = [self.props.entries[targetIndex].h];
             self.setSelectedAndHighlighted(highlighted, highlighted[0]);
         }
-    },
-    bindEvents: function() {
+    }
+    bindEvents() {
         var self = this;
 
         var KEY_A = 65;
@@ -232,8 +224,18 @@ var BrowserEntries = React.createClass({
             var charTyped = false;
             var keyCode = e.which || e.keyCode;
             var selectionIncludeShift = e.shiftKey;
-            if ($('input:focus, textarea:focus').length > 0) {
+            var $searchField = $('div.fm-files-search input');
+            var $typingArea = $('textarea.messages-textarea');
+
+            // prevent further behavior if currently interacting w/ the dialog search field
+            if ($searchField.is(':focus')) {
                 return;
+            }
+
+            // remove the focus from the chat typing area to prevent
+            // unnecessary character insertion while interacting with the dialog
+            if ($typingArea.is(':focus')) {
+                $typingArea.trigger('blur');
             }
 
             var viewMode = localStorage.dialogViewMode ? localStorage.dialogViewMode : "0";
@@ -401,11 +403,11 @@ var BrowserEntries = React.createClass({
             }
             // enter
         });
-    },
-    unbindEvents: function() {
+    }
+    unbindEvents() {
         $(document.body).off('keydown.cloudBrowserModalDialog');
-    },
-    onEntryClick: function(e, node) {
+    }
+    onEntryClick(e, node) {
         var self = this;
 
         self.lastCharKeyPressed = false;
@@ -481,7 +483,7 @@ var BrowserEntries = React.createClass({
                 self.setSelectedAndHighlighted(highlighted, highlighted.length == 0 ? false : highlighted[0]);
             }
         }
-    },
+    }
     expandFolder(nodeId) {
         var self = this;
         var node = M.getNodeByHandle(nodeId);
@@ -497,8 +499,8 @@ var BrowserEntries = React.createClass({
             self.props.onExpand(node);
             self.forceUpdate();
         }
-    },
-    onEntryDoubleClick: function(e, node) {
+    }
+    onEntryDoubleClick(e, node) {
         var self = this;
 
         self.lastCharKeyPressed = false;
@@ -506,6 +508,12 @@ var BrowserEntries = React.createClass({
 
         e.stopPropagation();
         e.preventDefault();
+
+        var share = M.getNodeShare(node);
+        if (share && share.down) {
+            // node is taken down -> no interactions available
+            return;
+        }
 
         if (node.t) {
             // expand folder
@@ -520,8 +528,11 @@ var BrowserEntries = React.createClass({
             self.props.onSelected(self.state.selected);
             self.props.onAttachClicked(self.state.selected);
         }
-    },
-    render: function() {
+    }
+    customIsEventuallyVisible() {
+        return true;
+    }
+    render() {
         var self = this;
 
         var items = [];
@@ -539,13 +550,21 @@ var BrowserEntries = React.createClass({
                 return;
             }
 
-            var isFolder = node.t;
+            const isFolder = node.t;
             var isHighlighted = self.state.highlighted.indexOf(node.h) !== -1;
+            const fileIconType = fileIcon(node);
+            // megadrop or shared folder
+            const isSharedFolder = (fileIconType === 'puf-folder' || fileIconType === 'folder-shared');
+            let sharedFolderClass = '';
+
+            if (isSharedFolder) {
+                sharedFolderClass = fileIconType;
+            }
 
             var tooltipElement = null;
 
                 var icon = <span
-                className={"transfer-filetype-icon " + (isFolder ? " folder " : "") + fileIcon(node)}> </span>;
+                className={"transfer-filetype-icon " + (isFolder ? " folder " : "") + '' + fileIconType}> </span>;
 
             var image = null;
             var src = null;
@@ -582,13 +601,25 @@ var BrowserEntries = React.createClass({
                 }
             }
 
+            const share = M.getNodeShare(node);
 
-
+            let hasPublicLink = null;
+            let classLinked = null;
+            if (share) {
+                classLinked = 'linked';
+                hasPublicLink = (
+                    <span className="data-item-icon public-link-icon"></span>
+                );
+            }
 
             if (viewMode === "0") {
                 items.push(
-                    <tr className={
-                            "node_" + node.h + " " + (isFolder ? " folder" :"") + (isHighlighted ? " ui-selected" : "")
+                    <tr
+                        className={
+                            "node_" + node.h +
+                            (isFolder ? " folder" : "") +
+                            (isHighlighted ? " ui-selected" : "") +
+                            (share && share.down ? " taken-down" : "")
                         }
                         onClick={(e) => {
                             self.onEntryClick(e, node);
@@ -606,7 +637,7 @@ var BrowserEntries = React.createClass({
                             <span className={"tranfer-filetype-txt"}>{node.name}</span>
                         </td>
                         <td>{!isFolder ? bytesToSize(node.s) : ""}</td>
-                        <td>{time2date(node.ts)}</td>
+                        <td className={classLinked}>{time2date(node.ts)} {hasPublicLink}</td>
                     </tr>
                 );
             } else {
@@ -614,20 +645,23 @@ var BrowserEntries = React.createClass({
                 if (playtime) {
                     playtime = secondsToTimeShort(playtime);
                 }
-                var share = M.getNodeShare(node);
+
                 var colorLabelClasses = "";
                 if (node.lbl) {
-                    var colourLabel = M.getColourClassFromId(node.lbl);
+                    var colourLabel = M.getLabelClassFromId(node.lbl);
                     colorLabelClasses +=  ' colour-label';
                     colorLabelClasses += ' ' + colourLabel;
                 }
 
                 items.push(
-                    <div className={
-                            "data-block-view node_" + node.h + " " + (isFolder ? " folder" :" file") +
+                    <div
+                        className={
+                            "data-block-view node_" + node.h +
+                            (isFolder ? " folder" : " file") +
                             (isHighlighted ? " ui-selected" : "") +
                             (share ? " linked" : "") +
-                            colorLabelClasses
+                            (share && share.down ? " taken-down" : "") +
+                            (colorLabelClasses && " " + colorLabelClasses)
                         }
                         onClick={(e) => {
                             self.onEntryClick(e, node);
@@ -635,8 +669,9 @@ var BrowserEntries = React.createClass({
                         onDoubleClick={(e) => {
                             self.onEntryDoubleClick(e, node);
                         }}
-                         id={"chat_" + node.h}
-                         key={"block_" + node.h}
+                        id={"chat_" + node.h}
+                        key={"block_" + node.h}
+                        title={node.name}
                     >
                         <div className={
                             (src ? "data-block-bg thumb" : "data-block-bg") +
@@ -647,7 +682,7 @@ var BrowserEntries = React.createClass({
                                 <div className="data-item-icon indicator" />
                             </div>
                             <div className={"block-view-file-type " +
-                                (isFolder ? " folder " :" file " + fileIcon(node))
+                                (isFolder ? " folder " :" file " + fileIcon(node)) + sharedFolderClass
                             }>
                                 {image}
                             </div>
@@ -712,49 +747,61 @@ var BrowserEntries = React.createClass({
                     <div className="dialog-empty-pad">
                         <div className="dialog-empty-icon"></div>
                         <div className="dialog-empty-header">
-                            {__(l[5533])}
+                            {l[5533]}
                         </div>
                     </div>
                 </div>
             );
         }
-        else {
+        else if (!self.props.entries.length && self.props.currentlyViewedEntry === 'search') {
             return (
                 <div className="dialog-empty-block dialog-fm folder">
-                    {
-                        self.props.currentlyViewedEntry === 'shares' ? (
-                            <div className="dialog-empty-pad">
-                                <div className="fm-empty-incoming-bg"></div>
-                                <div className="dialog-empty-header">
-                                    {l[6871]}
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="dialog-empty-pad">
-                                <div className="fm-empty-folder-bg"></div>
-                                <div className="dialog-empty-header">
-                                    {self.props.currentlyViewedEntry === M.RootID ? l[1343] : l[782]}
-                                </div>
-                            </div>
-                        )
-                    }
+                    <div className="dialog-empty-pad">
+                        <div className="fm-empty-search-bg"></div>
+                        <div className="dialog-empty-header">
+                            {l[978]}
+                        </div>
+                    </div>
                 </div>
             );
         }
+
+        return (
+            <div className="dialog-empty-block dialog-fm folder">
+                {
+                    self.props.currentlyViewedEntry === 'shares' ? (
+                        <div className="dialog-empty-pad">
+                            <div className="fm-empty-incoming-bg"></div>
+                            <div className="dialog-empty-header">
+                                {l[6871]}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="dialog-empty-pad">
+                            <div className="fm-empty-folder-bg"></div>
+                            <div className="dialog-empty-header">
+                                {self.props.currentlyViewedEntry === M.RootID ? l[1343] : l[782]}
+                            </div>
+                        </div>
+                    )
+                }
+            </div>
+        );
     }
-});
-var CloudBrowserDialog = React.createClass({
-    mixins: [MegaRenderMixin],
-    getDefaultProps: function() {
-        return {
-            'selectLabel': __(l[8023]),
-            'openLabel': __(l[1710]),
-            'cancelLabel': __(l[82]),
-            'hideable': true
-        }
-    },
-    getInitialState: function() {
-        return {
+};
+
+
+class CloudBrowserDialog extends MegaRenderMixin {
+    static defaultProps = {
+        'selectLabel': l[8023],
+        'openLabel': l[1710],
+        'cancelLabel': l[82],
+        'hideable': true,
+        className: ''
+    };
+    constructor(props) {
+        super(props);
+        this.state = {
             'sortBy': [
                 'name', 'asc'
             ],
@@ -762,18 +809,72 @@ var CloudBrowserDialog = React.createClass({
             'highlighted': [],
             'currentlyViewedEntry': M.RootID,
             'selectedTab': 'clouddrive',
-            'searchValue': ''
+            'searchValue': '',
+            'entries': null
+        };
+        this.state.entries = this.getEntries();
+        this.onAttachClicked = this.onAttachClicked.bind(this);
+        this.onClearSearchIconClick = this.onClearSearchIconClick.bind(this);
+        this.onHighlighted = this.onHighlighted.bind(this);
+        this.onPopupDidMount = this.onPopupDidMount.bind(this);
+        this.onSearchChange = this.onSearchChange.bind(this);
+        this.onSearchIconClick = this.onSearchIconClick.bind(this);
+        this.onSelected = this.onSelected.bind(this);
+        this.handleTabChange = this.handleTabChange.bind(this);
+        this.onViewButtonClick = this.onViewButtonClick.bind(this);
+        this.toggleSortBy = this.toggleSortBy.bind(this);
+    }
+    isSearch() {
+        return this.state.currentlyViewedEntry === 'search';
+    }
+    clearSelectionAndHighlight() {
+        this.onSelected([]);
+        this.onHighlighted([]);
+    }
+    getBreadcrumbNodeIcon(nodeId) {
+        switch (nodeId) {
+            case M.RootID:
+                return 'cloud-drive';
+            case M.RubbishID:
+                return 'recycle-item';
+            case M.InboxID:
+                return 'inbox-item';
+            case 'shares':
+                return 'contacts-item';
+            default:
+                return (nodeId && M.d[nodeId]) && fileIcon(M.d[nodeId]);
         }
-    },
-    toggleSortBy: function(colId) {
+    }
+    getBreadcrumbNodeText(nodeId, prevNodeId) {
+        switch (nodeId) {
+            case M.RootID:
+                // `Cloud Drive`
+                return l[164];
+            case M.RubbishID:
+                // `Rubbish Bin`
+                return l[167];
+            case M.InboxID:
+                // `Inbox`
+                return l[166];
+            case 'shares':
+                // `username@mega.co.nz` || `Shared with me`
+                return prevNodeId && M.d[prevNodeId] ? M.d[prevNodeId].m : l[5589];
+            default:
+                return M.d[nodeId] && M.d[nodeId].name;
+        }
+    }
+    toggleSortBy(colId) {
+        var newState = {};
         if (this.state.sortBy[0] === colId) {
-            this.setState({'sortBy': [colId, this.state.sortBy[1] === "asc" ? "desc" : "asc"]});
+            newState.sortBy = [colId, this.state.sortBy[1] === "asc" ? "desc" : "asc"];
         }
         else {
-            this.setState({'sortBy': [colId, "asc"]});
+            newState.sortBy = [colId, "asc"];
         }
-    },
-    onViewButtonClick: function(e, node) {
+        newState.entries = this.getEntries(newState);
+        this.setState(newState);
+    }
+    onViewButtonClick(e, node) {
         var self = this;
         var $this = $(e.target);
 
@@ -787,12 +888,16 @@ var CloudBrowserDialog = React.createClass({
             localStorage.dialogViewMode = "0";
         }
 
-        self.setState({entries: self.getEntries()});
+        self.setState({
+            entries: self.getEntries(),
+            selected: self.state.selected,
+            highlighted: self.state.highlighted,
+        });
 
         $this.parent().find('.active').removeClass("active");
         $this.addClass("active");
-    },
-    onSearchIconClick: function(e, node) {
+    }
+    onSearchIconClick(e, node) {
         var $parentBlock = $(e.target).closest(".fm-header-buttons");
 
         if ($parentBlock.hasClass("active-search")) {
@@ -801,31 +906,46 @@ var CloudBrowserDialog = React.createClass({
             $parentBlock.addClass("active-search");
             $('input', $parentBlock).trigger("focus");
         }
-    },
-    onTabButtonClick: function(e, selectedTab) {
-        var $this = $(e.target);
+    }
+    onClearSearchIconClick() {
+        var self = this;
 
-        $this.parent().find('.active').removeClass("active");
-        $this.addClass("active");
 
-        var newState = {
-            'selectedTab': selectedTab,
+        self.setState({
             'searchValue': '',
-        };
-        if (selectedTab === 'shares') {
-            newState['currentlyViewedEntry'] = 'shares';
+            'currentlyViewedEntry': M.RootID
+        })
+    }
+    onBreadcrumbNodeClick(e, nodeId /* , prevNodeId */) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (nodeId === 'shares') {
+            // Switch the active tab to `Incoming Shares`
+            return this.handleTabChange('shares');
         }
-        else {
-            newState['currentlyViewedEntry'] = M.RootID;
+
+        // Click to open allowed only on folders as breadcrumb nodes
+        if (M.d[nodeId] && M.d[nodeId].t) {
+            this.setState({
+                selectedTab: M.d[nodeId].p ? 'shares' : 'clouddrive',
+                currentlyViewedEntry: nodeId,
+                selected: [],
+                searchValue: ''
+            }, () => this.clearSelectionAndHighlight());
         }
-        this.setState(newState);
-        this.onSelected([]);
-        this.onHighlighted([]);
-    },
-    onSearchChange: function(e) {
+    }
+    handleTabChange(selectedTab) {
+        this.setState({
+            selectedTab,
+            currentlyViewedEntry: selectedTab === 'shares' ? 'shares' : M.RootID,
+            searchValue: '',
+            isLoading: false
+        }, () => this.clearSelectionAndHighlight());
+    }
+    onSearchChange(e) {
         var searchValue = e.target.value;
         var newState = {
-            'selectedTab': 'search',
             'searchValue': searchValue
         };
         if (searchValue && searchValue.length >= 3) {
@@ -838,21 +958,25 @@ var CloudBrowserDialog = React.createClass({
         }
 
         this.setState(newState);
-        this.onSelected([]);
-        this.onHighlighted([]);
-    },
-    resizeBreadcrumbs: function() {
-        var $breadcrumbs = $('.fm-breadcrumbs-block.add-from-cloud', this.findDOMNode());
-        var $breadcrumbsWrapper = $breadcrumbs.find('.breadcrumbs-wrapper');
+        this.clearSelectionAndHighlight();
+    }
+    resizeBreadcrumbs() {
+        Soon(() => {
+            var $breadcrumbsWrapper = $('.fm-breadcrumbs-wrapper.add-from-cloud', this.findDOMNode());
+            var $breadcrumbs = $('.fm-breadcrumbs-block', $breadcrumbsWrapper);
 
-        setTimeout(function() {
-            var breadcrumbsWidth = $breadcrumbs.outerWidth();
-            var $el = $breadcrumbs.find('.right-arrow-bg');
+            var wrapperWidth = $breadcrumbsWrapper.outerWidth();
+            var $el = $(this.isSearch() ? '.search-path-txt' : '.right-arrow-bg', $breadcrumbs);
             var i = 0;
             var j = 0;
             $el.removeClass('short-foldername ultra-short-foldername invisible');
 
-            while ($breadcrumbsWrapper.outerWidth() > breadcrumbsWidth) {
+            $breadcrumbsWrapper.removeClass('long-path overflowed-path');
+            if ($breadcrumbs.outerWidth() > wrapperWidth) {
+                $breadcrumbsWrapper.addClass('long-path');
+            }
+
+            while ($breadcrumbs.outerWidth() > wrapperWidth) {
                 if (i < $el.length - 1) {
                     $($el[i]).addClass('short-foldername');
                     i++;
@@ -863,12 +987,13 @@ var CloudBrowserDialog = React.createClass({
                     $($el[j]).addClass('short-foldername');
                 } else {
                     $($el[j]).addClass('ultra-short-foldername');
+                    $breadcrumbsWrapper.addClass('overflowed-path');
                     break;
                 }
             }
-        }, 0);
-    },
-    componentDidUpdate: function(prevProps, prevState) {
+        });
+    }
+    componentDidUpdate(prevProps, prevState) {
         if (prevState.currentlyViewedEntry !== this.state.currentlyViewedEntry) {
             var self = this;
 
@@ -879,27 +1004,52 @@ var CloudBrowserDialog = React.createClass({
 
                 dbfetch.geta(Object.keys(M.c.shares || {}), new MegaPromise())
                     .done(function() {
-                        self.setState({'isLoading': false});
-                        self.setState({entries: self.getEntries()});
+                        self.setState({
+                            'isLoading': false,
+                            'entries': self.getEntries()
+                        });
                     });
+                return;
             }
             if (!M.d[handle] || (M.d[handle].t && !M.c[handle])) {
                 self.setState({'isLoading': true});
                 dbfetch.get(handle)
                     .always(function() {
-                        self.setState({'isLoading': false});
-                        self.setState({entries: self.getEntries()});
+                        self.setState({
+                            'isLoading': false,
+                            'entries': self.getEntries()
+                        });
                     });
                 return;
             }
+
+            var $jspElem = $(self.findDOMNode()).find('.jspScrollable');
+            if ($jspElem) {
+                var $jsp = $jspElem.data('jsp');
+                if ($jsp) {
+                    Soon(function() {
+                        // seems like there is a bug in JSP, if I call this too early the scroll won't move, but the area
+                        // would scroll to 0, 0
+                        $jsp.scrollTo(0, 0, false);
+                    });
+                }
+
+            }
+
+            this.setState({entries: this.getEntries()});
+        }
+        else if (prevState.highlighted !== this.state.highlighted) {
+            // resize the breadcrumbs on item select
+            this.resizeBreadcrumbs();
         }
 
-        this.setState({entries: null});
-    },
-    getEntries: function() {
+    }
+    getEntries(newState) {
         var self = this;
-        var order = self.state.sortBy[1] === "asc" ? 1 : -1;
+        var sortBy = newState && newState.sortBy || self.state.sortBy;
+        var order = sortBy[1] === "asc" ? 1 : -1;
         var entries = [];
+
         if (
             self.state.currentlyViewedEntry === "search" &&
             self.state.searchValue &&
@@ -908,29 +1058,42 @@ var CloudBrowserDialog = React.createClass({
             M.getFilterBy(M.getFilterBySearchFn(self.state.searchValue))
                 .forEach(function(n) {
                     // skip contacts and invalid data.
-                    if (!n.h || n.h.length === 11) {
+                    if (!n.h || n.h.length === 11 || n.fv) {
+                        return;
+                    }
+                    if (self.props.customFilterFn && !self.props.customFilterFn(n)) {
                         return;
                     }
                     entries.push(n);
                 })
         }
-
         else {
             Object.keys(M.c[self.state.currentlyViewedEntry] || {}).forEach((h) => {
-                M.d[h] && entries.push(M.d[h]);
+                if (M.d[h]) {
+                    if (self.props.customFilterFn) {
+                        if (self.props.customFilterFn(M.d[h])) {
+                            entries.push(M.d[h]);
+                        }
+                    }
+                    else {
+                        entries.push(M.d[h]);
+                    }
+                }
             });
         }
 
         var sortFunc;
 
-        if (self.state.sortBy[0] === "name") {
+        if (sortBy[0] === "name") {
             sortFunc = M.getSortByNameFn();
         }
-        else if(self.state.sortBy[0] === "size") {
+        else if (sortBy[0] === "size") {
             sortFunc = M.getSortBySizeFn();
         }
-        else if(self.state.sortBy[0] === "ts") {
+        else if (sortBy[0] === "ts") {
             sortFunc = M.getSortByDateTimeFn();
+            // invert
+            order = order === 1 ? -1 : 1;
         }
         else /*if(self.state.sortBy[0] === "grid-header-star")*/ {
             sortFunc = M.sortByFavFn(order);
@@ -955,189 +1118,272 @@ var CloudBrowserDialog = React.createClass({
         });
 
         return folders.concat(entries);
-    },
-    onSelected: function(nodes) {
+    }
+    onSelected(nodes) {
         this.setState({'selected': nodes});
         this.props.onSelected(nodes);
-    },
-    onHighlighted: function(nodes) {
+    }
+    onHighlighted(nodes) {
         this.setState({'highlighted': nodes});
 
         if (this.props.onHighlighted) {
             this.props.onHighlighted(nodes);
         }
-    },
-    onAttachClicked: function() {
-        this.props.onAttachClicked();
-    },
-    onPopupDidMount: function(elem) {
+    }
+    onPopupDidMount(elem) {
         this.domNode = elem;
-    },
-    render: function() {
+    }
+    onAttachClicked() {
+        this.props.onAttachClicked();
+    }
+    render() {
         var self = this;
 
-        var entries = self.state.entries || self.getEntries();
-        var viewMode = localStorage.dialogViewMode ? localStorage.dialogViewMode : "0";
+        const viewMode = localStorage.dialogViewMode ? localStorage.dialogViewMode : "0";
 
-        var classes = "add-from-cloud " + self.props.className;
+        const classes = `add-from-cloud ${self.props.className}`;
 
-        var folderIsHighlighted = false;
+        let folderIsHighlighted = false;
+        let share = false;
+        let isIncomingShare = false;
 
-        var breadcrumb = [];
+        let breadcrumb = [];
+        const entryId = self.isSearch() ? self.state.highlighted[0] : self.state.currentlyViewedEntry;
 
-        M.getPath(self.state.currentlyViewedEntry)
-            .forEach(function(breadcrumbNodeId, k) {
-                // skip [share owner handle] when returned by M.getPath.
-                if (M.d[breadcrumbNodeId] && M.d[breadcrumbNodeId].h && M.d[breadcrumbNodeId].h.length === 11) {
-                    return;
-                }
+        if (entryId !== undefined) {
+            M.getPath(entryId)
+                .forEach(function(nodeId, k, path) {
+                    var breadcrumbClasses = "";
+                    if (nodeId === M.RootID) {
+                        breadcrumbClasses += " cloud-drive";
 
-                var breadcrumbClasses = "";
-                if (breadcrumbNodeId === M.RootID) {
-                    breadcrumbClasses += " cloud-drive";
+                        if (self.state.currentlyViewedEntry !== M.RootID) {
+                            breadcrumbClasses += " has-next-button";
+                        }
+                    }
+                    else {
+                        breadcrumbClasses += " folder";
+                    }
 
-                    if (self.state.currentlyViewedEntry !== M.RootID) {
+                    if (k !== 0) {
                         breadcrumbClasses += " has-next-button";
                     }
-                }
-                else {
-                    breadcrumbClasses += " folder";
-                }
+                    if (nodeId === "shares") {
+                        breadcrumbClasses += " shared-with-me";
+                    }
 
-                if (k !== 0) {
-                    breadcrumbClasses += " has-next-button";
-                }
-                if (breadcrumbNodeId === "shares") {
-                    breadcrumbClasses += " shared-with-me";
-                }
+                    const prevNodeId = path[k - 1];
+                    const nodeName = self.getBreadcrumbNodeText(nodeId, prevNodeId);
+                    const nodeIcon = self.getBreadcrumbNodeIcon(nodeId);
 
-                (function (breadcrumbNodeId) {
-                    breadcrumb.unshift(
-                        <a className={"fm-breadcrumbs contains-directories " + breadcrumbClasses}
-                           key={breadcrumbNodeId}
-                           onClick={(e) => {
-                               e.preventDefault();
-                               e.stopPropagation();
-                               self.setState({
-                                   'currentlyViewedEntry': breadcrumbNodeId,
-                                   'selected': [],
-                                   'searchValue': ''
-                               });
-                               self.onSelected([]);
-                               self.onHighlighted([]);
-                           }}>
-                        <span className="right-arrow-bg">
-                            <span>{breadcrumbNodeId === M.RootID ? __(l[164]) :
-                                (
-                                    breadcrumbNodeId === "shares" ?
-                                        l[5589] :
-                                        M.d[breadcrumbNodeId] && M.d[breadcrumbNodeId].name
-                                )
-                            }</span>
-                        </span>
-                        </a>
-                    );
-                })(breadcrumbNodeId);
-            });
+                    // Flag that the specific node is part of the `Incoming Shares` node chain;
+                    // The `Attach` button is not available for isIncomingShare nodes.
+                    isIncomingShare = nodeId === 'shares';
 
-        self.state.highlighted.forEach(function(nodeId) {
+                    (function(nodeId, k) {
+                        breadcrumb.unshift(
+                            self.isSearch() ?
+                                <div
+                                    className="search-path-item"
+                                    key={nodeId}
+                                    onClick={(e) => self.onBreadcrumbNodeClick(e, nodeId, prevNodeId)}>
+                                    <div className="search-tip simpletip" data-simpletip={nodeName}>
+                                        <div className="search-path-icon">
+                                            <span className={`search-path-icon-span ${nodeIcon}`}></span>
+                                        </div>
+                                        <div className="search-path-txt">{nodeName}</div>
+                                    </div>
+                                    {k !== 0 && <div className="search-path-arrow"></div>}
+                                </div> :
+                                <a
+                                    className={"fm-breadcrumbs contains-directories " + breadcrumbClasses}
+                                    key={nodeId}
+                                    onClick={(e) => self.onBreadcrumbNodeClick(e, nodeId, prevNodeId)}>
+                                    <span className={`right-arrow-bg simpletip ${nodeIcon}`} data-simpletip={nodeName}>
+                                        <span>{nodeName}</span>
+                                    </span>
+                                </a>
+                        );
+                    })(nodeId, k);
+                });
+        }
+
+        this.state.highlighted.forEach(nodeId => {
             if (M.d[nodeId] && M.d[nodeId].t === 1) {
                 folderIsHighlighted = true;
             }
+            share = M.getNodeShare(nodeId);
         });
 
-        var buttons = [];
-
-        if (!folderIsHighlighted) {
+        let buttons = [];
+        if (!folderIsHighlighted || this.props.folderSelectable) {
             buttons.push({
-                "label": self.props.selectLabel,
+                "label": this.props.selectLabel,
                 "key": "select",
-                "className": "default-grey-button "
-                + (self.state.selected.length === 0 ? "disabled" : null),
-                "onClick": function(e) {
-                    if (self.state.selected.length > 0) {
-                        self.props.onSelected(self.state.selected);
-                        self.props.onAttachClicked();
+                "className": "default-grey-button " +
+                    (this.state.selected.length === 0 || (share && share.down) ? "disabled" : null),
+                "onClick": e => {
+                    if (this.state.selected.length > 0) {
+                        this.props.onSelected(
+                            this.state.selected.filter(node => !M.getNodeShare(node).down)
+                        );
+                        this.props.onAttachClicked();
                     }
+
                     e.preventDefault();
                     e.stopPropagation();
                 }
             });
         }
-        else if (folderIsHighlighted) {
-            buttons.push({
-                "label": self.props.openLabel,
-                "key": "select",
-                "className": "default-grey-button",
-                "onClick": function(e) {
-                    if (self.state.highlighted.length > 0) {
-                        self.setState({'currentlyViewedEntry': self.state.highlighted[0]});
-                        self.onSelected([]);
-                        self.onHighlighted([]);
-                        self.browserEntries.setState({
-                            'selected': [],
-                            'searchValue': '',
-                            'highlighted': []
+
+        if (folderIsHighlighted) {
+            const { highlighted } = this.state;
+            const className = `default-grey-button ${share && share.down ? 'disabled' : null}`;
+            const highlightedNode = highlighted && highlighted.length && highlighted[0];
+            const allowAttachFolders = (
+                this.props.allowAttachFolders &&
+                !isIncomingShare
+            );
+
+            buttons.push(
+                allowAttachFolders ? {
+                    "label": l[8023],
+                    "key": "attach",
+                    className,
+                    onClick: () => {
+                        this.props.onClose();
+                        onIdle(() => {
+                            const createPublicLink = () => {
+                                M.createPublicLink(highlightedNode)
+                                    .then(({ link }) =>
+                                        this.props.room.sendMessage(link)
+                                    );
+                            };
+
+                            return (
+                                mega.megadrop.isDropExist(highlightedNode).length ?
+                                    msgDialog(
+                                        'confirmation',
+                                        // `Confirm removal`
+                                        l[1003],
+                                        // `By doing this you will cancel your MEGAdrop setup for the folder named %1`
+                                        l[17403].replace('%1', escapeHTML(highlightedNode.name)),
+                                        // `Do you want to proceed?`
+                                        l[18229],
+                                        (e) => {
+                                            if (e) {
+                                                mega.megadrop.pufRemove([highlightedNode]);
+                                                mega.megadrop.pufCallbacks[highlightedNode] = { del: createPublicLink };
+                                            }
+                                        }
+                                    ) :
+                                    createPublicLink()
+                            );
                         });
                     }
-                    e.preventDefault();
-                    e.stopPropagation();
-                }
-            });
+                } : null,
+                {
+                    "label": this.props.openLabel,
+                    "key": "select",
+                    className,
+                    onClick: e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+
+                        this.setState({ currentlyViewedEntry: highlightedNode });
+                        this.clearSelectionAndHighlight();
+                        this.browserEntries.setState({ selected: [], searchValue: '', highlighted: [] });
+                    }
+                });
         }
 
         buttons.push({
-            "label": self.props.cancelLabel,
+            "label": this.props.cancelLabel,
             "key": "cancel",
-            "onClick": function(e) {
-                self.props.onClose(self);
+            "onClick": e => {
+                this.props.onClose(this);
                 e.preventDefault();
                 e.stopPropagation();
             }
         });
 
         var gridHeader = [];
-
         if (viewMode === "0") {
             gridHeader.push(
                 <table className="grid-table-header fm-dialog-table" key={"grid-table-header"}>
                     <tbody>
-                    <tr>
-                        <BrowserCol id="grid-header-star" sortBy={self.state.sortBy} onClick={self.toggleSortBy} />
-                        <BrowserCol id="name" label={__(l[86])} sortBy={self.state.sortBy}
-                                    onClick={self.toggleSortBy}/>
-                        <BrowserCol id="size" label={__(l[87])} sortBy={self.state.sortBy}
-                                    onClick={self.toggleSortBy}/>
-                        <BrowserCol id="ts" label={__(l[16169])} sortBy={self.state.sortBy}
-                                    onClick={self.toggleSortBy}/>
-                    </tr>
+                        <tr>
+                            <BrowserCol id="grid-header-star" sortBy={self.state.sortBy} onClick={self.toggleSortBy} />
+                            <BrowserCol
+                                id="name"
+                                label={l[86]}
+                                sortBy={self.state.sortBy}
+                                onClick={self.toggleSortBy} />
+                            <BrowserCol
+                                id="size"
+                                label={l[87]}
+                                sortBy={self.state.sortBy}
+                                onClick={self.toggleSortBy} />
+                            <BrowserCol
+                                id="ts"
+                                label={l[16169]}
+                                sortBy={
+                                    self.state.sortBy && self.state.sortBy[0] === "ts" ?
+                                        ["ts", self.state.sortBy[1] === "desc" ? "asc" : "desc"] :
+                                        self.state.sortBy
+                                }
+                                onClick={self.toggleSortBy} />
+                        </tr>
                     </tbody>
                 </table>
             );
         }
 
+        var clearSearchBtn = null;
+        if (self.state.searchValue.length >= 3) {
+            clearSearchBtn = (
+                <i
+                    className="top-clear-button"
+                    style={{'right': '85px'}}
+                    onClick={() => {
+                        self.onClearSearchIconClick();
+                    }}
+                >
+                </i>
+            );
+        }
+
         return (
             <ModalDialogsUI.ModalDialog
-                title={__(l[8011])}
-                className={classes}
+                title={self.props.title || l[8011]}
+                className={
+                    classes +
+                    // Amend the container height when the bottom breadcrumb is visible,
+                    // i.e. in search mode, incl. having file/folder selected
+                    (self.isSearch() && breadcrumb.length ? 'has-breadcrumbs-bottom' : '')
+                }
                 onClose={() => {
                     self.props.onClose(self);
                 }}
                 popupDidMount={self.onPopupDidMount}
                 buttons={buttons}>
                 <div className="fm-dialog-tabs">
-                    <div className={"fm-dialog-tab cloud active"}
-                        onClick={(e) => {
-                            self.onTabButtonClick(e, 'clouddrive');
-                        }}>
-                            {__(l[164])}
-                        </div>
-                    <div className={"fm-dialog-tab incoming"}
-                        onClick={(e) => {
-                            self.onTabButtonClick(e, 'shares');
-                        }}>
-                            {__(l[5542])}
-                        </div>
+                    <div
+                        className={`
+                            fm-dialog-tab cloud
+                            ${self.state.selectedTab === 'clouddrive' ? 'active' : ''}
+                        `}
+                        onClick={() => self.handleTabChange('clouddrive')}>
+                        {l[164] /* `Cloud Drive` */}
+                    </div>
+                    <div
+                        className={`
+                            fm-dialog-tab incoming
+                            ${self.state.selectedTab === 'shares' ? 'active' : ''}
+                        `}
+                        onClick={() => self.handleTabChange('shares')}>
+                        {l[5542] /* `Incoming Shares` */}
+                    </div>
                     <div className="clear"></div>
                 </div>
                 <div className="fm-picker-header">
@@ -1160,17 +1406,20 @@ var CloudBrowserDialog = React.createClass({
                                     self.onSearchIconClick(e);
                                 }}>
                             ></i>
-                            <input type="search" placeholder={__(l[102])}  value={self.state.searchValue}
+                            <input type="search" placeholder={l[102]}  value={self.state.searchValue}
                                 onChange={self.onSearchChange} />
+                            {clearSearchBtn}
                         </div>
                         <div className="clear"></div>
                     </div>
-                    <div className="fm-breadcrumbs-block add-from-cloud">
-                        <div className="breadcrumbs-wrapper">
-                            {breadcrumb}
-                            <div className="clear"></div>
+                    {!self.isSearch() && (
+                        <div className="fm-breadcrumbs-wrapper add-from-cloud">
+                            <div className="fm-breadcrumbs-block">
+                                {breadcrumb}
+                                <div className="clear"></div>
+                            </div>
                         </div>
-                    </div>
+                    )}
                 </div>
 
                 {gridHeader}
@@ -1178,10 +1427,9 @@ var CloudBrowserDialog = React.createClass({
                 <BrowserEntries
                     isLoading={self.state.isLoading}
                     currentlyViewedEntry={self.state.currentlyViewedEntry}
-                    entries={entries}
+                    entries={self.state.entries || []}
                     onExpand={(node) => {
-                        self.onSelected([]);
-                        self.onHighlighted([]);
+                        self.clearSelectionAndHighlight();
                         self.setState({
                             'currentlyViewedEntry': node.h,
                             'searchValue': ''
@@ -1191,17 +1439,34 @@ var CloudBrowserDialog = React.createClass({
                     onSelected={self.onSelected}
                     onHighlighted={self.onHighlighted}
                     onAttachClicked={self.onAttachClicked}
+                    viewMode={localStorage.dialogViewMode}
+                    initialSelected={self.state.selected}
+                    initialHighlighted={self.state.highlighted}
                     ref={
                         (browserEntries) => {
                             self.browserEntries = browserEntries;
                         }
                     }
                 />
+
+                <div className={`
+                    fm-breadcrumbs-wrapper add-from-cloud breadcrumbs-bottom
+                    ${self.isSearch() && breadcrumb.length ? '' : 'hidden'}
+                `}>
+                    <div className="fm-breadcrumbs-block">
+                        {breadcrumb}
+                        <div className="clear"></div>
+                    </div>
+                </div>
             </ModalDialogsUI.ModalDialog>
         );
     }
-});
+};
 
-module.exports = window.CloudBrowserModalDialogUI = {
+window.CloudBrowserModalDialogUI = {
     CloudBrowserDialog,
 };
+
+export default {
+    CloudBrowserDialog
+}

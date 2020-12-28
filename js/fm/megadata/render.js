@@ -4,17 +4,11 @@
  */
 MegaData.prototype.renderMain = function(aUpdate) {
     "use strict";
-
+    var container;
     var numRenderedNodes = -1;
 
     if (d) {
         console.time('renderMain');
-    }
-
-    // Disable aUpdate flag if a new item was added to an empty
-    // folder, so that MegaRender properly uses JSP container..
-    if (aUpdate && this.v.length === 1) {
-        aUpdate = false;
     }
 
     if (!aUpdate) {
@@ -24,7 +18,9 @@ MegaData.prototype.renderMain = function(aUpdate) {
         this.megaRender = new MegaRender(this.viewmode);
     }
 
-    var container;
+    if (this.previousdirid === "recents" && this.recentsRender) {
+        this.recentsRender.cleanup();
+    }
 
     // cleanupLayout will render an "empty grid" layout if there
     // are no nodes in the current list (Ie, M.v), if so no need
@@ -33,11 +29,11 @@ MegaData.prototype.renderMain = function(aUpdate) {
 
         if (this.currentdirid === 'opc') {
             this.drawSentContactRequests(this.v, 'clearGrid');
-            container = $('.grid-scrolling-table.opc');
+            container = '.grid-scrolling-table.opc';
         }
         else if (this.currentdirid === 'ipc') {
             this.drawReceivedContactRequests(this.v, 'clearGrid');
-            container = $('.grid-scrolling-table.ipc');
+            container = '.grid-scrolling-table.ipc';
         }
         else {
             numRenderedNodes = this.megaRender.renderLayout(aUpdate, this.v);
@@ -58,10 +54,15 @@ MegaData.prototype.renderMain = function(aUpdate) {
                 $.rmInitJSP = this.fsViewSel;
             }
         }
-        this.rmSetupUI(aUpdate);
+        this.rmSetupUI(aUpdate, aUpdate ? !!$.dbOpenHandle : false);
     }
 
     this.initShortcutsAndSelection(container, aUpdate);
+
+    if (!container || typeof container === 'string') {
+        this.megaRender.destroy();
+        delete this.megaRender;
+    }
 
     if (d) {
         console.timeEnd('renderMain');
@@ -78,12 +79,12 @@ MegaData.prototype.rmSetupUI = function(u, refresh) {
 
     if (this.viewmode === 1) {
         M.addIconUI(u, refresh);
-        if (!u) {
-            fm_thumbnails();
-        }
     }
     else {
         M.addGridUIDelayed(refresh);
+    }
+    if (!u) {
+        fm_thumbnails();
     }
     Soon(fmtopUI);
 
@@ -256,6 +257,8 @@ MegaData.prototype.renderTree = function() {
     });
 
     build('shares');
+    build('out-shares');
+    build('public-links');
     build(M.RootID);
     build(M.RubbishID);
     build(M.InboxID);
@@ -276,12 +279,12 @@ MegaData.prototype.pathLength = function() {
     var $filter = $('.fm-right-header .filter-block.body:visible');
 
     if ($filter.length > 0) {
-        filterLength = $filter.outerWidth() + 20;
+        filterLength = $filter.outerWidth(true);
     }
 
-    length = $('.fm-right-header .fm-breadcrumbs-block:visible').outerWidth()
+    length = $('.fm-right-header .fm-breadcrumbs-block:visible').outerWidth(true)
         + filterLength
-        + $('.fm-right-header .fm-header-buttons:visible').outerWidth();
+        + $('.fm-right-header .fm-header-buttons:visible').outerWidth(true);
     return length;
 };
 
@@ -308,6 +311,7 @@ MegaData.prototype.renderPath = function(fileHandle) {
             }
             else {
                 typeclass = 'cloud-drive';
+                name = l[164];
             }
         }
         else if (a2[i] === 'contacts') {
@@ -324,7 +328,15 @@ MegaData.prototype.renderPath = function(fileHandle) {
         }
         else if (a2[i] === 'shares') {
             typeclass = 'shared-with-me';
-            name = '';
+            name = l[5542];
+        }
+        else if (a2[i] === 'out-shares') {
+            typeclass = 'out-shares';
+            name = l[5543];
+        }
+        else if (a2[i] === 'public-links') {
+            typeclass = 'pub-links';
+            name = l[16516];
         }
         else if (a2[i] === this.RubbishID) {
             typeclass = 'rubbish-bin';
@@ -348,7 +360,7 @@ MegaData.prototype.renderPath = function(fileHandle) {
         }
         html = '<a class="fm-breadcrumbs ' + typeclass + ' ' + hasnext
             + ' ui-droppable" id="path_' + htmlentities(a2[i]) + '">'
-            + '<span class="right-arrow-bg ui-draggable">'
+            + '<span class="right-arrow-bg ui-draggable simpletip" data-simpletip="' + htmlentities(name) + '">'
             + '<span>' + htmlentities(name) + '</span>'
             + '</span>'
             + '</a>' + html;
@@ -369,25 +381,6 @@ MegaData.prototype.renderPath = function(fileHandle) {
             + '</span>'
             + '</a>');
         $('.search-files-result').addClass('hidden');
-    }
-    else if (this.currentdirid === 'links') {
-        $('.fm-right-header .fm-breadcrumbs-block').safeHTML(
-            '<a class="fm-breadcrumbs public-links">'
-            + '<span class="right-arrow-bg ui-draggable">'
-            + '<span>'
-            + '<i class="small-icon context get-link"></i>'
-            + l[16516]
-            + '<span class="public-links-cnt">0</span>'
-            + '</span>'
-            + '</span>'
-            + '</a>');
-
-        if (this.su.EXP) {
-            $('.public-links-cnt').text(Object.keys(this.su.EXP).length);
-        }
-        else {
-            $('.public-links-cnt').text(0);
-        }
     }
     else if (this.currentdirid && this.currentdirid.substr(0, 7) === 'search/') {
         $('.fm-right-header .fm-breadcrumbs-block').safeHTML(
@@ -420,15 +413,15 @@ MegaData.prototype.renderPath = function(fileHandle) {
         var $fmHeader = $('.fm-right-header:visible');
         var headerWidth = $fmHeader.outerWidth();
 
-        $fmHeader.removeClass('long-path short-foldernames');
-        if (M.pathLength() > headerWidth) {
-            $fmHeader.addClass('long-path');
-        }
-
         var $el = $fmHeader.find('.fm-breadcrumbs-block:visible .right-arrow-bg');
         var i = 0;
         var j = 0;
         $el.removeClass('short-foldername ultra-short-foldername');
+
+        $fmHeader.removeClass('long-path overflowed-path');
+        if (M.pathLength() > headerWidth) {
+            $fmHeader.addClass('long-path');
+        }
 
         while (M.pathLength() > headerWidth) {
             if (i < $el.length - 1) {
@@ -444,44 +437,55 @@ MegaData.prototype.renderPath = function(fileHandle) {
             }
             else {
                 $($el[j]).addClass('ultra-short-foldername');
+                $fmHeader.addClass('overflowed-path');
                 break;
             }
         }
     }
 
-    breadcrumbsResize();
+    M.onFileManagerReady(breadcrumbsResize);
     $(window).rebind('resize.fmbreadcrumbs', SoonFc(breadcrumbsResize, 202));
 
-    if ($('.fm-right-header .fm-breadcrumbs-block .fm-breadcrumbs').length > 1) {
-        $('.fm-right-header .fm-breadcrumbs-block').removeClass('deactivated');
-    }
-    else {
-        $('.fm-right-header .fm-breadcrumbs-block').addClass('deactivated');
+    if (folderlink) {
+        $('.fm-breadcrumbs:first').removeClass('folder').addClass('folder-link');
+        $('.fm-breadcrumbs:first span').empty();
     }
 
-    $('.fm-right-header .fm-breadcrumbs-block a').rebind('click', function() {
+    var $block = $('.fm-right-header .fm-breadcrumbs-block');
+    if ($('.fm-breadcrumbs', $block).length > 1) {
+        $('.fm-breadcrumbs', $block).removeClass('deactivated');
+    }
+    else if (folderlink) {
+        $('.folder-link .right-arrow-bg', $block)
+            .safeHTML('<span>@@</span>', M.getNameByHandle(M.RootID));
+    }
+    else {
+        $('.fm-breadcrumbs', $block).addClass('deactivated');
+    }
+
+    $('a', $block).rebind('click', function() {
         var crumbId = $(this).attr('id');
 
         // When NOT deactivated
-        if (!$('.fm-right-header .fm-breadcrumbs-block').hasClass('deactivated')) {
+        if (!$(this).hasClass('deactivated')) {
             if (crumbId === 'path_opc' || crumbId === 'path_ipc') {
                 return false;
             }
             else if ((crumbId === 'chatcrumb') || (M.currentdirid && M.currentdirid.substr(0, 7) === 'search/')) {
                 return false;
             }
-
             // Remove focus from 'view ipc/opc' buttons
             $('.fm-received-requests').removeClass('active');
             $('.fm-contact-requests').removeClass('active');
-            M.openFolder($(this).attr('id').replace('path_', ''));
+            var replaceStr = '';
+            if ((M.currentdirid.startsWith('out-shares/') && !$(this).is('#path_out-shares')) ||
+                (M.currentdirid.startsWith('public-links/') && !$(this).is('#path_public-links'))) {
+                replaceStr = M.currentrootid + '/';
+            }
+            M.openFolder($(this).attr('id').replace('path_', replaceStr));
         }
     });
 
-    if (folderlink) {
-        $('.fm-breadcrumbs:first').removeClass('folder').addClass('folder-link');
-        $('.fm-breadcrumbs:first span').empty();
-    }
     if (!is_mobile) {
         if (fileHandle) {
             fileversioning.fileVersioningDialog(fileHandle);
@@ -491,6 +495,50 @@ MegaData.prototype.renderPath = function(fileHandle) {
 
 MegaData.prototype.searchPath = function() {
     "use strict";
+
+    // Resizing breadcrumbs items
+    function pathResize() {
+        var $searchWrap = $('.search-bottom-wrapper:visible');
+        var $searchPath;
+        var wrapWidth;
+
+        if (!$searchWrap || !$searchWrap.length) {
+            $(window).unbind('resize.searchpath');
+            return false;
+        }
+
+        var $el = $searchWrap.find('.search-path-txt');
+        var i = 0;
+        var j = 0;
+        $el.removeClass('short-foldername ultra-short-foldername');
+
+        $searchPath = $searchWrap.find('.search-bottom-menu');
+        wrapWidth = $searchWrap.outerWidth();
+
+        $searchWrap.removeClass('long-path overflowed-path');
+        if ($searchPath.outerWidth() > wrapWidth) {
+            $searchWrap.addClass('long-path');
+        }
+
+        while ($($searchPath).outerWidth() > wrapWidth) {
+            if (i < $el.length - 1) {
+                $($el[i]).addClass('short-foldername');
+                i++;
+            }
+            else if (j < $el.length - 1) {
+                $($el[j]).addClass('ultra-short-foldername');
+                j++;
+            }
+            else if (!$($el[j]).hasClass('short-foldername')) {
+                $($el[j]).addClass('short-foldername');
+            }
+            else {
+                $($el[j]).addClass('ultra-short-foldername');
+                $searchWrap.addClass('overflowed-path');
+                break;
+            }
+        }
+    }
 
     if (M.currentdirid && M.currentdirid.substr(0, 7) === 'search/') {
         var sel;
@@ -516,7 +564,7 @@ MegaData.prototype.searchPath = function() {
                     c = 'contacts-item';
                     name = M.u[path[i]].m;
                 }
-                else if (path[i] === M.RootID) {
+                else if (path[i] === M.RootID && !folderlink) {
                     id = M.RootID;
                     c = 'cloud-drive';
                     name = l[164];
@@ -543,19 +591,23 @@ MegaData.prototype.searchPath = function() {
                     }
                 }
                 if (id) {
-                    html += '<div class="search-path-icon ' + c + '" id="spathicon_' + htmlentities(id) + '">'
-                        + iconimg + '</div><div class="search-path-txt" id="spathname_' + htmlentities(id) + '">'
-                        + htmlentities(name) + '</div>';
-
-                    if (i < path.length - 1) {
-                        html += '<div class="search-path-arrow"></div>';
-                    }
+                    html += '<div class="search-path-item ' + c + '" >'
+                        + '<div class="search-tip simpletip" data-simpletip="' + htmlentities(name) + '">'
+                        + '<div class="search-path-icon ' + c + '" id="spathicon_' + htmlentities(id)
+                        + '">' + iconimg + '</div>'
+                        + '<div class="search-path-txt" id="spathname_' + htmlentities(id) + '" '
+                        + '>' + htmlentities(name) + '</div>'
+                        + '</div>'
+                        + (i < path.length - 1 ? '<div class="search-path-arrow"></div>' : '')
+                        + '</div>';
                 }
             }
             html += '<div class="clear"></div>';
 
             $('.search-bottom-menu').safeHTML(html);
             $('.fm-blocks-view,.files-grid-view').addClass('search');
+            pathResize();
+            $(window).rebind('resize.searchpath', SoonFc(pathResize, 202));
 
             $('.search-path-icon,.search-path-txt').rebind('click', function() {
                 var id = $(this).attr('id');
@@ -593,7 +645,8 @@ MegaData.prototype.hideEmptyGrids = function hideEmptyGrids() {
 
     $('.fm-empty-trashbin,.fm-empty-contacts,.fm-empty-search')
         .add('.fm-empty-cloud,.fm-invalid-folder,.fm-empty-filter').addClass('hidden');
-    $('.fm-empty-folder,.fm-empty-incoming,.fm-empty-folder-link').addClass('hidden');
+    $('.fm-empty-folder,.fm-empty-incoming,.fm-empty-folder-link')
+        .add('.fm-empty-outgoing,.fm-empty-public-link').addClass('hidden');
     $('.fm-empty-pad.fm-empty-sharef').remove();
 };
 
@@ -610,13 +663,37 @@ MegaData.prototype.rmSetupUIDelayed = function() {
 
 
 MegaData.prototype.megaListRenderNode = function(aHandle) {
+    'use strict';
     var megaRender = M.megaRender;
     if (!megaRender) {
-        return;
+        if (d) {
+            console.warn('Ignoring invalid MegaRender state..', aHandle);
+        }
+        return false;
+    }
+    if (!M.d[aHandle]) {
+        if (d) {
+            console.warn("megaListRenderNode was called with aHandle '%s' which was not found in M.d", aHandle);
+        }
+        return false;
     }
     megaRender.numInsertedDOMNodes++;
 
-    var node = megaRender.getDOMNode(aHandle, M.d[aHandle]);
+    var node = megaRender.getDOMNode(aHandle);
+    if (!node) {
+        if (d) {
+            console.warn('getDOMNode failed..', aHandle);
+        }
+        return false;
+    }
+    var fnameWidth = $('td[megatype="fname"]', node).outerWidth();
+
+    if (!node.__hasMegaColumnsWidth ||
+        fnameWidth !== M.columnsWidth.cloud.fname.curr ||
+        fnameWidth !== M.columnsWidth.cloud.fname.currpx) {
+        node.__hasMegaColumnsWidth = true;
+        megaRender.setDOMColumnsWidth(node);
+    }
 
     var selList = selectionManager && selectionManager.selected_list ? selectionManager.selected_list : $.selected;
 
@@ -636,11 +713,30 @@ MegaData.prototype.megaListRenderNode = function(aHandle) {
     if (M.d[aHandle]) {
         M.d[aHandle].seen = true;
     }
-    else {
-        if (d) {
-            console.error("megaListRenderNode was called with aHandle:", aHandle, "which was not found in M.d");
-        }
-    }
 
     return node;
 };
+
+/**
+ * Render a simplified "chat is loading" state UI for when the chat is still not ready but an /fm/chat(?/...) url was
+ * accessed.
+ */
+MegaData.prototype.renderChatIsLoading = function() {
+    M.onSectionUIOpen('conversations');
+
+    M.hideEmptyGrids();
+
+    $('.fm-files-view-icon').addClass('hidden');
+    $('.fm-blocks-view').addClass('hidden');
+    $('.files-grid-view').addClass('hidden');
+    $('.fm-right-account-block').addClass('hidden');
+    $('.contacts-details-block').addClass('hidden');
+
+    $('.shared-grid-view,.shared-blocks-view').addClass('hidden');
+
+    $('.fm-right-files-block, .fm-left-panel, .fm-transfers-block').addClass('hidden');
+
+    $('.section.conversations').removeClass('hidden');
+    $('.section.conversations .fm-chat-is-loading').removeClass('hidden');
+};
+

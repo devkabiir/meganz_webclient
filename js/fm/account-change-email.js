@@ -23,7 +23,7 @@ var accountChangeEmail = {
         'use strict';
 
         // Reset change email fields after change
-        $('#current-email').val(u_attr.email);
+        $('#current-email').val(u_attr.email).blur();
         $('#account-email').val('');
         $('.fm-account-change-email').addClass('hidden');
     },
@@ -38,12 +38,21 @@ var accountChangeEmail = {
         // Cache selectors
         var $newEmail = $('#account-email');
         var $emailInfoMessage = $('.fm-account-change-email');
+        var $changeEmailButton = $('.account .change-email-button');
 
         // On text entry in the new email text field
         $newEmail.rebind('keyup', function() {
 
-            // Show information message
-            $emailInfoMessage.removeClass('hidden');
+            if ($newEmail.val()) {
+                // Show information message
+                $emailInfoMessage.slideDown();
+                $changeEmailButton.parent().removeClass('closed');
+            }
+            else {
+                // Show information message
+                $emailInfoMessage.slideUp();
+                $changeEmailButton.parent().addClass('closed');
+            }
         });
     },
 
@@ -60,14 +69,17 @@ var accountChangeEmail = {
 
         // On Change Email button click
         $changeEmailButton.rebind('click', function() {
-
+            
+            if ($(this).hasClass('disabled')) {
+                return false;
+            }
             // Get the new email address
             var newEmailRaw = $newEmail.val();
             var newEmail = $.trim(newEmailRaw).toLowerCase();
 
             // If not a valid email, show an error
-            if (checkMail(newEmail)) {
-                msgDialog('warninga', l[135], l[1513]);
+            if (!isValidEmail(newEmail)) {
+                $newEmail.megaInputsShowError(l[1513]);
                 return false;
             }
 

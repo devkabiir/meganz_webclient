@@ -17,15 +17,15 @@ var RichpreviewsFilter = function(megaChat) {
 
     megaChat
         .rebind('onRoomInitialized.richpreviewsFilter', function(e, megaRoom) {
-            $(megaRoom).rebind('onPendingMessageConfirmed.richpreviewsFilter', function(e, msgObj) {
+            megaRoom.rebind('onPendingMessageConfirmed.richpreviewsFilter', function(e, msgObj) {
                 self.onPendingMessageConfirmed(megaRoom, msgObj);
                 msgObj.confirmed = true;
             });
-            $(megaRoom).rebind('onMessageUpdating.richpreviewsFilter', function(e, msgObj) {
+            megaRoom.rebind('onMessageUpdating.richpreviewsFilter', function(e, msgObj) {
                 var msgId = msgObj.messageId;
                 RichpreviewsFilter._messageUpdating[msgObj.chatRoom.roomId + "_" + msgId] = true;
             });
-            $(megaRoom).rebind('onMessageUpdateDecrypted.richpreviewsFilter', function(e, msgObj) {
+            megaRoom.rebind('onMessageUpdateDecrypted.richpreviewsFilter', function(e, msgObj) {
                 [
                     msgObj.chatRoom.roomId + "_" + msgObj.messageId,
                     msgObj.chatRoom.roomId + "_" + msgObj.pendingMessageId
@@ -45,6 +45,9 @@ var RichpreviewsFilter = function(megaChat) {
         });
 
     megaChat.rebind("onInit.richpreviewsFilter", function() {
+        if (anonymouschat === true) {
+            return;
+        }
         RichpreviewsFilter.syncFromAttribute();
         mBroadcaster.addListener("attr:rp", function() {
             RichpreviewsFilter.syncFromAttribute();
@@ -88,6 +91,39 @@ RichpreviewsFilter._canceled = {};
  */
 RichpreviewsFilter._messageUpdating = {};
 
+/**
+ * Regular expression for reserved IP addresses
+ *
+ * http://localhost/
+ * http://0.0.0.0/ - http://0.255.255.255/
+ * http://10.0.0.0/ - http://10.255.255.255/
+ * http://100.64.0.0/ - http://100.127.255.255/
+ * http://127.0.0.0/ - http://127.255.255.255/
+ * http://169.254.0.0/ - http://169.254.255.255/
+ * http://172.16.0.0/ - http://172.31.255.255/
+ * http://192.0.0.0/ - http://192.0.0.255/
+ * http://192.0.2.0/ - http://192.0.2.255/
+ * http://192.88.99.0/ - http://192.88.99.255/
+ * http://192.168.0.0/ - http://192.168.255.255/
+ * http://198.18.0.0/ - http://198.19.255.255/
+ * http://198.51.100.0/ - http://198.51.100.255/
+ * http://203.0.113.0/ - http://203.0.113.255/
+ * http://224.0.0.0/ - http://239.255.255.255/
+ * http://240.0.0.0/ - http://255.255.255.255/
+ *
+ * @see https://en.wikipedia.org/wiki/Reserved_IP_addresses
+ * @see RichpreviewsFilter.prototype.processMessage
+ * @type {RegExp}
+ * @private
+ */
+
+RichpreviewsFilter._RFC_REGEXP = new RegExp(
+    '(^127\\.)|(^10\\.)|(^172\\.1[6-9]\\.)|(^172\\.2\\d\\.)|(^172\\.3[01]\\.)|(^192\\.0\\.)|(^192\\.88\\.)|' +
+    '(^192\\.168\\.)|(^169\\.254\\.)|(^100\\.)|(^255\\.255\\.)|(^203\\.)|(^0\\.)|(^240\\.0)|(^224\\.0)|(^198\\.)|' +
+    '(^239\\.255)|localhost',
+    'mg'
+);
+
 
 /**
  * Main API for retrieving (and in-memory caching) previews for specific URL.
@@ -97,6 +133,8 @@ RichpreviewsFilter._messageUpdating = {};
  */
 RichpreviewsFilter.retrievePreview = function(url) {
     "use strict";
+
+    url = String(url).split("#")[0];
 
     if (!RichpreviewsFilter._requests[url]) {
 
@@ -164,10 +202,11 @@ RichpreviewsFilter.prototype.processMessage = function(e, eventData, forced, isE
     }
 
     Autolinker.link(textContents, {
-        truncate: 80,
         className: 'chatlink',
+        truncate: false,
         newWindow: true,
         stripPrefix: true,
+        stripTrailingSlash: false,
         twitter: false,
         replaceFn : function(match) {
             switch (match.getType()) {
@@ -177,6 +216,13 @@ RichpreviewsFilter.prototype.processMessage = function(e, eventData, forced, isE
                     if (LinkInfoHelper.isMegaLink(link)) {
                         // skip MEGA links.
                         return true;
+                    }
+
+                    var anchorText = match.getAnchorText(); // stripped link, e.g. http://172.16.0.0 -> 172.16.0.0
+                    var IS_RFC = !!anchorText.match(RichpreviewsFilter._RFC_REGEXP);
+                    if (IS_RFC) {
+                        // no previews for reserved IP addresses
+                        return false;
                     }
 
                     if (link.indexOf("http://") !== 0 && link.indexOf("https://") !== 0) {
@@ -330,6 +376,10 @@ RichpreviewsFilter._updateMessageToPreview = function(chatRoom, msgObj, response
 RichpreviewsFilter.prototype.onPendingMessageConfirmed = function(chatRoom, msgObj) {
     "use strict";
 
+    if (msgObj.textContents && msgObj.textContents.charCodeAt && msgObj.textContents.charCodeAt(0) === 0) {
+        // not a text message.
+        return;
+    }
     var keys = [
         chatRoom.roomId + "_" + msgObj.pendingMessageId,
         chatRoom.roomId + "_" + msgObj.messageId
@@ -485,7 +535,10 @@ RichpreviewsFilter.syncFromAttribute = function() {
         })
         .always(function() {
             if (M.currentdirid && M.currentdirid.indexOf("account") > -1) {
-                accountUI();
+                // below if statment is to exlude URLs having user-management (Business)
+                if (M.currentdirid.indexOf('user-management') === -1) {
+                    accountUI();
+                }
             }
         });
 };

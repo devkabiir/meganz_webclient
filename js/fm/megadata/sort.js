@@ -60,6 +60,7 @@ MegaData.prototype.doFallbackSortWithName = function(a, b, d) {
 };
 
 MegaData.prototype.getSortByNameFn = function() {
+
     var self = this;
 
     return function(a, b, d) {
@@ -82,8 +83,12 @@ MegaData.prototype.getSortByNameFn2 = function(d) {
         var intl = this.collator || new Intl.Collator('co', {numeric: true});
 
         return function(a, b) {
-            if (a.name !== b.name) {
-                return intl.compare(a.name, b.name) * d;
+
+            var nameA = (a.nickname) ? a.nickname + ' (' + a.name + ')' : a.name;
+            var nameB = (b.nickname) ? b.nickname + ' (' + b.name + ')' : b.name;
+
+            if (nameA !== nameB) {
+                return intl.compare(nameA, nameB) * d;
             }
 
             return M.doFallbackSort(a, b, d);
@@ -92,7 +97,11 @@ MegaData.prototype.getSortByNameFn2 = function(d) {
 
     return function(a, b) {
         if (typeof a.name === 'string' && typeof b.name === 'string') {
-            return a.name.localeCompare(b.name) * d;
+
+            var nameA = (a.nickname) ? a.nickname + ' (' + a.name + ')' : a.name;
+            var nameB = (b.nickname) ? b.nickname + ' (' + b.name + ')' : b.name;
+
+            return nameA.localeCompare(nameB) * d;
         }
         return M.doFallbackSort(a, b, d);
     };
@@ -131,9 +140,9 @@ MegaData.prototype.sortByEmail = function(d) {
 MegaData.prototype.sortByModTime = function(d) {
     this.sortfn = function(a, b, d) {
 
-        // folder not having mtime, so sort by added time.
+        // folder not having mtime, so sort by Name.
         if (!a.mtime || !b.mtime) {
-            return M.getSortByDateTimeFn()(a, b, d);
+            return M.doFallbackSortWithName(a, b, d);
         }
 
         var time1 = a.mtime - a.mtime % 60;
@@ -154,13 +163,43 @@ MegaData.prototype.sortByDateTime = function(d) {
     this.sort();
 };
 
-MegaData.prototype.getSortByDateTimeFn = function() {
+MegaData.prototype.getSortByDateTimeFn = function(type) {
 
     var sortfn;
 
     sortfn = function(a, b, d) {
+        var getMaxShared = function _getMaxShared(shares) {
+            var max = 0;
+            for (var i in shares) {
+                if (i !== 'EXP') {
+                    max = Math.max(max, shares[i].ts - shares[i].ts % 60);
+                }
+            }
+            return max;
+        };
+
         var time1 = a.ts - a.ts % 60;
         var time2 = b.ts - b.ts % 60;
+
+        if (M.currentdirid === 'out-shares' || type === 'out-shares') {
+            time1 = M.ps[a.h] ? getMaxShared(M.ps[a.h]) : getMaxShared(a.shares);
+            time2 = M.ps[b.h] ? getMaxShared(M.ps[b.h]) : getMaxShared(b.shares);
+        }
+
+        if ((M.currentdirid === 'public-links' && !$.dialog) || type === 'public-links') {
+            var largeNum = 99999999999 * d;
+
+            if (a.shares === undefined && M.su.EXP[a.h]) {
+                a = M.d[a.h];
+            }
+            if (b.shares === undefined && M.su.EXP[b.h]) {
+                b = M.d[b.h];
+            }
+
+            time1 = (a.shares && a.shares.EXP) ? a.shares.EXP.ts : largeNum;
+            time2 = (b.shares && b.shares.EXP) ? b.shares.EXP.ts : largeNum;
+        }
+
         if (time1 !== time2) {
             return (time1 < time2 ? -1 : 1) * d;
         }
@@ -184,8 +223,8 @@ MegaData.prototype.getSortByRtsFn = function() {
     var sortfn;
 
     sortfn = function(a, b, d) {
-        var time1 = a.rts - a.rts % 60;
-        var time2 = b.rts - b.rts % 60;
+        var time1 = a.rts - a.rts % 60 || 0;
+        var time2 = b.rts - b.rts % 60 || 0;
         if (time1 !== time2) {
             return (time1 < time2 ? -1 : 1) * d;
         }
@@ -199,9 +238,17 @@ MegaData.prototype.getSortByRtsFn = function() {
 MegaData.prototype.sortByFav = function(d) {
     "use strict";
 
-    this.sortfn = this.sortByFavFn(d);
+    var fn = this.sortfn = this.sortByFavFn(d);
     this.sortd = d;
-    this.sort();
+
+    if (!d) {
+        d = 1;
+    }
+
+    // label sort is not doing folder sorting first. therefore using view sort directly to avoid.
+    this.v.sort(function(a, b) {
+        return fn(a, b, d);
+    });
 };
 
 MegaData.prototype.sortByFavFn = function(d) {
@@ -209,7 +256,7 @@ MegaData.prototype.sortByFavFn = function(d) {
 
     return function(a, b) {
         if ((a.t & M.IS_FAV || a.fav) && (b.t & M.IS_FAV || b.fav)) {
-            return M.doFallbackSortWithName(a, b, d);
+            return M.doFallbackSortWithFolder(a, b, d);
         }
         if (a.t & M.IS_FAV || a.fav) {
             return -1 * d;
@@ -218,7 +265,7 @@ MegaData.prototype.sortByFavFn = function(d) {
             return d;
         }
         else {
-            return M.doFallbackSortWithName(a, b, d);
+            return M.doFallbackSortWithFolder(a, b, d);
         }
     };
 };
@@ -237,11 +284,14 @@ MegaData.prototype.getSortBySizeFn = function() {
     nameSort['-1'] = this.getSortByNameFn2(-1);
 
     return function(a, b, d) {
-        if (a.s !== undefined && b.s !== undefined && a.s !== b.s) {
-            return (a.s < b.s ? -1 : 1) * d;
+
+        var aSize = a.s || a.tb || 0;
+        var bSize = b.s || b.tb || 0;
+        if (aSize === bSize) {
+            // zeros or equal in general
+            return nameSort[d](a, b);
         }
-        // fallback to sorting by name (folders)
-        return nameSort[d](a, b);
+        return (aSize < bSize ? -1 : 1) * d;
     };
 };
 
@@ -268,7 +318,11 @@ MegaData.prototype.sortByOwner = function(d) {
         var userb = Object(M.d[b.su]);
 
         if (typeof usera.name === 'string' && typeof userb.name === 'string') {
-            return usera.name.localeCompare(userb.name) * d;
+
+            var namea = usera.name === userb.name ? usera.name + a.su : usera.name;
+            var nameb = usera.name === userb.name ? userb.name + b.su : userb.name;
+
+            return namea.localeCompare(nameb) * d;
         }
 
         return M.doFallbackSort(usera, userb, d);
@@ -407,6 +461,41 @@ MegaData.prototype.sortByStatus = function(d) {
     this.sort();
 };
 
+MegaData.prototype.getSortByVersionFn = function() {
+    'use strict';
+    var sortfn;
+
+    sortfn = function(a, b, d) {
+
+        var av = a.tvf || 0;
+        var ab = a.tvb || 0;
+        var bv = b.tvf || 0;
+        var bb = b.tvb || 0;
+
+        if (av < bv) {
+            return -1 * d;
+        }
+        else if (av > bv) {
+            return d;
+        }
+        else if (ab < bb) {
+            return -1 * d;
+        }
+        else if (ab > bb) {
+            return d;
+        }
+    };
+
+    return sortfn;
+};
+
+MegaData.prototype.sortByVersion = function(d) {
+    'use strict';
+    this.sortfn = this.getSortByVersionFn();
+    this.sortd = d;
+    this.sort();
+};
+
 MegaData.prototype.getSortByInteractionFn = function() {
     var self = this;
 
@@ -439,24 +528,40 @@ MegaData.prototype.sortByInteraction = function(d) {
     this.sort();
 };
 
-
 MegaData.prototype.doSort = function(n, d) {
-    $('.grid-table-header .arrow').removeClass('asc desc');
+    "use strict";
+    // don't touch the .arrow's in Archived chats.
+    $('.grid-table-header .arrow:not(.is-chat)').removeClass('asc desc');
+    $('.files-menu.context .submenu.sorting .dropdown-item.sort-grid-item').removeClass('selected');
 
     n = String(n).replace(/\W/g, '');
     if (d > 0) {
-        $('.arrow.' + n).addClass('desc');
+        $('.arrow.' + n + ':not(.is-chat)').addClass('desc');
     }
     else {
-        $('.arrow.' + n).addClass('asc');
+        $('.arrow.' + n + ':not(.is-chat)').addClass('asc');
     }
+
+    var sortClassinSubMenu = '.sort-' + n;
+
+    if (n === 'ts') {
+        sortClassinSubMenu = '.sort-timeAd';
+    }
+    else if (n === 'mtime') {
+        sortClassinSubMenu = '.sort-timeMd';
+    }
+    else if (n === 'date') {
+        sortClassinSubMenu = '.sort-sharecreated, .sort-timeAd';
+    }
+
+    $('.files-menu.context .submenu.sorting .dropdown-item.sort-grid-item' + sortClassinSubMenu).addClass('selected');
 
     this.sortmode = {n: n, d: d};
 
     if (typeof this.sortRules[n] === 'function') {
         this.sortRules[n](d);
 
-        if (fmconfig.uisorting) {
+        if (this.fmsorting) {
             mega.config.set('sorting', this.sortmode);
         }
         else {
@@ -469,32 +574,8 @@ MegaData.prototype.doSort = function(n, d) {
 };
 
 MegaData.prototype.setLastColumn = function(col) {
-    switch (col) {
-        case 'ts':
-        case 'mtime':
-            // It's valid
-            break;
-        default:
-            // Default value
-            col = "ts";
-            break;
-    }
-
-    if (col === this.lastColumn) {
-        return;
-    }
-
-    this.lastColumn = col;
-    localStorage._lastColumn = this.lastColumn;
-
-    if ($('.do-sort[data-by="' + col + '"]').length > 0) {
-        // swap the column label
-        $('.dropdown-item.do-sort').removeClass('selected');
-        $('.grid-url-header').prev().find('div')
-            .removeClass().addClass('arrow ' + col)
-            .text($('.do-sort[data-by="' + col + '"]').text());
-        $('.do-sort[data-by="' + col + '"]').addClass('selected');
-    }
+    "use strict";
+    return;
 };
 
 MegaData.prototype.sortByLabel = function(d) {
@@ -573,4 +654,48 @@ MegaData.prototype.doFallbackSortWithFolder = function(a, b) {
     }
     // even direction is desc, sort name by asc.
     return M.doFallbackSortWithName(a, b, 1);
+};
+
+MegaData.prototype.getSortBySharedWithFn = function() {
+    'use strict';
+
+    return function(a, b, d) {
+
+        var aShareNames = [];
+        var bShareNames = [];
+
+        for (var i in a.shares) {
+            if (a.shares[i]) {
+                aShareNames.push(M.getNameByHandle(i));
+            }
+        }
+        for (var j in b.shares) {
+            if (b.shares[j]) {
+                bShareNames.push(M.getNameByHandle(j));
+            }
+        }
+        aShareNames = aShareNames.sort().join();
+        bShareNames = bShareNames.sort().join();
+
+        if (aShareNames !== bShareNames) {
+            return M.compareStrings(aShareNames, bShareNames, d);
+        }
+        return M.doFallbackSortWithName(a, b, d);
+    };
+};
+
+MegaData.prototype.sortBySharedWith = function(d) {
+    'use strict';
+
+    var fn = this.sortfn = this.getSortBySharedWithFn();
+    this.sortd = d;
+
+    if (!d) {
+        d = 1;
+    }
+
+    // label sort is not doing folder sorting first. therefore using view sort directly to avoid.
+    this.v.sort(function(a, b) {
+        return fn(a, b, d);
+    });
 };

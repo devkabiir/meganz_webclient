@@ -274,10 +274,13 @@ var authring = (function () {
      * @param keyType {string}
      *     Type of key for authentication records. Values are 'Ed25519',
      *     'Cu25519' or 'RSA'.
+     * @param [preCleanedUpVals] pass an authring-like hash to set the keyType's authring, remotely to
+     * `preCleanedUpVals`
+     *
      * @return {MegaPromise}
      *     A promise that is resolved when the original asynch code is settled.
      */
-    ns.setContacts = function(keyType) {
+    ns.setContacts = function(keyType, preCleanedUpVals) {
         if (ns._PROPERTIES[keyType] === undefined) {
             logger.error('Unsupported authentication key type: ' + keyType);
             return MegaPromise.reject(EARGS);
@@ -290,9 +293,16 @@ var authring = (function () {
                 promise.reject.apply(promise, arguments);
             })
             .done(function() {
+                var val;
+                if (!preCleanedUpVals) {
+                    val = ns._getCleanedUpAuthring(keyType);
+                }
+                else {
+                    val = preCleanedUpVals;
+                }
 
                 var attrPromise = mega.attr.set(ns._PROPERTIES[keyType],
-                    {'': ns.serialise(u_authring[keyType])}, false, true);
+                    {'': ns.serialise(val)}, false, true);
 
                 promise.linkDoneAndFailTo(attrPromise);
             });
@@ -354,7 +364,13 @@ var authring = (function () {
      */
     ns.setContactAuthenticated = function(userhandle, fingerprint, keyType,
                                           method, confidence) {
+
         assertUserHandle(userhandle);
+
+        if (!M.u[userhandle] || typeof M.u[userhandle].c === 'undefined') {
+            // we don't want to track non-contacts, but allow ex-contacts to be added/set in the authring.
+            return;
+        }
         if (ns._PROPERTIES[keyType] === undefined) {
             logger.error('Unsupported key type: ' + keyType);
 
@@ -738,6 +754,7 @@ var authring = (function () {
 
         masterPromise
             .done(function() {
+                ns.initialSetup();
                 ns._initialisingPromise = true;
             })
             .fail(function() {
@@ -773,6 +790,42 @@ var authring = (function () {
         return MegaPromise.allDone(loadingPromises);
     };
 
+
+    ns._getCleanedUpAuthring = function(keyType) {
+        var val = {};
+        var store = (u_authring[keyType] || {});
+        var keys = Object.keys(store);
+        for (var i = 0; i < keys.length; i++) {
+            var h = keys[i];
+            if (M.u[h] && typeof M.u[h].c !== 'undefined' && M.u[h].c !== 2) {
+                val[h] = u_authring[keyType][h];
+            }
+        }
+        return val;
+    };
+
+    ns.initialSetup = function() {
+        // initial re-setup so that .setContacts would clean any non-contacts stucked in authring.
+        var keyTypes = Object.keys(ns._PROPERTIES);
+        for (var i = 0; i < keyTypes.length; i++) {
+            var keyType = keyTypes[i];
+
+            var authringVals = Object.keys(u_authring[keyType] || {});
+            authringVals.sort();
+
+            var authringCleanedKeys = ns._getCleanedUpAuthring(keyType);
+            var authringCleanedVals = Object.keys(authringCleanedKeys);
+            authringCleanedVals.sort();
+
+            // after sorting those 2, IF they are not the same (e.g. one have contact, that the other one doesn't),
+            // that simply means the `_getCleanedUpAuthring` removed non-contact fingerprint (that were never contacts
+            // or have shares).
+            if (authringVals.join(',') !== authringCleanedVals.join(',')) {
+                ns.setContacts(keyType, authringCleanedKeys);
+            }
+        }
+    };
+
     /**
      * Initialises the key ring for private keys and the authentication key
      * (Ed25519).
@@ -784,6 +837,24 @@ var authring = (function () {
     ns._initKeyringAndEd25519 = function() {
         // The promise to return.
         var masterPromise = new MegaPromise();
+
+        // XXX: u_attr.u is read-only, BUT this is a weak protection unless we make the whole object
+        // read-only as well..tricky, however we may want to still allow this for testing purposes..
+        if (!is_karma && (typeof u_attr !== 'object' || u_attr.u !== window.u_handle || u_attr.keyring)) {
+            logger.error('Doh! Tampering attempt...', u_handle, [u_attr]);
+
+            if (location.host === 'mega.nz' || is_extension) {
+                return masterPromise.reject(EACCESS);
+            }
+
+            // eslint-disable-next-line no-alert
+            if (!confirm('You are about to overwrite your own account keys - is this intended?')) {
+                location.reload(true);
+                return masterPromise;
+            }
+
+            logger.warn('Good luck!..');
+        }
 
         // Load private keys.
         var attributePromise = mega.attr.get(u_handle, 'keyring', false, false);
@@ -1077,6 +1148,78 @@ var authring = (function () {
         return masterPromise;
     };
 
+    /**
+     * Helper method to check whether a contact fingerprint is verified.
+     * @param {String} aUserHandle The user's 11-chars long handle.
+     * @returns {Promise} fulfilled with a Boolean indicating whether it's verified.
+     */
+    ns.isUserVerified = promisify(function(resolve, reject, aUserHandle) {
+        ns.onAuthringReady('usr-v').then(function() {
+            var ed25519 = u_authring.Ed25519;
+            var verifyState = ed25519 && ed25519[aUserHandle] || false;
+
+            resolve(verifyState.method >= ns.AUTHENTICATION_METHOD.FINGERPRINT_COMPARISON);
+        }).catch(reject);
+    });
+
+    /**
+     * Helper method to invoke whenever we do want to show crypto-specific warnings about mismatching keys etc
+     * @param {String} aDialogType The dialog type we do want to show.
+     * @param {String} aUserHandle The user's 11-chars long handle.
+     * @param {String} aKeyType Type of the public key the signature failed for. e.g 'Cu25519' or 'RSA'
+     * @param {*} optional arguments for the dialog constructor
+     * @type {Promise} fulfilled on completion with whatever happened...
+     */
+    ns.showCryptoWarningDialog = promisify(function(resolve, reject, aDialogType, aUserHandle /* , ... */) {
+        var args = toArray.apply(null, arguments).slice(3);
+
+        if (localStorage.hideCryptoWarningDialogs) {
+            logger.warn('Showing crypto warning dialogs is blocked...', aDialogType, args);
+            return resolve(EBLOCKED);
+        }
+
+        var seenCryptoWarningDialog = JSON.parse(sessionStorage.scwd || '{}');
+        var seenStoreKey = MurmurHash3(aDialogType + ':' + args, 0x7ff).toString(16);
+
+        if (seenCryptoWarningDialog[seenStoreKey]) {
+            logger.info('Crypto warning dialog already seen...', aDialogType, args);
+            return resolve(EEXIST);
+        }
+
+        // Store a seen flag straight away, to prevent concurrent invocations..
+        seenCryptoWarningDialog[seenStoreKey] = 1;
+        sessionStorage.scwd = JSON.stringify(seenCryptoWarningDialog);
+
+        var dialogConstructor;
+
+        if (aDialogType === 'credentials') {
+            eventlog(99606, JSON.stringify([1, aDialogType[0]].concat(args.slice(0,2))));
+            dialogConstructor = mega.ui.CredentialsWarningDialog;
+        }
+        else if (aDialogType === 'signature') {
+            eventlog(99607, JSON.stringify([1, aDialogType[0]].concat(args.slice(0,2))));
+            dialogConstructor = mega.ui.KeySignatureWarningDialog;
+        }
+        else {
+            logger.error('Invalid crypto warning dialog type...', aDialogType, args);
+            return reject(EARGS);
+        }
+
+        // Only show this type of warning dialog if the user's fingerprint is verified.
+        ns.isUserVerified(aUserHandle)
+            .then(function(isVerified) {
+                if (isVerified !== true) {
+                    logger.debug('Not showing crypto dialog for unverified user...', aDialogType, args);
+                    return resolve(EAGAIN);
+                }
+
+                M.onFileManagerReady(tryCatch(function() {
+                    dialogConstructor.singleton.apply(dialogConstructor, args);
+                    resolve(true);
+                }, reject));
+            })
+            .catch(reject);
+    });
 
     return ns;
 }());

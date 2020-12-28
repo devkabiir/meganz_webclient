@@ -18,6 +18,12 @@ mobile.slideshow = {
     /** Cached jQuery object for the overlay */
     $overlay: null,
 
+    /** The flag for mobile landscape */
+    isLandscape: null,
+
+    /** The flag for hiding header and footer buttons */
+    hideHFFlag: false,
+
     /**
      * Initialise the preview slideshow
      * @param {String} nodeHandle The handle of the image to load first
@@ -30,17 +36,55 @@ mobile.slideshow = {
         mobile.slideshow.$overlay = $('.mobile.slideshow-image-previewer');
 
         // Initialise the rest of the functionality
+        mobile.slideshow.initLandscapeView(nodeHandle);
         mobile.slideshow.buildListOfImagesInDirectory();
         mobile.slideshow.hideOrShowNavigationButtons();
         mobile.slideshow.initPreviousImageFunctionality();
         mobile.slideshow.initNextImageFunctionality();
         mobile.slideshow.initCloseButton();
-        mobile.slideshow.initHideShowToggleForHeaderAndButtons();
+        mobile.slideshow.initHideShowToggleForHeaderAndButtons(nodeHandle);
         mobile.slideshow.fetchImageFromApi(nodeHandle, mobile.slideshow.displayImage, 'mid', true);
+
+        mobile.initOverlayPopstateHandler(mobile.slideshow.$overlay);
+    },
+
+    /**
+     * Init the landscape mode and bind the related event listener
+     */
+    initLandscapeView: function(nodeHandle) {
+
+        'use strict';
+
+        mobile.slideshow.isLandscape = window.matchMedia("(orientation: landscape)").matches;
+        if (mobile.slideshow.isLandscape) {
+            mobile.slideshow.hideHFFlag = true;
+            mobile.slideshow.toggleForHeaderAndButtons();
+        }
+
+        $(window).rebind('orientationchange.slideshow', function() {
+            mobile.slideshow.isLandscape = !mobile.slideshow.isLandscape;
+            if (is_video(M.d[nodeHandle])) {
+                if (mobile.slideshow.isLandscape
+                    && $('.viewer-button.fs .icons-img', mobile.slideshow.$overlay).hasClass('fullscreen')
+                    && !mobile.slideshow.hideHFFlag) {
+                    mobile.slideshow.hideHFFlag = true;
+                }
+                else if (!mobile.slideshow.isLandscape
+                    && $('.viewer-button.fs .icons-img', mobile.slideshow.$overlay).hasClass('fullscreen')
+                    && mobile.slideshow.hideHFFlag) {
+                    mobile.slideshow.hideHFFlag = false;
+                }
+            }
+            else {
+                mobile.slideshow.hideHFFlag = mobile.slideshow.isLandscape;
+            }
+            mobile.slideshow.toggleForHeaderAndButtons();
+        });
     },
 
     /**
      * Show the loading animation for switching between slides
+     * @returns {void}
      */
     showLoadingAnimation: function() {
 
@@ -63,37 +107,46 @@ mobile.slideshow = {
 
     /**
      * Toggle hiding and showing the header and footer buttons when the black background or image is clicked
+     * @param {String} nodeHandle The node handle/id for the image to be fetched
      */
-    initHideShowToggleForHeaderAndButtons: function() {
+    initHideShowToggleForHeaderAndButtons: function(nodeHandle) {
 
         'use strict';
 
         // Cache selectors
-        var $slideShowBackground = mobile.slideshow.$overlay.find('.slideshow-wrapper, .fs');
-        var $slideShowHeader = mobile.slideshow.$overlay.find('.slideshow-header');
-        var $slideShowFooterButtons = mobile.slideshow.$overlay.find('.slideshow-buttons');
-        var $slideShowNavButtons = mobile.slideshow.$overlay.find('.slideshow-back-arrow, .slideshow-forward-arrow');
+        var $slideShowBackground = mobile.slideshow.$overlay.find('.slideshow-wrapper');
 
         // On clicking the image or black background of the slideshow
-        $slideShowBackground.off().on('tap', SoonFc(function(ev) {
-            if ($(ev.target).closest('.video-controls').length) {
-                return false;
-            }
-
-            if ($slideShowHeader.hasClass('hidden')) {
-                $slideShowHeader.removeClass('hidden');
-                $slideShowFooterButtons.removeClass('hidden');
-                $slideShowNavButtons.removeClass('hidden');
-            }
-            else {
-                // Otherwise hide them
-                $slideShowHeader.addClass('hidden');
-                $slideShowFooterButtons.addClass('hidden');
-                $slideShowNavButtons.addClass('hidden');
+        $slideShowBackground.off().on('tap', SoonFc(function() {
+            if (!is_video(M.d[nodeHandle])) {
+                mobile.slideshow.hideHFFlag = !mobile.slideshow.hideHFFlag;
+                mobile.slideshow.toggleForHeaderAndButtons();
             }
         }));
     },
 
+    /**
+     * Action to toggle hiding and showing the header and footer buttons
+     */
+    toggleForHeaderAndButtons: function() {
+
+        'use strict';
+
+        var $slideShowHeader = mobile.slideshow.$overlay.find('.slideshow-header');
+        var $slideShowFooterButtons = mobile.slideshow.$overlay.find('.slideshow-buttons');
+        var $slideShowNavButtons = mobile.slideshow.$overlay.find('.slideshow-back-arrow, .slideshow-forward-arrow');
+
+        if (mobile.slideshow.hideHFFlag) { // Hide them
+            $slideShowHeader.addClass('hidden');
+            $slideShowFooterButtons.addClass('hidden');
+            $slideShowNavButtons.addClass('hidden');
+        }
+        else { // Show them
+            $slideShowHeader.removeClass('hidden');
+            $slideShowFooterButtons.removeClass('hidden');
+            $slideShowNavButtons.removeClass('hidden');
+        }
+    },
 
     /**
      * Fetch the image data from the API, populate the 'previews' object, then run the callback provided
@@ -186,12 +239,13 @@ mobile.slideshow = {
         mobile.slideshow.changeSlide(slideClass);
 
         // Initialise buttons
-        mobile.slideshow.initDeleteButton(nodeHandle);
-        mobile.slideshow.initDownloadButton(nodeHandle);
-        mobile.slideshow.initLinkButton(nodeHandle);
+        mobile.slideshow.initActionBarButtons(nodeHandle);
 
         // Show the dialog
         mobile.slideshow.$overlay.removeClass('hidden');
+
+        // Update preview state.
+        sessionStorage.setItem('previewNode', nodeHandle);
 
         if (is_video(node)) {
             var videoHtmlTemplate = $('.mobile-video-template');
@@ -207,6 +261,23 @@ mobile.slideshow = {
                     if (ok) {
                         mobile.slideshow.$overlay.find('.scroll-block').addClass('video');
                         $('.video-block, .video-controls', mobile.slideshow.$overlay).removeClass('hidden');
+                        $('.viewer-button.fs', mobile.slideshow.$overlay).rebind('tap.toggleHeader', function (e) {
+                            e.stopPropagation();
+                            if (!mobile.slideshow.isLandscape) {
+                                mobile.slideshow.hideHFFlag = !mobile.slideshow.hideHFFlag;
+                                mobile.slideshow.toggleForHeaderAndButtons();
+                            }
+                            $(this).click();
+                            return false;
+                        });
+
+                        // Autoplay the video / audio file
+                        if ($.autoplay === nodeHandle) {
+                            onIdle(function() {
+                                $('.play-video-button', mobile.slideshow.$overlay).trigger('click');
+                            });
+                            delete $.autoplay;
+                        }
                     }
                 });
             });
@@ -282,6 +353,9 @@ mobile.slideshow = {
             // Fetch the image and then display it
             mobile.slideshow.fetchImageFromApi(nextImageHandle, mobile.slideshow.displayImage, 'right');
 
+            // Rebind the hide/show toggle event for header and buttons
+            mobile.slideshow.initHideShowToggleForHeaderAndButtons(nextImageHandle);
+
             // Prevent double taps
             return false;
         });
@@ -294,6 +368,9 @@ mobile.slideshow = {
 
             // Fetch the image and then display it
             mobile.slideshow.fetchImageFromApi(nextImageHandle, mobile.slideshow.displayImage, 'right');
+
+            // Rebind the hide/show toggle event for header and buttons
+            mobile.slideshow.initHideShowToggleForHeaderAndButtons(nextImageHandle);
 
             // Prevent double swipe
             return false;
@@ -361,6 +438,9 @@ mobile.slideshow = {
             // Fetch the image and then display it
             mobile.slideshow.fetchImageFromApi(nextImageHandle, mobile.slideshow.displayImage, 'left');
 
+            // Rebind the hide/show toggle event for header and buttons
+            mobile.slideshow.initHideShowToggleForHeaderAndButtons(nextImageHandle);
+
             // Prevent double taps
             return false;
         });
@@ -373,6 +453,9 @@ mobile.slideshow = {
 
             // Fetch the image and then display it
             mobile.slideshow.fetchImageFromApi(nextImageHandle, mobile.slideshow.displayImage, 'left');
+
+            // Rebind the hide/show toggle event for header and buttons
+            mobile.slideshow.initHideShowToggleForHeaderAndButtons(nextImageHandle);
 
             // Prevent double swipe
             return false;
@@ -447,6 +530,28 @@ mobile.slideshow = {
     },
 
     /**
+     * Close the overlay
+     */
+    close: function() {
+        'use strict';
+
+        if (!mobile.slideshow.$overlay) {
+            // was not opened
+            return;
+        }
+
+        // Hide the dialog
+        mobile.slideshow.$overlay.addClass('hidden');
+
+        // Cleanup curr....
+        mobile.slideshow.cleanupCurrentlyViewedInstance();
+        mobile.slideshow.$overlay.find('.slides.mid img').remove();
+        mobile.slideshow.$overlay.find('.slides.mid').prepend('<img alt="" /></div>');
+        sessionStorage.removeItem('previewNode');
+        sessionStorage.removeItem('previewTime');
+    },
+
+    /**
      * Initialise the close button
      */
     initCloseButton: function() {
@@ -454,16 +559,8 @@ mobile.slideshow = {
         'use strict';
 
         // On close button click/tap
-        mobile.slideshow.$overlay.find('.fm-dialog-close').off().on('tap', function() {
-
-            // Hide the dialog
-            mobile.slideshow.$overlay.addClass('hidden');
-
-            // Cleanup curr....
-            mobile.slideshow.cleanupCurrentlyViewedInstance();
-            mobile.slideshow.$overlay.find('.slides.mid img').remove();
-            mobile.slideshow.$overlay.find('.slides.mid').prepend('<img alt="" /></div>');
-
+        mobile.slideshow.$overlay.find('.fm-dialog-close').off().on('tap', function(e) {
+            mobile.slideshow.close();
             // Prevent double taps
             return false;
         });
@@ -521,6 +618,26 @@ mobile.slideshow = {
     },
 
     /**
+     * Init Button to handle delete if node in rubbish bin.
+     * @param nodeHandle
+     */
+    initRubbishBinDeleteButton: function(nodeHandle) {
+        'use strict';
+        mobile.slideshow.$overlay.find(".rubbishbin-delete-button").off('tap').on('tap', function() {
+            $.selected = [nodeHandle];
+            M.clearRubbish(false)
+                .then(function() {
+                    mobile.slideshow.close();
+                    mobile.showSuccessToast(l[19635]);
+                })
+                .catch(function() {
+                    mobile.showErrorToast(l[5963]);
+                });
+            return false;
+        });
+    },
+
+    /**
      * Functionality for downloading a file
      * @param {String} nodeHandle The node handle for this folder/file
      */
@@ -562,5 +679,26 @@ mobile.slideshow = {
             mobile.linkOverlay.show(nodeHandle);
             return false;
         });
+    },
+
+    /**
+     * Init actionbar buttons
+     */
+    initActionBarButtons: function(nodeHandle) {
+        'use strict';
+
+        if (M.getNodeRoot(nodeHandle) !== M.RubbishID) {
+            // Only show link and delete button if the image is not in the rubbish bin.
+            mobile.slideshow.$overlay.find(".manage-link-button, .delete-button").removeClass('hidden');
+            mobile.slideshow.$overlay.find(".rubbishbin-delete-button").addClass("hidden");
+            mobile.slideshow.initDeleteButton(nodeHandle);
+            mobile.slideshow.initLinkButton(nodeHandle);
+        } else {
+            mobile.slideshow.$overlay.find(".manage-link-button, .delete-button").addClass('hidden');
+            mobile.slideshow.$overlay.find(".rubbishbin-delete-button").removeClass("hidden");
+            mobile.slideshow.initRubbishBinDeleteButton(nodeHandle);
+        }
+        mobile.slideshow.initDownloadButton(nodeHandle);
+
     }
 };

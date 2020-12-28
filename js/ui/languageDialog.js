@@ -20,7 +20,7 @@ var langDialog = {
 
         // Main tier 1 languages that we support (based on usage analysis)
         var tierOneLangCodes = [
-            'es', 'en', 'br', 'ct', 'fr', 'de', 'ru', 'tr', 'it', 'ar',
+            'es', 'en', 'br', 'ct', 'fr', 'de', 'ru', 'it', 'ar',
             'nl', 'cn', 'jp', 'kr', 'ro', 'id', 'th', 'vi', 'pl'
         ];
 
@@ -32,11 +32,18 @@ var langDialog = {
 
         // Generate the HTML for tier one and tier two languages (second param set to true shows beta icon)
         var tierOneHtml = langDialog.renderLanguages(tierOneLangCodes, false);
-        var tierTwoHtml = langDialog.renderLanguages(tierTwoLangCodes, true);
 
         // Display the HTML
         $tierOneLanguages.safeHTML(tierOneHtml);
-        $tierTwoLanguages.safeHTML(tierTwoHtml);
+
+        if (tierTwoLangCodes.length) {
+
+            var tierTwoHtml = langDialog.renderLanguages(tierTwoLangCodes, true);
+            $tierTwoLanguages.safeHTML(tierTwoHtml);
+        }
+        else {
+            $('.show-more-languages', langDialog.$dialog).addClass('hidden');
+        }
 
         // Cache some selectors for performance
         var $languageLinks = langDialog.$dialog.find('.nlanguage-lnk');
@@ -195,22 +202,37 @@ var langDialog = {
             // If not the currently selected language, change to the selected language
             if (selectedLangCode !== lang) {
 
-                // Store the new language in localStorage to be used upon reload
-                localStorage.lang = selectedLangCode;
+                var _reload = function() {
+                    loadingDialog.hide();
+
+                    // Store the new language in localStorage to be used upon reload
+                    localStorage.lang = selectedLangCode;
+
+                    // If there are transfers, ask the user to cancel them to reload...
+                    M.abortTransfers().then(function() {
+                        // Reload the site
+                        location.reload();
+                    }).catch(function(ex) {
+                        console.debug('Not reloading upon language change...', ex);
+                    });
+                };
+                loadingDialog.show();
 
                 // Set a language user attribute on the API (This is a private but unencrypted user
                 // attribute so that the API can read it and send emails in the correct language)
-                if (typeof u_attr !== 'undefined') {
+                if (typeof u_attr !== 'undefined' && u_attr) {
                     mega.attr.set(
                         'lang',
                         selectedLangCode,       // E.g. en, es, pt
                         -2,                     // Set to private private not encrypted
                         true                    // Set to non-historic, this won't retain previous values on API server
-                    );
+                    ).then(function() {
+                        setTimeout(_reload, 3e3);
+                    }).catch(_reload);
                 }
-
-                // Reload the site
-                document.location.reload();
+                else {
+                    _reload();
+                }
             }
         });
     }

@@ -5,17 +5,29 @@
  * @param node_handle {String}
  * @param node_key {String}
  * @param is_dir {Boolean}
+ * @param [is_chatlink] {Boolean}
+ * @param [is_contactlink] {Boolean}
+ * @param [url] {String}
  * @constructor
  */
-var LinkInfoHelper = function(node_handle, node_key, is_dir) {
+var LinkInfoHelper = function(node_handle, node_key, is_dir, is_chatlink, is_contactlink, url) {
     "use strict";
     this.node_handle = node_handle;
     this.node_key = node_key;
     this.is_dir = is_dir;
+    this.is_chatlink = is_chatlink;
+    this.is_contactlink = is_contactlink;
+    this._url = url;
     this.info = {};
 };
 
-LinkInfoHelper.MEGA_LINKS_REGEXP = "(http(s?):\\/\\/)?mega.(co\\.nz|nz)\\/#(!|F!)([a-zA-Z\!0-9\-_]+)";
+LinkInfoHelper.MEGA_LINKS_REGEXP = [
+    "(http(s?):\\/\\/)?mega.(co\\.nz|nz)\\/#(!|F!)([a-zA-Z\!0-9\-_]+)",
+    "(http(s?):\\/\\/)?mega.(co\\.nz|nz)\\/(chat\\/)([a-zA-Z\#0-9\-_]+)",
+    "(http(s?):\\/\\/)?mega.(co\\.nz|nz)\\/(C!)([a-zA-Z\#0-9\-_]+)",
+    "(http(s?):\\/\\/)?([a-zA-Z0-9\-.]*)?mega.(co\\.nz|nz)\\/(file|folder)/([a-zA-Z\#0-9\-_]+)",
+];
+LinkInfoHelper.MEGA_LINKS_REGEXP_COMPILED = false;
 LinkInfoHelper._CACHE = {};
 
 /**
@@ -26,14 +38,24 @@ LinkInfoHelper._CACHE = {};
  */
 LinkInfoHelper.isMegaLink = function(url) {
     "use strict";
-    if (LinkInfoHelper.MEGA_LINKS_REGEXP.substr) {
-        LinkInfoHelper.MEGA_LINKS_REGEXP = new RegExp(LinkInfoHelper.MEGA_LINKS_REGEXP, "gmi");
+    if (!LinkInfoHelper.MEGA_LINKS_REGEXP_COMPILED) {
+        LinkInfoHelper.MEGA_LINKS_REGEXP_COMPILED = [];
+        LinkInfoHelper.MEGA_LINKS_REGEXP.forEach(function(v) {
+            LinkInfoHelper.MEGA_LINKS_REGEXP_COMPILED.push(
+                new RegExp(v, "gmi")
+            );
+        });
     }
     if (!url || !url.match) {
         return false;
     }
     else {
-        return url.match(LinkInfoHelper.MEGA_LINKS_REGEXP);
+        for (var i = 0; i < LinkInfoHelper.MEGA_LINKS_REGEXP_COMPILED.length; i++) {
+            if (url.match(LinkInfoHelper.MEGA_LINKS_REGEXP_COMPILED[i])) {
+                return true;
+            }
+        }
+
     }
 };
 
@@ -46,34 +68,92 @@ LinkInfoHelper.isMegaLink = function(url) {
 LinkInfoHelper.extractMegaLinksFromString = function(s) {
     "use strict";
 
-    if (LinkInfoHelper.MEGA_LINKS_REGEXP.substr) {
-        LinkInfoHelper.MEGA_LINKS_REGEXP = new RegExp(LinkInfoHelper.MEGA_LINKS_REGEXP, "gmi");
+    if (!LinkInfoHelper.MEGA_LINKS_REGEXP_COMPILED) {
+        LinkInfoHelper.MEGA_LINKS_REGEXP_COMPILED = [];
+        LinkInfoHelper.MEGA_LINKS_REGEXP.forEach(function(v) {
+            LinkInfoHelper.MEGA_LINKS_REGEXP_COMPILED.push(
+                new RegExp(v, "gmi")
+            );
+        });
     }
 
     var found = [];
 
     if (s.substr) {
         var m;
-        while ((m = LinkInfoHelper.MEGA_LINKS_REGEXP.exec(s)) !== null) {
-            // This is necessary to avoid infinite loops with zero-width matches
-            if (m.index === LinkInfoHelper.MEGA_LINKS_REGEXP.lastIndex) {
-                LinkInfoHelper.MEGA_LINKS_REGEXP.lastIndex++;
-            }
+        for (var i = 0; i < LinkInfoHelper.MEGA_LINKS_REGEXP_COMPILED.length; i++) {
+            var regExp = LinkInfoHelper.MEGA_LINKS_REGEXP_COMPILED[i];
 
-            if (m[4] === "F!" || m[4] === "!") {
-                var handleAndKey = m[5].split("!");
-                var handle = handleAndKey[0];
-                var key = handleAndKey[1];
-                var is_dir = m[4] === "F!";
-                var cacheKey = handle + ":" + key;
-
-                if (!LinkInfoHelper._CACHE[cacheKey]) {
-                    LinkInfoHelper._CACHE[cacheKey] = new LinkInfoHelper(handle, key, is_dir);
+            while ((m = regExp.exec(s)) !== null) {
+                // This is necessary to avoid infinite loops with zero-width matches
+                if (m.index === regExp.lastIndex) {
+                    regExp.lastIndex++;
                 }
 
-                found.push(
-                    LinkInfoHelper._CACHE[cacheKey]
-                );
+                if (m[4] === "F!" || m[4] === "!") {
+                    var handleAndKey = m[5].split("!");
+                    var handle = handleAndKey[0];
+                    var key = handleAndKey[1];
+                    var is_dir = m[4] === "F!";
+                    var cacheKey = handle + ":" + key;
+
+                    if (!LinkInfoHelper._CACHE[cacheKey]) {
+                        LinkInfoHelper._CACHE[cacheKey] = new LinkInfoHelper(handle, key, is_dir, false, false, m[0]);
+                    }
+
+                    found.push(
+                        LinkInfoHelper._CACHE[cacheKey]
+                    );
+                }
+                else if (m[5] === "file" || m[5] === "folder") {
+                    var handleAndKey = m[6].split("#");
+                    var handle = handleAndKey[0];
+                    var key = handleAndKey[1] && handleAndKey[1].split("/")[0] || "";
+                    var is_dir = m[5] === "folder";
+                    var cacheKey = (m[3] || "") + "_" + handle + ":" + key;
+
+                    if (!LinkInfoHelper._CACHE[cacheKey]) {
+                        LinkInfoHelper._CACHE[cacheKey] = new LinkInfoHelper(handle, key, is_dir, false, false, m[0]);
+                    }
+
+                    found.push(
+                        LinkInfoHelper._CACHE[cacheKey]
+                    );
+                }
+                else if (m[4] === "chat/") {
+                    // is chat
+                    var chatHandleAndKey = m[5].split("#");
+                    var chatHandle = chatHandleAndKey[0];
+                    var chatKey = chatHandleAndKey[1];
+                    var chatCacheKey = chatHandle + ":" + chatKey;
+
+                    if (!LinkInfoHelper._CACHE[chatCacheKey]) {
+                        LinkInfoHelper._CACHE[chatCacheKey] = new LinkInfoHelper(chatHandle, chatKey, false, true);
+                    }
+
+                    found.push(
+                        LinkInfoHelper._CACHE[chatCacheKey]
+                    );
+                }
+                else if (m[4] === "C!") {
+                    // is chat
+                    var contactHash = m[5];
+                    var contactHashKey = "C!" + contactHash;
+
+                    if (!LinkInfoHelper._CACHE[contactHashKey]) {
+                        LinkInfoHelper._CACHE[contactHashKey] = new LinkInfoHelper(
+                            contactHash,
+                            undefined,
+                            false,
+                            false,
+                            true
+                        );
+                    }
+
+                    found.push(
+                        LinkInfoHelper._CACHE[contactHashKey]
+                    );
+                }
             }
         }
     }
@@ -98,10 +178,42 @@ LinkInfoHelper.prototype.retrieve = function() {
     var base64key = String(key).trim();
     key = base64_to_a32(base64key).slice(0, 8);
 
-    if (self.info['at']) {
+    if (self.info['at'] || self.info['ct']) {
         return MegaPromise.resolve();
     }
-    if (!self.is_dir) {
+    else if (self.is_chatlink) {
+        self._promise = asyncApiReq({
+            'a': 'mcphurl',
+            'v': Chatd.VERSION,
+            'ph': self.node_handle
+        })
+            .done(function (r) {
+                self.info['ncm'] = r.ncm;
+                self.info['ct'] = r.ct;
+            })
+            .fail(function (e) {
+                self.failed = true;
+                if (d) {
+                    console.error("Failed to retrieve link info: ", e);
+                }
+            });
+    }
+    else if (self.is_contactlink) {
+        self._promise = asyncApiReq({a: 'clg', 'cl': self.node_handle})
+            .done(function (r) {
+                self.info['e'] = r.e;
+                self.info['fn'] = r.fn;
+                self.info['ln'] = r.ln;
+                self.info['h'] = r.h;
+            })
+            .fail(function (e) {
+                self.failed = true;
+                if (d) {
+                    console.error("Failed to retrieve link info: ", e);
+                }
+            });
+    }
+    else if (!self.is_dir) {
         self._promise = asyncApiReq({a: 'g', p: self.node_handle, 'ad': showAd()})
             .done(function (r) {
                 self.info['size'] = r.s;
@@ -174,19 +286,60 @@ LinkInfoHelper.prototype.getInfo = function() {
 
     var promise = new MegaPromise();
 
+    // TODO: refactor this to use some ENUM-like type var
     if (
-        (!self.is_dir && !self.info['size'] && !self.info['at'] && !self.info['fa']) ||
-        (self.is_dir && !self.info['at'])
+        (!self.is_contactlink && !self.is_chatlink && !self.is_dir && !self.info['size'] && !self.info['at'] &&
+            !self.info['fa']) ||
+        (!self.is_contactlink && !self.is_chatlink && self.is_dir && !self.info['at']) ||
+        (!self.is_contactlink && self.is_chatlink && !self.info['ct']) ||
+        (self.is_contactlink && !self.info['e'])
     ) {
         promise.linkFailTo(
             self.retrieve().done(function() {
-                promise.linkDoneAndFailTo(self.getInfo());
+                promise.linkDoneTo(self.getInfo());
             })
+                .fail(function(r) {
+                    promise.reject(r);
+                })
+
         );
         return promise;
     }
 
-    if (!self.is_dir && !self.info['name']) {
+    if (self.is_chatlink) {
+        if (self.info['topic']) {
+            promise.resolve(this.info);
+        }
+        else {
+            var fakeRoom = {
+                'chatId': 'fakeChat#' + self.node_handle,
+                'ct': self.info['ct'],
+                'publicChatHandle': self.node_handle
+            };
+
+            var ph = new strongvelope.ProtocolHandler(
+                null,
+                null,
+                null,
+                null,
+                strongvelope.CHAT_MODE.PUBLIC
+            );
+            ph.chatRoom = fakeRoom;
+            ph.unifiedKey = base64urldecode(self.node_key);
+
+            fakeRoom.protocolHandler = ph;
+
+            megaChat.plugins.chatdIntegration.decryptTopic(fakeRoom)
+                .done(function(r) {
+                    self.info['topic'] = fakeRoom.topic;
+                    promise.resolve(self.info);
+                })
+                .fail(function(e) {
+                    promise.reject(e);
+                });
+        }
+    }
+    else if (!self.is_dir && !self.info['name']) {
         var key = this.node_key;
         var base64key = String(key).trim();
         key = base64_to_a32(base64key).slice(0, 8);
@@ -205,7 +358,7 @@ LinkInfoHelper.prototype.getInfo = function() {
             if (is_image(filename) || is_video(filename)) {
                 this.info['preview_text'] = l[16274];
 
-                if (filetype(filename) === 'PDF Document') {
+                if (fileext(filename) === 'pdf') {
                     this.info['preview_text'] = l[17489];
                 }
                 else if (is_video(filename)) {
@@ -324,7 +477,15 @@ LinkInfoHelper.prototype.havePreview = function() {
 LinkInfoHelper.prototype.getLink = function() {
     "use strict";
     if (!this._url) {
-        this._url = "https://mega.nz/#" + (this.is_dir ? "F" : "") + "!" + this.node_handle + "!" + this.node_key;
+        if (this.is_contactlink) {
+            this._url = "https://mega.nz/C!" + this.node_handle;
+        }
+        else if (this.is_chatlink) {
+            this._url = "https://mega.nz/chat/" + this.node_handle + "#" + this.node_key;
+        }
+        else {
+            this._url = "https://mega.nz/#" + (this.is_dir ? "F" : "") + "!" + this.node_handle + "!" + this.node_key;
+        }
     }
     return this._url;
 };

@@ -1,31 +1,26 @@
 var React = require("react");
 var ReactDOM = require("react-dom");
 var utils = require("./utils.jsx");
-var MegaRenderMixin = require("../stores/mixins.js").MegaRenderMixin;
+import {MegaRenderMixin} from "../stores/mixins.js";
 
 
-var Handler = React.createClass({
-    mixins: [MegaRenderMixin],
-    getDefaultProps() {
-        return {
-            'hideable': true
-        }
-    },
-    render () {
+class Handler extends MegaRenderMixin {
+    static defaultProps = {
+        'hideable': true
+    };
+    render() {
         var classes = "tooltip-handler" + (this.props.className ? " " + this.props.className : "");
         return <span className={classes} onMouseOver={this.props.onMouseOver} onMouseOut={this.props.onMouseOut}>
             {this.props.children}
         </span>;
     }
-});
+};
 
-var Contents = React.createClass({
-    mixins: [MegaRenderMixin],
-    getDefaultProps() {
-        return {
-            'hideable': true
-        }
-    },
+class Contents extends MegaRenderMixin {
+     static defaultProps = {
+        'hideable': true
+    };
+
     render() {
         var className = 'tooltip-contents dropdown body tooltip ' + (this.props.className ? this.props.className : "");
 
@@ -43,33 +38,31 @@ var Contents = React.createClass({
             return null;
         }
     }
-});
+};
 
 
-var Tooltip = React.createClass({
-    mixins: [MegaRenderMixin],
-    getInitialState() {
-        return {
+class Tooltip extends MegaRenderMixin {
+    constructor (props) {
+        super(props);
+        this.state = {
             'active': false
         };
-    },
-    getDefaultProps() {
-        return {
-            'hideable': true
-        }
-    },
+    }
+    static defaultProps = {
+        'hideable': true
+    };
     componentDidUpdate(oldProps, oldState) {
         var self = this;
         if (oldState.active === true && this.state.active === false) {
-            $(window).off('resize.tooltip' + this.getUniqueId());
+            chatGlobalEventManager.removeEventListener('resize', 'tooltip' + this.getUniqueId());
         }
         if(self.state.active === true) {
             self.repositionTooltip();
-            $(window).rebind('resize.tooltip' + this.getUniqueId(), function() {
+            chatGlobalEventManager.addEventListener('resize', 'tooltip' + this.getUniqueId(), function() {
                 self.repositionTooltip();
             });
         }
-    },
+    }
     repositionTooltip() {
         var self = this;
 
@@ -128,17 +121,17 @@ var Tooltip = React.createClass({
 
             $tooltip.css({
                 'left': tooltipLeftPos,
-                'top': tooltipTopPos
+                'top': tooltipTopPos -5 // avoid image preview flashing due to arrow position
             });
             $tooltip.addClass(arrowClass);
         }
-    },
+    }
     onHandlerMouseOver() {
         this.setState({'active': true});
-    },
+    }
     onHandlerMouseOut() {
         this.setState({'active': false});
-    },
+    }
     render() {
         var self = this;
 
@@ -150,7 +143,7 @@ var Tooltip = React.createClass({
 
         var x = 0;
         React.Children.forEach(this.props.children, function (child) {
-            if (child.type.displayName === 'Handler') {
+            if (child.type.name === 'Handler') {
                 handler = React.cloneElement(child, {
                     onMouseOver: function(e) {
                         self.onHandlerMouseOver();
@@ -160,7 +153,7 @@ var Tooltip = React.createClass({
                     }
                 });
             }
-            else if (child.type.displayName === 'Contents') {
+            else if (child.type.name === 'Contents') {
                 contents = React.cloneElement(child, {
                     active: self.state.active,
                     withArrow: self.props.withArrow
@@ -183,9 +176,9 @@ var Tooltip = React.createClass({
             </span>
         );
     }
-});
+};
 
-module.exports = {
+export default {
     Tooltip,
     Handler,
     Contents

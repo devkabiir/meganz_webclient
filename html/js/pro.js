@@ -48,6 +48,8 @@ var pro = {
                     // The rest of the webclient expects this data in an array format
                     // [api_id, account_level, storage, transfer, months, price, currency, monthlybaseprice]
                     var plans = [];
+                    var maxPlan = null;
+                    var minPlan = null;
                     for (var i = 0; i < results.length; i++) {
                         plans.push([
                             results[i]['id'],    // id
@@ -63,14 +65,110 @@ var pro = {
                             results[i]['lps'],   // NEW 'local price symbol'
                             results[i]['lp0']    // NEW 'local price Zero val'
                         ]);
+                        if (results[i]['m'] === 1) {
+                            if (!maxPlan || maxPlan[2] < results[i]['s']) {
+                                maxPlan = plans[plans.length - 1];
+                            }
+                            if (!minPlan || minPlan[2] > results[i]['s']) {
+                                minPlan = plans[plans.length - 1];
+                            }
+                        }
                     }
 
                     // Store globally
                     pro.membershipPlans = plans;
                     pro.lastLoginStatus = u_type;
+                    pro.maxPlan = maxPlan;
+                    pro.minPlan = minPlan;
 
                     // Run the callback function
                     loadedCallback();
+                }
+            });
+        }
+    },
+
+    /**
+     * Redirect to the site.
+     * @param {String} [topage] Redirect to this page of our site.
+     */
+    redirectToSite: function(topage) {
+        'use strict';
+
+        // On mobile just load the main account page as there is no payment history yet
+        topage = topage || (is_mobile ? 'fm/account' : 'fm/account/plan');
+
+        // Make sure it fetches new account data on reload
+        // and redirect to account page to show purchase
+        if (M.account) {
+            M.account.lastupdate = 0;
+            // If pro page is opened from account/plan update M.currentdirid to force call openfolder
+            M.currentdirid = String(M.currentdirid).substr(0, 7) === 'account' ? false : M.currentdirid;
+        }
+
+        // if (localStorage.justGotRegistered) {
+        //     delete localStorage.justGotRegistered;
+        //     sessionStorage.onDesktopOnboardingRedirectTo = topage;
+        //     topage = 'downloadapp';
+        // }
+
+        loadSubPage(topage);
+    },
+
+    /**
+     * Show the payment result of success or failure after coming back from a provider
+     * @param {String} verifyUrlParam The URL parameter e.g. 'success' or 'failure'
+     */
+    showPaymentResult: function(verifyUrlParam) {
+        'use strict';
+
+        var $backgroundOverlay = $('.fm-dialog-overlay');
+        var $pendingOverlay = $('.payment-result.pending.alternate');
+        var $failureOverlay = $('.payment-result.failed');
+
+        // Show the overlay
+        $backgroundOverlay.removeClass('hidden').addClass('payment-dialog-overlay');
+
+        // On successful payment
+        if (verifyUrlParam === 'success') {
+
+            // Show the success
+            $pendingOverlay.removeClass('hidden');
+
+            insertEmailToPayResult($pendingOverlay);
+
+            if (!u_type || u_type !== 3) {
+                $pendingOverlay.find('.payment-result-button, .payment-close').addClass('hidden');
+            }
+            else {
+                $pendingOverlay.find('.payment-result-button, .payment-close').removeClass('hidden');
+
+                // Add click handlers for 'Go to my account' and Close buttons
+                $pendingOverlay.find('.payment-result-button, .payment-close').rebind('click', function () {
+
+                    // Hide the overlay
+                    $backgroundOverlay.addClass('hidden').removeClass('payment-dialog-overlay');
+                    $pendingOverlay.addClass('hidden');
+
+                    pro.redirectToSite();
+                });
+            }
+        }
+        else {
+            // Show the failure overlay
+            $failureOverlay.removeClass('hidden');
+
+            // On click of the 'Try again' or Close buttons, hide the overlay
+            $failureOverlay.find('.payment-result-button, .payment-close').rebind('click', function() {
+
+                // Hide the overlay
+                $backgroundOverlay.addClass('hidden').removeClass('payment-dialog-overlay');
+                $failureOverlay.addClass('hidden');
+                if (u_attr && u_attr.b) {
+                    loadSubPage('registerb');
+                }
+                else {
+                    loadSubPage('pro');
                 }
             });
         }
@@ -101,7 +199,7 @@ var pro = {
 
             // If last payment was Bitcoin, we need to redirect to the account page
             if (pro.lastPaymentProviderId === bitcoinDialog.gatewayId) {
-                loadSubPage('fm/account/history');
+                loadSubPage('fm/account/plan');
             }
         }
     },
@@ -122,8 +220,10 @@ var pro = {
                 return l[6126];     // PRO III
             case 4:
                 return l[8413];     // PRO LITE
+            case 100:
+                return 'Business';    // product name should not be translated
             default:
-                return l[435];      // FREE
+                return l[1150];      // FREE
         }
     },
 

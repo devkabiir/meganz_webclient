@@ -13,19 +13,7 @@ function u_login(ctx, email, password, uh, pinCode, permanent) {
     ctx.result = u_login2;
     ctx.permanent = permanent;
 
-    // check whether the pwd came from the browser manager
-    var pwdman = passwordManager.getStoredCredentials(password);
-    if (pwdman) {
-        uh = pwdman.hash;
-        keypw = pwdman.keypw;
-
-        if (d) {
-            console.log('Using pwdman credentials.');
-        }
-    }
-    else {
-        keypw = prepare_key_pw(password);
-    }
+    keypw = prepare_key_pw(password);
 
     api_getsid(ctx, email, keypw, uh, pinCode);
 }
@@ -33,12 +21,13 @@ function u_login(ctx, email, password, uh, pinCode, permanent) {
 
 function u_login2(ctx, ks) {
     if (ks !== false) {
+        sessionStorage.signinorup = 1;
         localStorage.wasloggedin = true;
         u_logout();
         u_storage = init_storage(ctx.permanent ? localStorage : sessionStorage);
         u_storage.k = JSON.stringify(ks[0]);
         u_storage.sid = ks[1];
-        watchdog.notify('login', ks[1]);
+        watchdog.notify('login', [!ctx.permanent && ks[0], ks[1]]);
         if (ks[2]) {
             u_storage.privk = base64urlencode(crypto_encodeprivkey(ks[2]));
         }
@@ -90,7 +79,7 @@ function u_checklogin2(ctx, u) {
     }
     else {
         ctx.result = u_checklogin2a;
-        api_getsid(ctx, u, ctx.passwordkey);
+        api_getsid(ctx, u, ctx.passwordkey, ctx.uh); // if ctx.uh is defined --> we need it fo "us"
     }
 }
 
@@ -120,16 +109,17 @@ function u_checklogin3a(res, ctx) {
     if (typeof res !== 'object') {
         u_logout();
         r = res;
+        ctx.checkloginresult(ctx, r);
     }
     else {
         u_attr = res;
         var exclude = [
-            'aav', 'aas', 'c', 'currk', 'email', 'flags', 'k', 'lup', 'name',
-            'p', 'privk', 'pubk', 's', 'since', 'ts', 'u', 'ut'
+            'aav', 'aas', '*!>alias', 'b', 'c', 'currk', 'email', 'flags', 'ipcc', 'k', 'lup',
+            'name', 'p', 'privk', 'pubk', 's', 'since', 'smsv', 'ts', 'u', 'ut', 'uspw'
         ];
 
         for (var n in u_attr) {
-            if (exclude.indexOf(n) === -1) {
+            if (exclude.indexOf(n) === -1 && n[0] !== '*') {
                 try {
                     u_attr[n] = from8(base64urldecode(u_attr[n]));
                 } catch (e) {
@@ -138,8 +128,23 @@ function u_checklogin3a(res, ctx) {
             }
         }
 
-        u_storage.attr = JSON.stringify(u_attr);
+        // IP geolocation debuggging
+        if (d && localStorage.ipcc) {
+            u_attr.ipcc = localStorage.ipcc;
+        }
+
+        // We do not seem to need this here...
+        // u_storage.attr = JSON.stringify(u_attr);
+        delete localStorage.attr;
+
         u_storage.handle = u_handle = u_attr.u;
+
+        delete u_attr.u;
+        Object.defineProperty(u_attr, 'u', {
+            value: u_handle,
+            writable: false,
+            configurable: false
+        });
 
         init_storage(u_storage);
 
@@ -219,13 +224,21 @@ function u_checklogin3a(res, ctx) {
                 ctx.checkloginresult(ctx, r);
             });
         }
-
+        // there was a race condition between importing and business accounts creation.
+        // in normal users there's no problem, however in business the user will be disabled
+        // till they pay. therefore, if the importing didnt finish before 'upb' then the importing
+        // will fail.
         if ($.createanonuser === u_attr.u) {
-            M.importWelcomePDF().dump();
+            M.importWelcomePDF().always(function imprtingFinishedCallback() {
+                ctx.checkloginresult(ctx, r);
+            });
             delete $.createanonuser;
         }
+        else {
+            ctx.checkloginresult(ctx, r);
+        }
     }
-    ctx.checkloginresult(ctx, r);
+
 }
 
 // erase all local user/session information
@@ -258,6 +271,8 @@ function u_logout(logout) {
             }
         }
 
+        delete localStorage.voucher;
+        delete sessionStorage.signinorup;
         localStorage.removeItem('signupcode');
         localStorage.removeItem('registeremail');
 
@@ -268,6 +283,9 @@ function u_logout(logout) {
 
         if (logout !== -0xDEADF) {
             watchdog.notify('logout');
+        }
+        else {
+            watchdog.clear();
         }
 
         if (typeof slideshow === 'function') {
@@ -294,6 +312,15 @@ function u_logout(logout) {
             waitxhr.abort();
             waitxhr = undefined;
         }
+        for (i in localStorage) {
+            if (i.indexOf('sort') > -1) {
+                delete localStorage[i];
+            }
+        }
+
+        if (window.loadfm) {
+            loadfm.loaded = false;
+        }
     }
 }
 
@@ -306,22 +333,96 @@ function u_wasloggedin() {
 function u_setrsa(rsakey) {
     var $promise = new MegaPromise();
 
+    // performance optimization. encode keys once
+    var privateKeyEncoded = crypto_encodeprivkey(rsakey);
+    var publicKeyEncodedB64 = base64urlencode(crypto_encodepubkey(rsakey));
+    var buinessMaster;
+    var buinsesPubKey;
+
+    var request = {
+        a: 'up',
+        privk: a32_to_base64(encrypt_key(u_k_aes,
+            str_to_a32(privateKeyEncoded))),
+        pubk: publicKeyEncodedB64
+    };
+
+    if (!window.businessSubAc && localStorage.businessSubAc) {
+        window.businessSubAc = JSON.parse(localStorage.businessSubAc);
+    }
+
+    // checking if we are creating keys for a business sub-user
+    if (window.businessSubAc) {
+        // we get current user's master user + its public key (master user pubkey)
+        buinessMaster = window.businessSubAc.bu;
+        buinsesPubKey = window.businessSubAc.bpubk;
+
+
+        // now we will encrypt the current user master-key using master-user public key. and include it in 'up' request
+        // because master-user must be aware of evey sub-user's master-key.
+        var subUserMasterKey = a32_to_str(u_k);
+
+        var masterAccountRSA_keyPub;
+        if (typeof buinsesPubKey === 'string') {
+            masterAccountRSA_keyPub = crypto_decodepubkey(base64urldecode(buinsesPubKey));
+        }
+        else {
+            masterAccountRSA_keyPub = buinsesPubKey;
+        }
+        var subUserMasterKeyEncRSA = crypto_rsaencrypt(subUserMasterKey, masterAccountRSA_keyPub);
+        var subUserMasterKeyEncRSA_B64 = base64urlencode(subUserMasterKeyEncRSA);
+
+        request.mk = subUserMasterKeyEncRSA_B64;
+
+    }
+
     var ctx = {
         callback: function (res, ctx) {
             if (window.d) {
                 console.log("RSA key put result=" + res);
             }
 
-            u_privk = rsakey;
+            if (res < 0) {
+                var onError = function(message, ex) {
+                    var submsg = l[135] + ': ' + (ex < 0 ? api_strerror(ex) : ex);
 
+                    console.warn('Unexpected RSA key put failure!', ex);
+                    msgDialog('warninga', '', message, submsg, M.logout.bind(M));
+                    $promise.reject(ex);
+                };
+
+                // Check whether this is a business sub-user attempting to confirm the account.
+                if (res === EARGS && !window.businessSubAc) {
+                    M.req('ug').then(function(u_attr) {
+                        if (u_attr.b && u_attr.b.m === 0 && u_attr.b.bu) {
+                            crypt.getPubKeyAttribute(u_attr.b.bu, 'RSA')
+                                .then(function(res) {
+                                    window.businessSubAc = {bu: u_attr.b.bu, bpubk: res};
+                                    mBroadcaster.once('fm:initialized', M.importWelcomePDF);
+                                    $promise.linkDoneAndFailTo(u_setrsa(rsakey));
+                                })
+                                .catch(onError.bind(null, l[22897]));
+                        }
+                        else {
+                            onError(l[47], res);
+                        }
+                    }).catch(onError.bind(null, l[47]));
+                }
+                else {
+                    // Something else happened, hang the procedure and start over...
+                    onError(l[47], res);
+                }
+
+                return;
+            }
+
+            u_privk = rsakey;
             // If coming from a #confirm link in the new registration process and logging in from a clean browser
             // session the u_attr might not be set to an object yet, this will prevent an exception below
             if (typeof u_attr === 'undefined') {
                 u_attr = {};
             }
-
-            u_attr.privk = u_storage.privk = base64urlencode(crypto_encodeprivkey(rsakey));
-            u_attr.pubk = u_storage.pubk = base64urlencode(crypto_encodepubkey(rsakey));
+            u_attr.privk = u_storage.privk = base64urlencode(privateKeyEncoded);
+            u_attr.pubk = u_storage.pubk = publicKeyEncodedB64;
 
             // Update u_attr and store user data on account activation
             u_checklogin({
@@ -343,9 +444,35 @@ function u_setrsa(rsakey) {
 
                         watchdog.notify('setrsa', [u_type, u_sid]);
 
-                        // Import welcome pdf at account creation
-                        M.importWelcomePDF();
+                        // Recovery Key Onboarding improvements
+                        // Show newly registered user the download recovery key dialog.
+                        M.onFileManagerReady(function() {
+                            M.showRecoveryKeyDialog(1);
+                        });
+
+                        // No affiliate guide dialog for new users.
+                        $.noAffGuide = 1;
+
+                        // free up memory since it's not useful any longer
+                        delete window.businessSubAc;
+                        delete localStorage.businessSubAc;
                     }
+
+                    if (u_attr['^!promocode']) {
+                        try {
+                            var data = JSON.parse(u_attr['^!promocode']);
+
+                            if (data[1] !== -1) {
+                                localStorage[data[0]] = data[1];
+                            }
+                            localStorage.voucher = data[0];
+                        }
+                        catch (ex) {
+                            console.error(ex);
+                        }
+                    }
+                    mBroadcaster.sendMessage('trk:event', 'account', 'regist', u_attr.b ? 'bus' : 'norm', u_type);
+
                     $promise.resolve(rsakey);
                     ui_keycomplete();
                 }
@@ -353,14 +480,42 @@ function u_setrsa(rsakey) {
         }
     };
 
-    api_req({
-        a: 'up',
-        privk: a32_to_base64(encrypt_key(u_k_aes,
-            str_to_a32(crypto_encodeprivkey(rsakey)))),
-        pubk: base64urlencode(crypto_encodepubkey(rsakey))
-    }, ctx);
+    api_req(request, ctx);
 
     return $promise;
+}
+
+// Save user's Recovery/Master key to disk
+function u_savekey() {
+    'use strict';
+    return u_exportkey(true);
+}
+
+/**
+ * Copy/Save user's Recovery/Master key
+ * @param {Boolean|String} action save to disk if true, otherwise copy to clipboard - if string show a toast
+ */
+function u_exportkey(action) {
+    'use strict';
+    var key = a32_to_base64(window.u_k || '');
+
+    if (action === true) {
+        M.saveAs(key, M.getSafeName(l[20830]) + '.txt');
+    }
+    else {
+        if (page === 'backup') {
+            copyToClipboard(key, l[8836], 'recoveryKey');
+        } else {
+            copyToClipboard(key, typeof action === 'string' && action);
+        }
+    }
+
+    mBroadcaster.sendMessage('keyexported');
+
+    if (!localStorage.recoverykey) {
+        localStorage.recoverykey = 1;
+        $('body').addClass('rk-saved');
+    }
 }
 
 // ensures that a user identity exists, also sets sid
@@ -370,6 +525,9 @@ function createanonuser(ctx, passwordkey, invitecode, invitename, uh) {
     ctx.passwordkey = passwordkey;
 
     api_createuser(ctx, invitecode, invitename, uh);
+
+    // Forget whether the user was logged-in creating an ephemeral account.
+    delete localStorage.wasloggedin;
 }
 
 function createanonuser2(u, ctx) {
@@ -567,8 +725,8 @@ function generateAvatarMeta(user_hash) {
 }
 
 function isNonActivatedAccount() {
-    return (!u_privk && typeof (u_attr.p) !== 'undefined'
-            && (u_attr.p >= 1 || u_attr.p <= 4));
+    'use strict';
+    return !window.u_privk && window.u_attr && (u_attr.p >= 1 || u_attr.p <= 4);
 }
 
 function isEphemeral() {
@@ -620,7 +778,71 @@ function processEmailChangeActionPacket(ap) {
         }
         // update the underlying fmdb cache
         M.addUser(user);
+
+        // in case of business master
+        // first, am i a master?
+        if (u_attr && u_attr.b && u_attr.b.m) {
+            // then, do i have this user as sub-user?
+            if (M.suba && M.suba[ap.u]) {
+                M.require('businessAcc_js', 'businessAccUI_js').done(
+                    function () {
+                        var business = new BusinessAccount();
+                        var sub = M.suba[ap.u];
+                        sub.e = ap.e;
+                        if (sub.pe) {
+                            delete sub.pe;
+                        }
+                        business.parseSUBA(sub, false, true);
+                    }
+                );
+            }
+        }
     }
+    else {
+        // if the is business master we might accept other cases
+        if (u_attr && u_attr.b && u_attr.b.m) {
+            // then, do i have this user as sub-user?
+            if (M.suba && M.suba[ap.u]) {
+                var stillOkEmail = (ap.s === 2 && typeof ap.e === 'string' && ap.e.indexOf('@') !== -1);
+                if (stillOkEmail) {
+                    M.require('businessAcc_js', 'businessAccUI_js').done(
+                        function () {
+                            var business = new BusinessAccount();
+                            var sub = M.suba[ap.u];
+                            sub.pe = { e: ap.e, ts: ap.ts };
+                            business.parseSUBA(sub, false, true);
+                        }
+                    );
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Contains a list of permitted landing pages.
+ * @var {array} allowedLandingPages
+ */
+var allowedLandingPages = ['fm', 'recents', 'chat'];
+
+/**
+ * Fetch the landing page.
+ * @return {string|int} The user selected landing page.
+ */
+function getLandingPage() {
+    'use strict';
+    return pfid ? false : allowedLandingPages[mega.config.get('uhp')] || 'fm';
+}
+
+/**
+ * Set the landing page.
+ * @param {string} page The user selected landing page from the `allowedLandingPages` array.
+ * @return {void}
+ */
+function setLandingPage(page) {
+    'use strict';
+    var index = allowedLandingPages.indexOf(page);
+    mega.config.set('uhp', index < 0 ? 0 : index);
 }
 
 (function(exportScope) {
@@ -717,7 +939,7 @@ function processEmailChangeActionPacket(ap) {
                 $elem.text(l[1051]);
             }
 
-            if ($.sortTreePanel && $.sortTreePanel.contacts.by === 'last-interaction') {
+            if (M.getTreePanelSortingValue('contacts') === 'last-interaction') {
                 // we need to resort
                 M.contacts();
             }
@@ -952,7 +1174,6 @@ function processEmailChangeActionPacket(ap) {
         }
         throttledSetLastInteractionOps.push([u_h, v, promise]);
 
-
         return promise;
     };
 
@@ -1000,57 +1221,99 @@ function processEmailChangeActionPacket(ap) {
      * @private
      */
     var getConfig = function() {
-        var result = {};
-        var config = Object(fmconfig);
-        var nodes = { viewmodes: 1, sortmodes: 1, treenodes: 1 };
-
-        var isValid = function(handle) {
-            return handle.length !== 8 || M.d[handle] || handle === 'contacts';
-        };
-
-        for (var key in config) {
-            var value = config[key];
-
-            if (!value && value !== 0) {
-                logger.info('Skipping empty value for "%s"', key);
-                continue;
-            }
-
-            // Dont save no longer existing nodes
-            if (nodes[key]) {
-                if (typeof value !== 'object') {
-                    logger.warn('Unexpected type for ' + key);
-                    continue;
-                }
-
-                var modes = {};
-                for (var handle in value) {
-                    if (value.hasOwnProperty(handle)
-                            && handle.substr(0, 7) !== 'search/'
-                            && isValid(handle)) {
-                        modes[handle] = value[handle];
-                    }
-                    else {
-                        logger.info('Skipping non-existant node "%s"', handle);
-                    }
-                }
-                value = modes;
-            }
-
-            if (typeof value === 'object' && !$.len(value)) {
-                logger.info('Skipping empty object "%s"', key);
-                continue;
-            }
-
-            try {
-                result[key] = JSON.stringify(value);
-            }
-            catch (ex) {
-                logger.error(ex);
-            }
+        if (getConfig.promise) {
+            logger.debug('getConfig: another instance is running...');
+            return getConfig.promise;
         }
 
-        return result;
+        if (d) {
+            logger.debug('getConfig...begin', JSON.stringify(window.fmconfig));
+        }
+
+        var promise = new MegaPromise(function(resolve, reject) {
+            var result = {};
+            var config = Object(window.fmconfig);
+            var nodeType = {viewmodes: 1, sortmodes: 1, treenodes: 1};
+            var handles = array.unique(
+                Object.keys(nodeType).reduce(function(s, v) {
+                    return Object.keys(config[v] || {}).map(function(h) {
+                        var cv = M.isCustomView(h);
+                        h = cv ? cv.nodeID : h;
+                        return h;
+                    }).concat(s);
+                }, []).filter(function(s) {
+                    return s.length === 8 && s !== 'contacts';
+                })
+            );
+
+            dbfetch.node(handles).then(function(nodes) {
+                for (var i = nodes.length; i--;) {
+                    nodes[nodes[i].h] = true;
+                }
+
+                var isValid = function(handle) {
+                    var cv = M.isCustomView(handle);
+                    handle = cv.nodeID || handle;
+                    return handle.length !== 8 || nodes[handle] || handle === 'contacts' || handle === cv.type;
+                };
+
+                for (var key in config) {
+                    if (typeof config.hasOwnProperty !== 'function' || config.hasOwnProperty(key)) {
+                        var value = config[key];
+
+                        if (!value && value !== 0) {
+                            logger.info('Skipping empty value for "%s"', key);
+                            continue;
+                        }
+
+                        // Dont save no longer existing nodes
+                        if (nodeType[key]) {
+                            if (typeof value !== 'object') {
+                                logger.warn('Unexpected type for ' + key);
+                                continue;
+                            }
+
+                            var modes = {};
+                            for (var handle in value) {
+                                if (value.hasOwnProperty(handle)
+                                    && handle.substr(0, 7) !== 'search/'
+                                    && isValid(handle)) {
+
+                                    modes[handle] = value[handle];
+                                }
+                                else {
+                                    logger.info('Skipping non-existing node "%s"', handle);
+                                }
+                            }
+                            value = modes;
+                        }
+
+                        if (typeof value === 'object' && !$.len(value)) {
+                            logger.info('Skipping empty object "%s"', key);
+                            continue;
+                        }
+
+                        try {
+                            result[key] = JSON.stringify(value);
+                        }
+                        catch (ex) {
+                            logger.error(ex);
+                        }
+                    }
+                }
+
+                logger.debug('getConfig...result', d && JSON.stringify(result));
+                resolve(result);
+
+            }).catch(reject);
+        });
+
+        getConfig.promise = promise;
+        promise.always(function() {
+            getConfig.promise = null;
+            logger.debug('getConfig...end');
+        });
+        return promise;
     };
 
     /**
@@ -1062,43 +1325,46 @@ function processEmailChangeActionPacket(ap) {
             return MegaPromise.reject(EINCOMPLETE);
         }
 
-        var config = getConfig();
-        if (!$.len(config)) {
-            return MegaPromise.reject(ENOENT);
-        }
+        return new MegaPromise(function(resolve, reject) {
+            getConfig().then(function(config) {
+                if (typeof config !== 'object' || !$.len(config)) {
+                    logger.debug('Not saving fmconfig, invalid...');
+                    return reject(ENOENT);
+                }
 
-        var hash = JSON.stringify(config);
-        var len = hash.length;
+                var hash = JSON.stringify(config);
+                var len = hash.length;
 
-        // generate checkum/hash for the config
-        hash = MurmurHash3(hash, MMH_SEED);
+                // generate checksum/hash for the config
+                hash = MurmurHash3(hash, MMH_SEED);
 
-        // dont store it unless it has changed
-        if (hash === parseInt(localStorage[u_handle + '_fmchash'])) {
-            return MegaPromise.resolve(EEXIST);
-        }
-        localStorage[u_handle + '_fmchash'] = hash;
+                // dont store it unless it has changed
+                if (hash === parseInt(localStorage[u_handle + '_fmchash'])) {
+                    logger.debug('Not saving fmconfig, unchanged...');
+                    return resolve(EEXIST);
+                }
 
-        var promise;
-        timer = false;
+                timer = false;
+                localStorage[u_handle + '_fmchash'] = hash;
 
-        if (len < 8) {
-            srvlog('config.set: invalid data');
-            promise = MegaPromise.reject(EARGS);
-        }
-        else if (len > 12000) {
-            srvlog('config.set: over quota');
-            promise = MegaPromise.reject(EOVERQUOTA);
-        }
-        else {
-            promise = mega.attr.set('fmconfig', config, false, true);
-            timer = promise;
-            promise.always(function() {
-                timer = 0;
+                if (len < 8) {
+                    srvlog('config.set: invalid data');
+                    reject(EARGS);
+                }
+                else if (len > 12000) {
+                    srvlog('config.set: over quota');
+                    reject(EOVERQUOTA);
+                }
+                else {
+                    var promise = mega.attr.set('fmconfig', config, false, true);
+                    timer = promise;
+                    promise.always(function() {
+                        timer = 0;
+                    });
+                    promise.then(resolve).catch(reject);
+                }
             });
-        }
-
-        return promise;
+        });
     };
 
     /**
@@ -1119,7 +1385,9 @@ function processEmailChangeActionPacket(ap) {
         mega.attr.get(u_handle, 'fmconfig', false, true)
             .always(moveLegacySettings)
             .done(function(result) {
-                result = Object(result);
+                // Special escape by direct update for ulddd, which has true as undefined
+                fmconfig.ulddd = result.ulddd;
+                result = Object.assign({}, fmconfig, Object(result));
                 for (var key in result) {
                     if (result.hasOwnProperty(key)) {
                         try {
@@ -1138,7 +1406,7 @@ function processEmailChangeActionPacket(ap) {
                     mega.config.set('rubsched', undefined);
                 }
 
-                if (fminitialized) {
+                if (fminitialized && (!is_mobile || page !== 'fm/account/notifications')) {
                     var view = Object(fmconfig.viewmodes)[M.currentdirid];
                     var sort = Object(fmconfig.sortmodes)[M.currentdirid];
 
@@ -1159,8 +1427,9 @@ function processEmailChangeActionPacket(ap) {
                         }
                     }
 
-                    localStorage[u_handle + '_fmchash'] =
-                        MurmurHash3(JSON.stringify(getConfig()), MMH_SEED);
+                    // getConfig().then(function(config) {
+                    //     localStorage[u_handle + '_fmchash'] = MurmurHash3(JSON.stringify(config), MMH_SEED);
+                    // });
                 }
 
                 if (fmconfig.ul_maxSlots) {
@@ -1170,8 +1439,10 @@ function processEmailChangeActionPacket(ap) {
                     mega.config.set('ul_maxSlots', 4);// Default ul slots value
                     ulQueue.setSize(4);
                 }
-                if (fmconfig.dl_maxSlots) {
-                    dlQueue.setSize(fmconfig.dl_maxSlots);
+                // quick&dirty(tm) hack, change me whenever we rewrite the underlying logic..
+                var dlSlots = $.tapioca ? 1 : fmconfig.dl_maxSlots;
+                if (dlSlots) {
+                    dlQueue.setSize(dlSlots);
                 }
                 else {
                     mega.config.set('dl_maxSlots', 4);// Default dl slots value
@@ -1180,6 +1451,15 @@ function processEmailChangeActionPacket(ap) {
                 if (fmconfig.font_size) {
                     $('body').removeClass('fontsize1 fontsize2')
                         .addClass('fontsize' + fmconfig.font_size);
+                }
+                if (fmconfig.fmColPrefs) {
+                    var prefs = getFMColPrefs(fmconfig.fmColPrefs);
+                    for (var colPref in prefs) {
+                        if (Object.prototype.hasOwnProperty.call(prefs, colPref)) {
+                            M.columnsWidth.cloud[colPref].viewed =
+                                prefs[colPref] > 0;
+                        }
+                    }
                 }
                 waiter.resolve();
                 waiter = undefined;
@@ -1190,8 +1470,13 @@ function processEmailChangeActionPacket(ap) {
             })
             .finally(function() {
                 // Initialize account notifications.
-                if (!is_mobile) {
-                    mega.notif.setup(fmconfig.anf);
+                mega.notif.setup(fmconfig.anf);
+                if (fminitialized && page.indexOf('fm/account') > -1 && M.account) {
+                    if (is_mobile && page === 'fm/account/notifications') {
+                        mobile.account.notifications.render();
+                    } else if (!is_mobile) {
+                        accountUI.renderAccountPage(M.account);
+                    }
                 }
             });
 
@@ -1240,10 +1525,15 @@ function processEmailChangeActionPacket(ap) {
      * @param {String} value Configuration value
      */
     ns.set = function _setConfigValue(key, value) {
+
         fmconfig[key] = value;
 
         if (d) {
             logger.debug('Setting value for key "%s"', key, value);
+
+            if (String(tryCatch(JSON.stringify.bind(JSON))(value)).length > 1024) {
+                logger.warn('Attempting to store more than 1KB for %s...', key);
+            }
         }
 
         var push = function() {
@@ -1252,7 +1542,23 @@ function processEmailChangeActionPacket(ap) {
                 timer = delay('fmconfig:store', store, 3100);
             }
             else {
-                localStorage.fmconfig = JSON.stringify(fmconfig);
+                tryCatch(function(data) {
+                    data = JSON.stringify(data);
+                    if (data.length > 262144) {
+                        logger.warn('fmconfig became larger than 256KB', data.length);
+                    }
+                    localStorage.fmconfig = data;
+                }, function(ex) {
+                    if (ex.name === 'QuotaExceededError') {
+                        console.warn('WebStorage exhausted!', [fmconfig], JSON.stringify(localStorage).length);
+
+                        if (!u_type) {
+                            // The user is not logged/registered, let's just expunge it...
+                            console.info('Cleaning fmconfig... (%s bytes)', String(localStorage.fmconfig).length);
+                            delete localStorage.fmconfig;
+                        }
+                    }
+                })(fmconfig);
                 timer = null;
             }
         };

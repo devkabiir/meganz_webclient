@@ -47,7 +47,7 @@ var tlvstore = (function () {
      * There is no separator in between and the length is fixted 2 bytes.
      * If the length of the value is bigger than 0xffff, then it will use 0xffff
      * as the length, and append the value after.
-     * 
+     *
      * @param key {string}
      *     ASCII string label of record's key.
      * @param value {string}
@@ -258,8 +258,7 @@ var tlvstore = (function () {
         var cipher = asmCrypto[ns.BLOCK_ENCRYPTION_PARAMETERS[mode].cipher];
         var nonceBytes = new Uint8Array(nonceSize);
         asmCrypto.getRandomValues(nonceBytes);
-        if ((key instanceof Array)
-                || (Object.prototype.toString.call(key) === '[object Array]')) {
+        if (Array.isArray(key)) {
             // Key is in the form of an array of four 32-bit words.
             key = a32_to_str(key);
         }
@@ -295,8 +294,7 @@ var tlvstore = (function () {
         var cipherBytes = asmCrypto.string_to_bytes(cipherText.substring(nonceSize + 1));
         var tagSize = ns.BLOCK_ENCRYPTION_PARAMETERS[mode].macSize;
         var cipher = asmCrypto[ns.BLOCK_ENCRYPTION_PARAMETERS[mode].cipher];
-        if ((key instanceof Array)
-                || (Object.prototype.toString.call(key) === '[object Array]')) {
+        if (Array.isArray(key)) {
             // Key is in the form of an array of four 32-bit words.
             key = a32_to_str(key);
         }

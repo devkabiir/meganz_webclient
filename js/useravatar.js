@@ -63,6 +63,10 @@ var useravatar = (function() {
     function _getAvatarProperties(user) {
         user = String(user.u || user);
         var name  = M.getNameByHandle(user) || user;
+        if (name === user && M.suba[user] && M.suba[user].firstname) {
+            // Acquire the avatar matches the first letter for pending accounts in business account
+            name = from8(base64urldecode(M.suba[user].firstname)).trim();
+        }
         var color = UH64(user).mod(_colors.length);
 
         if (color === false) {
@@ -239,7 +243,8 @@ var useravatar = (function() {
         if (user === u_handle) {
             var myavatar = ns.mine();
 
-            $('.fm-avatar img,.fm-account-avatar img').attr('src', myavatar);
+            $('.fm-avatar img,.fm-account-avatar img, .top-menu-popup .avatar-block', 'body')
+                .attr('src', myavatar);
             $('.fm-account-avatar .avatar-bg span').css('background-image', 'url(' + myavatar + ')');
             $('.fm-avatar').show();
 
@@ -249,7 +254,7 @@ var useravatar = (function() {
 
         if (M.u[user]) {
             // .trackDataChange() will trigger some parts in the Chat UI to re-render.
-            M.u[user].trackDataChange();
+            M.u[user].trackDataChange(M.u[user], "avatar");
         }
 
         var $avatar = null;
@@ -271,7 +276,7 @@ var useravatar = (function() {
                 .safeHTML($avatar.html());
         };
 
-        $('.avatar-wrapper.' + user.replace(/[^\w-]/g, '')).each(updateAvatar);
+        $('.avatar-wrapper.' + user.replace(/[^\w-]/g, '') + ':not(.in-chat)').each(updateAvatar);
 
         if ((M.u[user] || {}).m) {
             var eem = String(M.u[user].m).replace(/[^\w@.,+-]/g, '').replace(/\W/g, '\\$&');
@@ -346,9 +351,10 @@ var useravatar = (function() {
         /**
          * Load the avatar associated with an user handle
          * @param {String} handle The user handle
+         * @param {String} chathandle The chat handle
          * @return {MegaPromise}
          */
-        ns.loadAvatar = function(handle) {
+        ns.loadAvatar = function(handle, chathandle) {
             // Ensure this is a sane call...
             if (typeof handle !== 'string' || handle.length !== 11) {
                 logger.error('Unable to retrieve user-avatar, invalid handle!', handle);
@@ -391,7 +397,7 @@ var useravatar = (function() {
                 logger.debug('Initiating user-avatar retrieval for "%s"...', handle);
             }
 
-            mega.attr.get(handle, 'a', true, false)
+            mega.attr.get(handle, 'a', true, false, undefined, undefined, chathandle)
                 .fail(reject)
                 .done(function(res) {
                     var error = res;

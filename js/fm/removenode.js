@@ -82,6 +82,7 @@ function removeUInode(h, parent) {
             if (!hasItems) {
                 $('.contacts-grid-view .contacts-grid-header tr').remove();
                 $('.fm-empty-trashbin').removeClass('hidden');
+                $('.fm-clearbin-button').addClass('hidden');
             }
             break;
         case M.RootID:
@@ -97,11 +98,17 @@ function removeUInode(h, parent) {
             if (!hasItems) {
                 $('.files-grid-view').addClass('hidden');
                 $('.grid-table.fm tr').remove();
-                $('.fm-empty-cloud').removeClass('hidden');
+
+                if (folderlink) {
+                    $('.fm-empty-folder').removeClass('hidden');
+                }
+                else {
+                    $('.fm-empty-cloud').removeClass('hidden');
+                }
             }
             break;
         default:
-            if (M.chat) {
+            if (M.chat || M.currentdirid.indexOf('fm/user-management') >= 0) {
                 break;
             }
             if (i == 0 && n) {
@@ -125,7 +132,7 @@ function removeUInode(h, parent) {
     if (M.megaRender && M.megaRender.megaList) {
         if (parent) {
             // this was a move node op
-            if (parent === M.currentdirid) {
+            if (parent === M.currentdirid || parent === M.currentCustomView.nodeID) {
                 // the node was moved out of the current viewport, so lets remove it from the MegaList
                 M.megaRender.megaList.remove(h);
             }
@@ -135,10 +142,16 @@ function removeUInode(h, parent) {
         }
     }
 
-
-    if (M.currentdirid === h || M.isCircular(h, M.currentdirid) === true) {
+    if (M.currentCustomView.nodeID === h || M.isCircular(h, M.currentCustomView.nodeID) === true) {
         parent = parent || M.getNodeParent(n || h) || M.getNodeRoot(h);
+        parent = parent === M.RootID ? M.currentCustomView.type : (M.currentCustomView.prefixPath + parent);
+
+        // if parent is exist on M.su.EXP
         delay('openfolder', M.openFolder.bind(M, parent));
+    }
+    else if (M.currentdirid === h || M.isCircular(h, M.currentdirid) === true) {
+        parent = parent || M.getNodeParent(n || h) || M.getNodeRoot(h);
+        delay('openfolder', M.openFolder.bind(M, parent), 777);
     }
 }
 
@@ -232,18 +245,19 @@ function fmremovesync(selectedNodes) {
 
         var c = selectedNodes.length;
         var replaceString = '';
-        var contact = '';
+        var sharedFoldersAlertMessage = l[7872];
 
         if (c > 1) {
             replaceString = c + ' ' + l[5569];
-            contact = 'contacts';
+            sharedFoldersAlertMessage = l[17974];
         }
         else {
-            replaceString = '<strong>' + escapeHTML(M.getNameByHandle(selectedNodes[0]) || '') + '</strong>';
-            contact = 'contact';
+            var contactName = escapeHTML(M.getNameByHandle(selectedNodes[0]) || '');
+            replaceString = '<strong>' + contactName + '</strong>';
+            sharedFoldersAlertMessage = sharedFoldersAlertMessage.replace('[X]', contactName);
         }
 
-        msgDialog('delete-contact', l[1001], l[1002].replace('[X]', replaceString), l[7872].replace('[X]', contact),
+        msgDialog('delete-contact', l[1001], l[1002].replace('[X]', replaceString), sharedFoldersAlertMessage,
             function(e) {
                 if (e) {
                     for (i = 0; i < selectedNodes.length; i++) {
@@ -332,13 +346,6 @@ function fmremovesync(selectedNodes) {
                     });
             }
         });
-
-        // ToDo: is this necessary?
-        // $('.fm-dialog-button.notification-button').each(function(i, e) {
-        //     if ($(e).text() === l[1018]) {
-        //         $(e).safeHTML('<span>@@</span>', l[83]);
-        //     }
-        // });
     }
 
     // Remove contacts
@@ -360,7 +367,12 @@ function fmremovesync(selectedNodes) {
     else {
         var moveToRubbish = function() {
             loadingDialog.pshow();
-            M.moveToRubbish(selectedNodes).always(loadingDialog.phide.bind(loadingDialog));
+            M.moveToRubbish(selectedNodes).always(loadingDialog.phide.bind(loadingDialog)).done(function () {
+                // Re-render the search result page after files being removed
+                if (M.currentdirid.split("/")[0] === "search") {
+                    M.openFolder(M.currentdirid, true);
+                }
+            });
         };
 
         if (localStorage.skipDelWarning) {
@@ -379,26 +391,54 @@ function fmremovesync(selectedNodes) {
     }
 }
 
+/**
+ * Generate file manager contains text message
+ *
+ * @param {Number} filecnt          The number of files
+ * @param {Number} foldercnt        The number of folders
+ * @param {Boolean} lineBreak       Indicate needs a line break or not
+ * @returns {String} containstext   Contains text message
+ */
+function fm_contains(filecnt, foldercnt, lineBreak) {
 
-function fm_contains(filecnt, foldercnt) {
+    "use strict";
+
     var containstxt = l[782];
-    if ((foldercnt > 1) && (filecnt > 1)) {
+
+    if ((foldercnt > 1) && (filecnt > 1) && lineBreak) {
+        containstxt = l[832].replace('[X]', foldercnt) + '<br>' + l[833].replace('[X]', filecnt);
+    }
+    else if ((foldercnt > 1) && (filecnt > 1)) {
         containstxt = l[828].replace('[X1]', foldercnt).replace('[X2]', filecnt);
-    } else if ((foldercnt > 1) && (filecnt === 1)) {
+    }
+    else if ((foldercnt > 1) && (filecnt === 1) && lineBreak) {
+        containstxt = l[832].replace('[X]', foldercnt) + '<br>' + l[835];
+    }
+    else if ((foldercnt > 1) && (filecnt === 1)) {
         containstxt = l[829].replace('[X]', foldercnt);
-    } else if ((foldercnt === 1) && (filecnt > 1)) {
+    }
+    else if ((foldercnt === 1) && (filecnt > 1) && lineBreak) {
+        containstxt = l[834] + '<br>' + l[833].replace('[X]', filecnt);
+    }
+    else if ((foldercnt === 1) && (filecnt > 1)) {
         containstxt = l[830].replace('[X]', filecnt);
-    } else if ((foldercnt === 1) && (filecnt === 1)) {
+    }
+    else if ((foldercnt === 1) && (filecnt === 1)) {
         containstxt = l[831];
-    } else if (foldercnt > 1) {
+    }
+    else if (foldercnt > 1) {
         containstxt = l[832].replace('[X]', foldercnt);
-    } else if (filecnt > 1) {
+    }
+    else if (filecnt > 1) {
         containstxt = l[833].replace('[X]', filecnt);
-    } else if (foldercnt === 1) {
+    }
+    else if (foldercnt === 1) {
         containstxt = l[834];
-    } else if (filecnt === 1) {
+    }
+    else if (filecnt === 1) {
         containstxt = l[835];
     }
+
     return containstxt;
 }
 

@@ -1,123 +1,165 @@
 var React = require("react");
-var utils = require("./utils.jsx");
-var MegaRenderMixin = require("../stores/mixins.js").MegaRenderMixin;
-var RenderDebugger = require("../stores/mixins.js").RenderDebugger;
-var ContactsUI = require('./../chat/ui/contacts.jsx');
-var PerfectScrollbar = require('./perfectScrollbar.jsx').PerfectScrollbar;
+import utils from './utils.jsx';
+import {MegaRenderMixin} from "../stores/mixins.js";
+import {ContactPickerWidget} from './../chat/ui/contacts.jsx';
 
-var Dropdown = React.createClass({
-    mixins: [MegaRenderMixin],
-    getInitialState: function() {
-        return {}
-    },
-    getDefaultProps: function() {
-        return {
-            'requiresUpdateOnResize': true,
-        };
-    },
-    componentWillUpdate: function(nextProps, nextState) {
+export class Dropdown extends MegaRenderMixin {
+    static defaultProps = {
+        'requiresUpdateOnResize': true,
+    };
+
+    constructor(props) {
+        super(props);
+        this.onActiveChange = this.onActiveChange.bind(this);
+        this.onResized = this.onResized.bind(this);
+    }
+
+    componentWillUpdate(nextProps) {
+        // eslint-disable-next-line eqeqeq
         if (this.props.active != nextProps.active) {
-            this.onActiveChange(nextProps.active)
+            this.onActiveChange(nextProps.active);
         }
-    },
-    specificShouldComponentUpdate: function(nextProps, nextState) {
+    }
+
+    specShouldComponentUpdate(nextProps, nextState) {
         if (this.props.active != nextProps.active) {
             if (this.props.onBeforeActiveChange) {
                 this.props.onBeforeActiveChange(nextProps.active);
             }
             return true;
         }
+        // eslint-disable-next-line eqeqeq
         else if (this.props.focused != nextProps.focused) {
             return true;
         }
+        // eslint-disable-next-line eqeqeq
         else if (this.state && this.state.active != nextState.active) {
             return true;
         }
-        else {
-            // not sure, leave to the render mixing to decide.
-            return undefined;
-        }
-    },
-    onActiveChange: function(newVal) {
+        // not sure, leave to the render mixing to decide.
+        return undefined;
+    }
+
+    onActiveChange(newVal) {
         if (this.props.onActiveChange) {
             this.props.onActiveChange(newVal);
         }
-    },
-    onResized: function() {
-        var self = this;
-
-        if (this.props.active === true) {
-            if (this.getOwnerElement()) {
-                var $element = $(this.popupElement);
-                var positionToElement = $('.button.active:visible');
-                var offsetLeft = 0;
-                var $container = positionToElement.closest('.messages.scroll-area');
-
-                if ($container.length == 0) {
-                    $container = $(document.body);
-                }
-
-                $element.css('margin-left','');
-
-                $element.position({
-                    of: positionToElement,
-                    my: self.props.positionMy ? self.props.positionMy : "center top",
-                    at: self.props.positionAt ? self.props.positionAt : "center bottom",
-                    collision: "flipfit",
-                    within: $container,
-                    using: function (obj, info) {
-                        var vertOffset = 0;
-                        var horizOffset = 0;
-
-                        if (!self.props.noArrow) {
-                            if (info.vertical != "top") {
-                                $(this)
-                                    .removeClass("up-arrow")
-                                    .addClass("down-arrow");
-                            }
-                            else {
-                                $(this)
-                                    .removeClass("down-arrow")
-                                    .addClass("up-arrow");
-                            }
-
-                            var $arrow = $('.dropdown-white-arrow', $element);
-                            vertOffset += (info.vertical == "top" ? $arrow.outerHeight() : 0);
-                        }
-
-
-                        if (self.props.vertOffset) {
-                            vertOffset += (self.props.vertOffset * (info.vertical == "top" ? 1 : -1));
-                        }
-
-                        if (self.props.horizOffset) {
-                            horizOffset += self.props.horizOffset;
-                        }
-
-
-                        $(this).css({
-                            left: (obj.left + (offsetLeft ? offsetLeft/2 : 0) + horizOffset) + 'px',
-                            top: (obj.top + vertOffset + 'px')
-                        });
-                    }
-                });
-            }
+    }
+    reposElementUsing(element, obj, info) {
+        var $element;
+        if (this.popupElement) {
+            $element = $(this.popupElement);
         }
-    },
-    componentDidMount: function() {
+        else {
+            return;
+        }
+        var self = this;
+        var vertOffset = 0;
+        var horizOffset = 0;
+        var offsetLeft = 0;
+
+        if (!self.props.noArrow) {
+            var $arrow = $('.dropdown-white-arrow', $element);
+            var arrowHeight;
+            if (self.props.arrowHeight) {
+                arrowHeight = self.props.arrowHeight;
+                if (info.vertical === "top") {
+                    arrowHeight = 0;
+                }
+                else {
+                    arrowHeight *= -1;
+                }
+            }
+            else {
+                arrowHeight = $arrow.outerHeight();
+            }
+            if (info.vertical === "top") {
+                $(element)
+                    .removeClass("down-arrow")
+                    .addClass("up-arrow");
+            }
+            else {
+                $(element)
+                    .removeClass("up-arrow")
+                    .addClass("down-arrow");
+            }
+
+            vertOffset += info.vertical === "top" ? arrowHeight : 0;
+        }
+
+
+        if (self.props.vertOffset) {
+            vertOffset += self.props.vertOffset * (info.vertical === "top" ? 1 : -1);
+        }
+
+        if (self.props.horizOffset) {
+            horizOffset += self.props.horizOffset;
+        }
+
+        $(element).css({
+            left: obj.left + (offsetLeft ? offsetLeft / 2 : 0) + horizOffset + 'px',
+            top: obj.top + vertOffset + 'px'
+        });
+    }
+    onResized() {
+        var self = this;
+        if (this.props.active === true && this.popupElement) {
+            var $element = $(this.popupElement);
+            // eslint-disable-next-line local-rules/jquery-scopes
+            var $positionToElement = $('.button.active:visible');
+            if ($positionToElement.length === 0) {
+                return;
+            }
+            var $container = $positionToElement.closest('.messages.scroll-area');
+
+            if ($container.length === 0) {
+                $container = $(document.body);
+            }
+
+            $element.css('margin-left', '');
+
+            $element.position({
+                of: $positionToElement,
+                my: self.props.positionMy ? self.props.positionMy : "center top",
+                at: self.props.positionAt ? self.props.positionAt : "center bottom",
+                collision: "flipfit",
+                within: $container,
+                using: function(obj, info) {
+                    self.reposElementUsing(this, obj, info);
+                }});
+        }
+    }
+
+    componentDidMount() {
+        super.componentDidMount();
+        chatGlobalEventManager.addEventListener('resize', 'drpdwn' + this.getUniqueId(), this.onResized.bind(this));
         this.onResized();
-    },
-    componentDidUpdate: function() {
+        var self = this;
+        $(document.body).rebind('closeAllDropdownsExcept.drpdwn' + this.getUniqueId(), function (e, target) {
+            if (self.props.active && target !== self) {
+                if (self.props && self.props.closeDropdown) {
+                    self.props.closeDropdown();
+                }
+            }
+        });
+    }
+
+    componentDidUpdate() {
         this.onResized();
-    },
-    componentWillUnmount: function() {
+    }
+
+    componentWillUnmount() {
+        super.componentWillUnmount();
+        $(document.body).unbind('closeAllDropdownsExcept.drpdwn' + this.getUniqueId());
         if (this.props.active) {
             // fake an active=false so that any onActiveChange handlers would simply trigger back UI to the state
             // in which this element is not active any more (since it would be removed from the DOM...)
             this.onActiveChange(false);
         }
-    },
-    doRerender: function() {
+        chatGlobalEventManager.removeEventListener('resize', 'drpdwn' + this.getUniqueId());
+    }
+
+    doRerender() {
         var self = this;
 
         setTimeout(function() {
@@ -129,101 +171,108 @@ var Dropdown = React.createClass({
         setTimeout(function() {
             self.onResized();
         }, 200);
-    },
-    renderChildren: function () {
+    }
+
+    renderChildren() {
         var self = this;
 
         return React.Children.map(this.props.children, function (child) {
             if (child) {
+                var activeVal = self.props.active || self.state.active;
+                activeVal = String(activeVal);
+
                 return React.cloneElement(child, {
-                    active: self.props.active || self.state.active
+                    active: activeVal
                 });
             }
-            else {
-                return null;
-            }
-        }.bind(this))
-    },
-    render: function() {
+            return null;
+        });
+    }
+
+    render() {
         if (this.props.active !== true) {
             return null;
         }
-        else {
-            var classes = (
-                "dropdown body " + (!this.props.noArrow ? "dropdown-arrow up-arrow" : "") + " " + this.props.className
-            );
+        var classes = "dropdown body " + (this.props.noArrow ? "" : "dropdown-arrow up-arrow") + " " +
+            this.props.className;
 
-            var styles;
+        var styles;
 
-            // calculate and move the popup arrow to the correct position.
-            if (this.getOwnerElement()) {
-                styles = {
-                    'zIndex': 123,
-                    'position': 'absolute',
-                    'width': this.props.styles ? this.props.styles.width : undefined
-                };
-            }
-
-            var self = this;
-
-            var child = null;
-
-            if (this.props.children) {
-                child = <div>{self.renderChildren()}</div>;
-            }
-            else if (this.props.dropdownItemGenerator) {
-                child = this.props.dropdownItemGenerator(this);
-            }
-
-            if (!child && !this.props.forceShowWhenEmpty) {
-                if (this.props.active !== false) {
-                    (window.setImmediate || window.setTimeout)(function () {
-                        self.onActiveChange(false);
-                    });
-                }
-                return null;
-            }
-
-
-            return <utils.RenderTo element={document.body} className={classes} style={styles}
-                    popupDidMount={(popupElement) => {
-                        self.popupElement = popupElement;
-                    }}
-                    popupWillUnmount={(popupElement) => {
-                        delete self.popupElement;
-                    }}>
-                    <div>
-                        {!this.props.noArrow ? <i className="dropdown-white-arrow"></i> : null}
-                        {child}
-                    </div>
-                </utils.RenderTo>;
+        // calculate and move the popup arrow to the correct position.
+        if (this.popupElement) {
+            styles = {
+                'zIndex': 123,
+                'position': 'absolute',
+                'width': this.props.styles ? this.props.styles.width : undefined
+            };
         }
+
+        var self = this;
+
+        var child = null;
+
+        if (this.props.children) {
+            child = <div>{self.renderChildren()}</div>;
+        }
+        else if (this.props.dropdownItemGenerator) {
+            child = this.props.dropdownItemGenerator(this);
+        }
+
+        if (!child && !this.props.forceShowWhenEmpty) {
+            if (this.props.active !== false) {
+                queueMicrotask(function() {
+                    self.onActiveChange(false);
+                });
+            }
+            return null;
+        }
+
+
+        return <utils.RenderTo element={document.body} className={classes} style={styles}
+            popupDidMount={(popupElement) => {
+                self.popupElement = popupElement;
+                self.onResized();
+            }}
+            popupWillUnmount={() => {
+                delete self.popupElement;
+            }}>
+            <div onClick={function() {
+                $(document.body).trigger('closeAllDropdownsExcept', self);
+            }}>
+                {this.props.noArrow ? null : <i className="dropdown-white-arrow"></i>}
+                {child}
+            </div>
+        </utils.RenderTo>;
     }
-});
+}
 
+export class DropdownContactsSelector extends MegaRenderMixin {
+    static defaultProps = {
+        requiresUpdateOnResize: true
+    };
 
-var DropdownContactsSelector = React.createClass({
-    mixins: [MegaRenderMixin],
-    getDefaultProps: function() {
-        return {
-            requiresUpdateOnResize: true
-        };
-    },
-    getInitialState: function() {
-        return {
+    constructor(props) {
+        super(props);
+        this.state = {
             'selected': this.props.selected ? this.props.selected : []
         }
-    },
-    specificShouldComponentUpdate: function(nextProps, nextState) {
+        this.onSelectClicked = this.onSelectClicked.bind(this);
+        this.onSelected = this.onSelected.bind(this);
+    }
+    specShouldComponentUpdate(nextProps, nextState) {
+        // eslint-disable-next-line eqeqeq
         if (this.props.active != nextProps.active) {
             return true;
         }
+        // eslint-disable-next-line eqeqeq
         else if (this.props.focused != nextProps.focused) {
             return true;
         }
+        // eslint-disable-next-line eqeqeq
         else if (this.state && this.state.active != nextState.active) {
             return true;
         }
+        // eslint-disable-next-line eqeqeq
         else if (this.state && JSON.stringify(this.state.selected) != JSON.stringify(nextState.selected)) {
             return true;
         }
@@ -231,65 +280,73 @@ var DropdownContactsSelector = React.createClass({
             // not sure, leave to the render mixing to decide.
             return undefined;
         }
-    },
-    onSelected: function(nodes) {
+    }
+    onSelected(nodes) {
         this.setState({'selected': nodes});
         if (this.props.onSelected) {
             this.props.onSelected(nodes);
         }
         this.forceUpdate();
-    },
-    onSelectClicked: function() {
+    }
+    onSelectClicked() {
         this.props.onSelectClicked();
-    },
-    render: function() {
+    }
+    render() {
         var self = this;
 
         return <Dropdown className={"popup contacts-search " + this.props.className + " tooltip-blur"}
-                         active={this.props.active}
-                         closeDropdown={this.props.closeDropdown}
-                         ref="dropdown"
-                         positionMy={this.props.positionMy}
-                         positionAt={this.props.positionAt}
-                >
-                <ContactsUI.ContactPickerWidget
-                    active={this.props.active}
-                    className="popup contacts-search tooltip-blur"
-                    contacts={this.props.contacts}
-                    megaChat={this.props.megaChat}
-                    exclude={this.props.exclude}
-                    multiple={this.props.multiple}
-                    onSelectDone={this.props.onSelectDone}
-                    multipleSelectedButtonLabel={this.props.multipleSelectedButtonLabel}
-                    singleSelectedButtonLabel={this.props.singleSelectedButtonLabel}
-                    nothingSelectedButtonLabel={this.props.nothingSelectedButtonLabel}
-                    />
+            active={this.props.active}
+            closeDropdown={this.props.closeDropdown}
+            ref={function(r) {
+                self.dropdownRef = r;
+            }}
+            positionMy={this.props.positionMy}
+            positionAt={this.props.positionAt}
+            arrowHeight={this.props.arrowHeight}
+            vertOffset={this.props.vertOffset}
+        >
+            <ContactPickerWidget
+                active={this.props.active}
+                className="popup contacts-search tooltip-blur small-footer"
+                contacts={M.u}
+                selectFooter={this.props.selectFooter}
+                megaChat={this.props.megaChat}
+                exclude={this.props.exclude}
+                allowEmpty={this.props.allowEmpty}
+                multiple={this.props.multiple}
+                showTopButtons={this.props.showTopButtons}
+                onSelectDone={this.props.onSelectDone}
+                multipleSelectedButtonLabel={this.props.multipleSelectedButtonLabel}
+                singleSelectedButtonLabel={this.props.singleSelectedButtonLabel}
+                nothingSelectedButtonLabel={this.props.nothingSelectedButtonLabel}
+            />
         </Dropdown>;
     }
-});
+}
 
-var DropdownItem = React.createClass({
-    mixins: [MegaRenderMixin],
-    getDefaultProps: function() {
-        return {
-            requiresUpdateOnResize: true
-        };
-    },
-    getInitialState: function() {
-        return {'isClicked': false}
-    },
-    renderChildren: function () {
+export class DropdownItem extends MegaRenderMixin {
+    static defaultProps = {
+        requiresUpdateOnResize: true
+    };
+    constructor(props) {
+        super(props);
+        this.state = {'isClicked': false};
+        this.onClick = this.onClick.bind(this);
+        this.onMouseOver = this.onMouseOver.bind(this);
+    }
+    renderChildren() {
         var self = this;
-        return React.Children.map(this.props.children, function (child) {
-            return React.cloneElement(child, {
+        return React.Children.map(this.props.children, function(child) {
+            var props = {
                 active: self.state.isClicked,
                 closeDropdown: function() {
                     self.setState({'isClicked': false});
                 }
-            });
-        }.bind(this))
-    },
-    onClick: function(e) {
+            };
+            return React.cloneElement(child, props);
+        });
+    }
+    onClick(e) {
         var self = this;
 
         if (this.props.children) {
@@ -298,10 +355,8 @@ var DropdownItem = React.createClass({
             e.stopPropagation();
             e.preventDefault();
         }
-    },
-    onMouseOver: function(e) {
-        var self = this;
-
+    }
+    onMouseOver(e) {
         if (this.props.className === "contains-submenu") {
             var $contextItem = $(e.target).closest(".contains-submenu");
             var $subMenu = $contextItem.next('.submenu');
@@ -327,42 +382,38 @@ var DropdownItem = React.createClass({
             $dropdown.find(".contains-submenu").removeClass("opened");
             $dropdown.find(".submenu").removeClass("active");
         }
-    },
-    render: function() {
-        var self = this;
+    }
+    render() {
+        const self = this;
 
-        var icon;
-        if (this.props.icon) {
-            icon = <i className={"small-icon " + this.props.icon}></i>
+        let icon;
+        if (self.props.icon) {
+            icon = <i className={"small-icon " + self.props.icon}></i>
         }
-        var label;
-        if (this.props.label) {
-            label = this.props.label;
+        let label;
+        if (self.props.label) {
+            label = self.props.label;
         }
 
-        var child = null;
+        let child = null;
 
         child = <div>
-                {self.renderChildren()}
-            </div>;
+            {self.renderChildren()}
+        </div>;
 
         return <div
-                    className={"dropdown-item " + self.props.className}
-                    onClick={self.props.onClick ? (e) => {
-                        $(document).trigger('closeDropdowns');
-                        !self.props.disabled && self.props.onClick(e);
-                    } : self.onClick}
-                    onMouseOver={self.onMouseOver}
-                >
-                    {icon}
-                    {label}
-                    {child}
-                </div>;
+            className={`dropdown-item ${self.props.className ? self.props.className : ''}`}
+            onClick={self.props.onClick ? (e) => {
+                $(document).trigger('closeDropdowns');
+                if (!self.props.disabled) {
+                    self.props.onClick(e);
+                }
+            } : self.onClick}
+            onMouseOver={self.onMouseOver}
+        >
+            {icon}
+            <span>{label}</span>
+            {child}
+        </div>;
     }
-});
-
-module.exports = window.DropdownsUI = {
-    Dropdown,
-    DropdownItem,
-    DropdownContactsSelector
 };

@@ -4,6 +4,9 @@
  */
 pro.proplan = {
 
+    /** The user's current plan data */
+    planData: null,
+
     /** The user's current storage in bytes */
     currentStorageBytes: 0,
 
@@ -14,12 +17,21 @@ pro.proplan = {
      * Initialises the page and functionality
      */
     init: function() {
+        "use strict";
+
+        // if business sub-user is trying to get to Pro page redirect to home.
+        if (u_attr && u_attr.b && (!u_attr.b.m || (u_attr.b.m && u_attr.b.s !== -1))) {
+            loadSubPage('start');
+            return;
+        }
+        if (u_attr && u_attr.b && u_attr.b.m && (u_attr.b.s === -1 || u_attr.b.s === 2)) {
+            loadSubPage('repay');
+            return;
+        }
 
         // Cache selectors
         var $body = $('body');
-        var $stepOne = $body.find('.membership-step1');
-        var $contactUsButton = $stepOne.find('.pro-bottom-button');
-        var $achievementsInfo = $stepOne.find('.red-star-img, .reg-st3-txt-achprogram');
+        var $stepOne = $('.pricing-section', $body);
 
         // If selecting a plan after registration
         if (localStorage.keycomplete) {
@@ -27,115 +39,191 @@ pro.proplan = {
             // Remove the flag so next page visit (or on refresh) they will go straight to Cloud Drive
             localStorage.removeItem('keycomplete');
 
-            // Show the Free plan
-            $body.addClass('key');
+            if (typeof u_attr.p === 'undefined') {
 
-            // If achievements are enabled, show a star on the Free plan and some extra information about achievements
-            if (!is_mobile) {
-                mega.achievem.enabled().done(function() {
-                    $achievementsInfo.removeClass('hidden');
-                });
+                // Show the Free plan
+                $body.addClass('key');
+
+                // Set "Get started for FREE" plans and bottom buttons label
+                $('.green-button.account.individual-el, .free-button.individual-el', $stepOne)
+                    .text(l[23960]).attr('href', '/fm');
             }
         }
+        else if (typeof u_attr === 'undefined') {
+
+            // Set "Get started for FREE" plans button label
+            $('.free-button.individual-el', $stepOne)
+                .text(l[23960]).attr('href', '/register');
+
+            // Set "Get started Now" bottom button label
+            $('.green-button.account.individual-el', $stepOne)
+                .text(l[24054]).attr('href', '/register');
+        }
         else {
+
             $body.addClass('pro');
-        }
 
-        // If user is logged in
-        if (u_type === 3) {
-
-            // Get user quota information, the flag 'strg: 1' includes current account storage in the response
-            api_req({ a: 'uq', strg: 1 }, {
-                callback : function (result) {
-
-                    // Store current account storage usage for checking later
-                    pro.proplan.currentStorageBytes = result.cstrg;
-                }
-            });
-        }
-
-        // Add affiliate information to send with the Pro API calls if they pay later
-        if (getSitePath().indexOf('pro/') > -1) {
-            localStorage.affid = getSitePath().replace('pro/', '');
-            localStorage.affts = new Date().getTime();
-        }
-
-        // French language fixes: GB -> Go (Gigaoctet) and TB -> To (Teraoctet)
-        if (lang === 'fr') {
-            $stepOne.find('.reg-st3-big-txt').each(function(e, o) {
-                $(o).html($(o).html().replace('GB', 'Go').replace('TB', 'To'));
-            });
+            // Set "Cloud drive" plans and bottom buttons label
+            $('.green-button.account.individual-el, .free-button.individual-el', $stepOne)
+                .text(l[164]).attr('href', '/fm');
         }
 
         // Add click handlers for the pricing boxes
-        pro.proplan.initPricingBoxesClickHandlers();
+        this.initPricingBoxClickHandlers();
 
-        // Add click handler for the contact button
-        $contactUsButton.rebind('click', function() {
-            loadSubPage('contact');
+        // Add mouseover handlers for the pricing boxes
+        this.initPlanHoverHandlers();
+
+        // Load pricing data from the API
+        this.loadPricingPlans();
+
+        // Init plan slider controls
+        this.initPlanSliderControls();
+
+        // Init plan period raadio buttons
+        this.initPlanPeriodControls();
+
+        // Init individual/business plans switcher
+        this.initPlanControls();
+
+        // Init compare slider
+        this.initCompareSlider();
+
+        // Init Get started for free button
+        this.initGetFreeButton();
+
+        var prevWindowWidth = $(window).width();
+        $(window).rebind('resize.proslider', function() {
+            // Prevent Iphone url bar resizing trigger reinit.
+            var currentWindowWidth = $(window).width();
+            if (currentWindowWidth !== prevWindowWidth) {
+                pro.proplan.initPlanSliderControls();
+                prevWindowWidth = currentWindowWidth;
+            }
         });
     },
 
     /**
-     * Initialise click handler for all the pricing plan blocks
+     * Initialise the click handler for the desktop pricing boxes to continue straight to step two
      */
-    initPricingBoxesClickHandlers: function() {
+    initPricingBoxClickHandlers: function() {
 
-        var $stepOne = $('.membership-step1');
-        var $planBlocks = $stepOne.find('.reg-st3-membership-bl');
+        'use strict';
+
+        var $planBlocks = $('.pricing-page.plans-block', 'body');
+        var $purchaseButtons = $('.plan-button', $planBlocks);
 
         // Initialise click handler for all the plan blocks
-        $planBlocks.rebind('click', function() {
+        $purchaseButtons.rebind('click', function() {
 
-            var $selectedPlan = $(this);
-            var planNum = $selectedPlan.attr('data-payment');
+            var $selectedPlan = $(this).closest('.plan');
 
-            // Select the plan
-            $planBlocks.removeClass('selected');
+            $('.plan', $planBlocks).removeClass('selected');
             $selectedPlan.addClass('selected');
 
-            // If coming from the process key step and they click on the Free plan
-            if (planNum === '0') {
-                if (page === 'fm') {
-                    loadSubPage('start');
-                }
-                else {
-                    loadSubPage('fm');
-                }
-                if (localStorage.gotOverquotaWithAchievements) {
-                    onIdle(function() {
-                        mega.achievem.achievementsListDialog();
-                    });
-                    delete localStorage.gotOverquotaWithAchievements;
-                }
-                return false;
-            }
-
-            // If not logged in, show the login/register prompt
-            if (!u_handle) {
-                megaAnalytics.log('pro', 'loginreq');
-                showSignupPromptDialog();
-                return false;
-            }
-
-            // If they're ephemeral but awaiting email confirmation, still let them continue to choose a plan and pay
-            else if (isEphemeral() && !localStorage.awaitingConfirmationAccount) {
-                showRegisterDialog();
-                return false;
-            }
-
-            // If they clicked the plan immediately after completing registration, set the flag so it can be logged
-            if ($('body').hasClass('key')) {
-                pro.propay.planChosenAfterRegistration = true;
-            }
-
-            // Load the Pro page step 2 where they can make payment
-            loadSubPage('propay_' + planNum);
-            return false;
+            // Continue to Step 2
+            pro.proplan.continueToStepTwo($(this).closest('.plan'));
         });
+    },
+
+    /**
+     * Initialise the click handler for the desktop pricing boxes to continue straight to step two
+     */
+    initPlanHoverHandlers: function() {
+
+        'use strict';
+
+        var $pricingPage =  $('.pricing-section', '.fmholder');
+        var $planBlock = $('.pricing-page.plan.main', $pricingPage);
+        var $planTag = $('.plan-tag-description', $pricingPage);
+
+        // Initialise mouseover handler for all the plan blocks
+        $planBlock.rebind('mouseenter.showprotag tap.showprotag', function() {
+
+            var $this = $(this);
+
+            if ($this.data('tag')) {
+
+                // Set tag information
+                $('span', $planTag).attr('class', 'pro' + $this.data('payment'))
+                    .safeHTML($this.data('tag'));
+
+                // Reposition the Tag
+                $planTag.css('width', $this.outerWidth()).addClass('visible').position({
+                    of: $this,
+                    my: 'center bottom',
+                    at: 'center top-10'
+                });
+
+                // Hide tag for mobile
+                $(window).rebind('resize.hideprotag', function() {
+
+                    $planBlock.trigger('mouseleave');
+                });
+            }
+        });
+
+        // Hide tag on mouseout
+        $planBlock.rebind('mouseleave.hideprotag', function() {
+
+            $planTag.removeClass('visible');
+            $(window).unbind('resize.hideprotag');
+        });
+    },
+
+    /**
+     * Continues the flow to step two of the Pro payment process
+     * @param {Object} $selectedPlan The selected Pro card container which has the data-payment attribute
+     */
+    continueToStepTwo: function($selectedPlan) {
+
+        'use strict';
+
+        var planNum = $selectedPlan.attr('data-payment');
+
+        // If not logged in, show the login/register prompt
+        if (!u_handle) {
+            if (typeof page !== 'undefined' && page !== 'chat') {
+                megaAnalytics.log('pro', 'loginreq');
+            }
+            showSignupPromptDialog();
+            return false;
+        }
+
+        // If they're ephemeral but awaiting email confirmation, still let them continue to choose a plan and pay
+        else if (isEphemeral() && !localStorage.awaitingConfirmationAccount) {
+            showRegisterDialog();
+            return false;
+        }
+
+        // If they clicked the plan immediately after completing registration, set the flag so it can be logged
+        if ($('body').hasClass('key')) {
+            pro.propay.planChosenAfterRegistration = true;
+        }
+
+        // Load the Pro page step 2 where they can make payment
+        loadSubPage('propay_' + planNum);
+    },
+
+    /**
+     * Load the pricing plans
+     */
+    loadPricingPlans: function() {
+
+        'use strict';
 
         // Show loading spinner because some stuff may not be rendered properly yet
         loadingDialog.show();
+
+        // Hide the payment processing/transferring/loading overlay if click back from the payment page
+        pro.propay.preloadAnimation();
+        pro.propay.hideLoadingOverlay();
+
+        /*
+        * Hide the successful payment modal dialog of cardDialog, voucherDialog and redeem
+        * if click back after making the payment successfully
+        * */
+        $('.payment-result.success', $(document.body)).addClass('hidden');
 
         // Load the membership plans
         pro.loadMembershipPlans(function() {
@@ -152,18 +240,458 @@ pro.proplan = {
     },
 
     /**
-     * Populate the monthly plans across the main /pro page
+     * Pro page plans side scroll to elements.
      */
-    populateMembershipPlans: function() {
+    initPlanSliderControls: function() {
+
+        'use strict';
+
+        // The box which gets scroll and contains all the child content.
+        var $pricingPage =  $('.pricing-section', 'body');
+        var $scrollParent = $('.plans-wrap', $pricingPage);
+        var $scrollContent = $('.plans-block', $pricingPage);
+        var $controls = $('.default-controls', $pricingPage);
+        var $dots = $('.nav', $controls);
+        var $row = $('.pricing-page.plans-row', $scrollParent).first();
+        var $plans =  $('.plan:visible', $row);
+        var isRunningAnimation = false;
+        var scrollToPlan;
+
+        // Scroll to first block
+        $scrollParent.scrollLeft(0);
+        $dots.removeClass('active');
+        $($dots[0]).addClass('active');
+
+        // Scroll to necessary plan block
+        scrollToPlan = function(slideNum) {
+            var $previousPlan;
+            var planPosition;
+
+            // Prevent scroll event
+            isRunningAnimation = true;
+
+            // Get plan position related to previous plan to include border-spacing
+            $previousPlan = $($plans[slideNum]).prev(':visible');
+            planPosition = $previousPlan.length ? $previousPlan.position().left + $previousPlan.outerWidth() : 0;
+
+            // Set controls dot active state
+            $dots.removeClass('active');
+            $($dots[slideNum]).addClass('active');
+
+            // Scroll to plan block
+            $scrollParent.stop().animate({
+                scrollLeft: planPosition
+            }, 600, 'swing', function() {
+
+                // Enable on scroll event after auto scrolling
+                isRunningAnimation = false;
+            });
+        };
+
+        // Init scroll event
+        $scrollParent.rebind('scroll.scrollToPlan', function() {
+            var closestIndex;
+            var scrollVal = $(this).scrollLeft();
+
+            // Prevent on scroll event during auto scrolling
+            if (isRunningAnimation) {
+                return false;
+            }
+
+            // If block is scrolled
+            if (scrollVal > 0) {
+                closestIndex = Math.floor(scrollVal /
+                    ($scrollContent.outerWidth() - $scrollParent.outerWidth()) * $plans.length);
+            }
+
+            // Hide simple tip
+            $('.pricing-sprite.i-icon', $scrollContent).trigger('simpletipClose');
+
+            // Hide plans tag
+            $('.plan.main', $scrollContent).trigger('mouseleave');
+
+            // Get closest plan index
+            closestIndex = closestIndex ? closestIndex : 1;
+
+            // Set controls dot active state
+            $dots.removeClass('active');
+            $dots.filter('.sl' + closestIndex).addClass('active');
+        });
+
+        // Init controls dot click
+        $dots.rebind('click.scrollToPlan', function() {
+            var $this = $(this);
+            var slideNum;
+
+            // Scroll to selected plan
+            slideNum = $this.data('slide') - 1;
+            scrollToPlan(slideNum);
+        });
+
+        // Init Previous/Next controls click
+        $('.nav-button', $controls).rebind('click', function() {
+            var $this = $(this);
+            var slideNum;
+
+            // Get current plan index
+            slideNum = $('.nav.active', $controls).data('slide') - 1;
+
+            // Get prev/next plan index
+            if ($this.is('.prev')) {
+                slideNum = slideNum - 1 > 0 ? slideNum - 1 : 0;
+            }
+            else if (slideNum !== $plans.length - 1) {
+                slideNum += 1;
+            }
+
+            // Scroll to selected plan
+            scrollToPlan(slideNum);
+        });
+    },
+
+    /**
+     * Pro page individual/business plans switcher
+     */
+    initPlanControls: function() {
+
+        'use strict';
+
+        var $stepOne = $('.pricing-section', 'body');
+        var $switcherButton = $('.plans-switcher .button', $stepOne);
+        var selectedSection;
+
+        // Init Individual/Business buttons click
+        $switcherButton.rebind('click.selectPlanType', function() {
+
+            var $this = $(this);
+            var selectedSection;
+
+            // Set active state
+            $switcherButton.removeClass('active');
+            $this.addClass('active');
+
+            // Show/hide necessary content blocks
+            if ($this.is('.business')) {
+                $('.individual-el', $stepOne).addClass('hidden');
+                $('.business-el', $stepOne).removeClass('hidden');
+
+                selectedSection = 'business';
+            }
+            else {
+                $('.individual-el', $stepOne).removeClass('hidden');
+                $('.business-el', $stepOne).addClass('hidden');
+
+                selectedSection = 'individual';
+            }
+
+            sessionStorage.setItem('pro.subsection', selectedSection);
+        });
+
+        // Show previously selected plans type
+        selectedSection = sessionStorage['pro.subsection'];
+
+        if (selectedSection) {
+            $switcherButton.filter('.' + selectedSection).trigger('click');
+        }
+    },
+
+    /**
+     * Pro page Monthly/Yearly price switcher
+     */
+    initPlanPeriodControls: function($dialog) {
+
+        'use strict';
+
+        var $stepOne = $($dialog ? $dialog : '.scroll-block');
+        var $pricingBoxes = $('.plans-block .pricing-page.plan', $stepOne);
+        var $pricePeriod = $('.plan-period', $pricingBoxes);
+        var $radioButtons = $('.pricing-page.radio-buttons input', $stepOne);
+        var $radioLabels = $('.pricing-page.radio-buttons .radio-txt', $stepOne);
+        var $savePercs = $('.pricing-page.save-percs:visible', $stepOne);
+        var $saveArrow = $('.save-green-arrow:visible', $stepOne);
+        var savePercsReposition;
+
+        if ($savePercs.length && $saveArrow.length) {
+
+            // Set text to "save" block
+            $savePercs.safeHTML(l[16649]);
+            $('span', $savePercs).text('16%');
+
+            savePercsReposition = function() {
+                $savePercs.position({
+                    of: $saveArrow,
+                    my: 'left top',
+                    at: 'right+1 top-13',
+                    collision: 'fit none'
+                });
+            };
+
+            // Reposition percs block
+            savePercsReposition();
+            $(window).rebind('resize.propercsreposition', savePercsReposition);
+        }
+
+        // Init monthly/yearly radio buttons value change
+        $radioLabels.rebind('click', function(){
+            $('input', $(this).prev()).trigger('click');
+        });
+
+        $radioButtons.rebind('change.changePeriod', function() {
+
+            var value = $(this).val();
+            var monthOrYearWording;
+
+            // Set Off states to all buttons
+            $radioButtons.removeClass('radioOn').addClass('radioOff');
+            $radioButtons.parent().removeClass('radioOn').addClass('radioOff');
+
+            // Set On state for checked  button
+            if (this.checked) {
+                $(this).removeClass('radioOff').addClass('radioOn');
+                $(this).parent().removeClass('radioOff').addClass('radioOn');
+            }
+
+            // Set monthly/yearly wording variable
+            if (value === '12') {
+                monthOrYearWording = l[932];
+            }
+            else {
+                monthOrYearWording = l[931];
+            }
+
+            // Updte price and transfer values
+            pro.proplan.updateEachPriceBlock('P', $pricingBoxes, $dialog, parseInt(value));
+
+            // Update the plan period text
+            $pricePeriod.text('/' + monthOrYearWording);
+        });
+
+        // Set monthly prices by default
+        $radioButtons.filter('input[value="1"]').trigger('click');
+    },
+
+    /**
+     * Pro page compare slider
+     */
+    initCompareSlider: function() {
+
+        'use strict';
+
+        var $stepOne = $('.pricing-section', 'body');
+        var $sliderWrap = $('.pricing-page.slider-wrap', $stepOne);
+        var $slider = $('.pricing-page.slider', $sliderWrap);
+        var $resultWarpper = $('.pricing-page.compare-block', $stepOne);
+        var $resultBlocks = $('.compare-cell', $resultWarpper);
+        var $resultTip = $('.pricing-page.compare-tip .tip', $stepOne);
+        var $dots = $('.slider-dot', $sliderWrap);
+        var separator = mega.intl.decimalSeparator;
+        var compareDetails = [];
+
+        // Set current exchange tip value in USD
+        $resultTip.text(l[24078].replace('%1', '1.17'));
+
+        // Set compare slider labels
+        $dots.get().forEach(function(e) {
+
+            var $this = $(e);
+            var $label = $('.label', $this);
+            var storageValue = $label.data('storage');
+
+            // Set storage value labels
+            if (storageValue) {
+
+                $label.safeHTML(l[23789].replace('%1', '<span>' + storageValue + '</span>'));
+            }
+            // Set Free Storage label
+            else {
+
+                $label.safeHTML(l[24099]);
+            }
+        });
+
+        // Set compare MEGA/GoogleDrive/Dropbox data for FREE/2TB/8TB/16TB plans.
+        compareDetails = [
+            [
+                ['50 ' + l[17696], '50 ' + l[17696], '', l[16362]],
+                ['50 ' + l[17696], '2 ' + l[17696], '' , l[24075]],
+                ['50 ' + l[17696], '15 ' + l[17696], '', l[24076]]
+            ],
+            [
+                ['2 ' + l[20160], '9' + separator + '99', '&euro;', l[23818].replace('%1', l[5819])],
+                ['2 ' + l[20160], '10' + separator + '27', '&euro;', l[23947]],
+                ['2 ' + l[20160], '9' + separator + '99', '&euro;', l[23818].replace('%1', '2 ' + l[20160])]
+            ],
+            [
+                ['8 ' + l[20160], '19' + separator + '99', '&euro;', l[23818].replace('%1', l[6125])],
+                ['8 ' + l[20160], '', '', ''],
+                ['8 ' + l[20160], '', '', '']
+            ],
+            [
+                ['16 ' + l[20160], '29' + separator + '99', '&euro;', l[23818].replace('%1', l[6126])],
+                ['16 ' + l[20160], '', '', ''],
+                ['16 ' + l[20160], '', '', '']
+            ]
+        ];
+
+        // Init compare slider
+        $slider.slider({
+
+            min: 1, max: 4, range: 'min',
+            change: function(e, ui) {
+
+                var value = ui.value;
+
+                // Set  selected slide data
+                $resultWarpper.attr('class', 'pricing-page compare-block slide' + value);
+
+                // Change compare MEGA/GoogleDrive/Dropbox blocks data
+                for (var i = 0, length = $resultBlocks.length; i < length; i++) {
+
+                    var $resultBlock = $($resultBlocks[i]);
+                    var $planInfoBlock = $('.compare-info', $resultBlock);
+                    var planInfo = compareDetails[value - 1][i];
+
+                    // Default block UI
+                    $resultBlock.removeClass('not-supported');
+
+                    // Set Storage value
+                    $('.compare-storage', $resultBlock).text(planInfo[0]);
+
+                    // Not supported UI if price is not set
+                    if (!planInfo[1]) {
+                        $resultBlock.addClass('not-supported');
+
+                        continue;
+                    }
+
+                    // Set price and currency
+                    $('.price', $resultBlock).text(planInfo[1]);
+                    $('.currency', $resultBlock).safeHTML(planInfo[2] ? planInfo[2] : ' ');
+
+                    // Change plan tip
+                    if (planInfo[3]) {
+                        $planInfoBlock.text('*' + planInfo[3]);
+                    }
+                }
+
+                // Change compare MEGA/GoogleDrive/Dropbox blocks data
+                $dots.removeClass('active');
+
+                for (var j = 0; j < value; j++) {
+                    $($dots[j]).addClass('active');
+                }
+            },
+            slide: function(e, ui) {
+
+                var value = ui.value;
+
+                // Change compare MEGA/GoogleDrive/Dropbox blocks data
+                $dots.removeClass('active');
+
+                for (var j = 0; j < value; j++) {
+                    $($dots[j]).addClass('active');
+                }
+            }
+        });
+
+        // Set 50GB plan as default
+        $slider.slider('value', 3);
+
+        // Init slider dots click
+        $dots.rebind('click', function() {
+            $('.pricing-page.slider').slider('value', $(this).data('val'));
+        });
+    },
+
+    /**
+     * Pro page Get started for Free button
+     */
+    initGetFreeButton: function() {
+
+        'use strict';
+
+        var $stepOne = $('.pricing-section', 'body');
+        var $getFreeButton = $('.free-button', $stepOne);
+        var signUpStartedInWebclient = localStorage.signUpStartedInWebclient;
+
+        delete localStorage.signUpStartedInWebclient;
+
+        // Init button click
+        $getFreeButton.rebind('click', function() {
+
+            if (typeof u_attr === 'undefined') {
+                loadSubPage('register');
+
+                return false;
+            }
+
+            // If coming from the process key step and they click on the Free button
+            loadSubPage(signUpStartedInWebclient ? 'downloadapp' : 'fm');
+
+            if (localStorage.gotOverquotaWithAchievements) {
+                onIdle(function() {
+                    mega.achievem.achievementsListDialog();
+                });
+                delete localStorage.gotOverquotaWithAchievements;
+            }
+        });
+    },
+
+    /**
+     * Get current and next plan data if user logged in
+     * @param {Object} $pricingBoxes Pro cards blocks
+     */
+    updateCurrentPlanData: function($pricingBoxes) {
         "use strict";
 
-        // Cache selectors
-        var $stepOne = $('.plans-block');
-        var $pricingBoxes = $stepOne.find('.reg-st3-membership-bl');
-        var oneLocalPriceFound = false;
-        var euroSign = '\u20ac';
+        // If user is logged in get curent/next plan info
+        if (u_type === 3) {
 
-        // Update each pricing block with details from the API
+            // If account data does not exist then or it was changed
+            if (!pro.proplan.planData || pro.proplan.planData.utype !== u_attr.p
+                || (pro.proplan.planData.srenew && M.account && M.account.stype !== 'S')) {
+
+                // Get user quota information, the flag 'strg: 1' includes current account storage in the response
+                api_req({ a: 'uq', strg: 1, pro: 1 }, {
+                    callback : function(result) {
+
+                        // Store current account storage usage for checking later
+                        pro.proplan.currentStorageBytes = result.cstrg;
+
+                        // Save plan data
+                        pro.proplan.planData = result;
+
+                        // Process next and current plan data and display tag on top of the plan
+                        pro.proplan.processCurrentAndNextPlan(result, $pricingBoxes);
+                    }
+                });
+            }
+            else {
+
+                // Process next and current plan data and display tag on top of the plan
+                pro.proplan.processCurrentAndNextPlan(pro.proplan.planData, $pricingBoxes);
+            }
+        }
+    },
+
+    /**
+     * Update each pricing block with details from the API
+     */
+    updateEachPriceBlock: function(pageType, $pricingBoxes, $dialog, period) {
+        "use strict";
+
+        var euroSign = '\u20ac';
+        var oneLocalPriceFound = false;
+        var zeroPrice;
+        var classType = 1;
+        var intl = mega.intl.number;
+
+        // If user is logged in get curent/next plan info
+        pro.proplan.updateCurrentPlanData($pricingBoxes);
+
+        // Save selected payment period
+        sessionStorage.setItem('pro.period', period);
+
         for (var i = 0, length = pro.membershipPlans.length; i < length; i++) {
 
             // Get plan details
@@ -171,125 +699,150 @@ pro.proplan = {
             var months = currentPlan[pro.UTQA_RES_INDEX_MONTHS];
             var planNum = currentPlan[pro.UTQA_RES_INDEX_ACCOUNTLEVEL];
             var planName = pro.getProPlanName(planNum);
+            var priceIndex = pro.UTQA_RES_INDEX_MONTHLYBASEPRICE;
 
-            // Show only monthly prices in the boxes
-            if (months !== 12) {
+            // Skip if data differs from selected period
+            if (months !== period) {
+                continue;
+            }
+            // Set yearly variable index
+            else if (months === 12) {
+                priceIndex = pro.UTQA_RES_INDEX_PRICE;
+            }
 
-                // Cache selectors
-                var $pricingBox = $pricingBoxes.filter('.pro' + planNum);
-                var $planName = $pricingBox.find('.title');
-                var $price = $pricingBox.find('.price');
-                var $priceDollars = $price.find('.big');
-                var $priceCents = $price.find('.small');
-                var $storageAmount = $pricingBox.find('.storage-amount');
-                var $storageUnit = $pricingBox.find('.storage-unit');
-                var $bandwidthAmount = $pricingBox.find('.bandwidth-amount');
-                var $bandwidthUnit = $pricingBox.find('.bandwidth-unit');
-                var $euroPrice = $('.euro-price', $price);
-                var $currncyAbbrev = $('.local-currency-code', $price);
+            var $pricingBox = $pricingBoxes.filter('.pro' + planNum);
+            var $price = $('.plan-price .price', $pricingBox);
+            var $euroPrice = $('.pricing-page.euro-price', $pricingBox);
+            var $currncyAbbrev = $('.pricing-page.plan-currency', $pricingBoxes);
+            var $planName = $('.pricing-page.plan-title', $pricingBox);
+            var $planButton = $('.pricing-page.plan-button', $pricingBox);
+            var basePrice;
+            var basePriceCurrencySign;
 
-                $priceDollars.removeClass('tooBig tooBig2');
-                $priceCents.removeClass('toosmall toosmall2');
+            if (currentPlan[pro.UTQA_RES_INDEX_LOCALPRICE]) {
+                $currncyAbbrev.text(currentPlan[pro.UTQA_RES_INDEX_LOCALPRICECURRENCY]);
+                $euroPrice.text(intl.format(currentPlan[priceIndex]) + ' ' + euroSign);
 
-                var monthlyBasePrice;
-                var monthlyBasePriceCurrencySign;
-                var zeroPrice;
+                // Calculate the base price in local currency
+                basePrice = currentPlan[pro.UTQA_RES_INDEX_LOCALPRICE].toString();
 
-                if (currentPlan[pro.UTQA_RES_INDEX_LOCALPRICE]) {
-                    $euroPrice.removeClass('hidden');
-                    $currncyAbbrev.removeClass('hidden');
-                    $currncyAbbrev.text(currentPlan[pro.UTQA_RES_INDEX_LOCALPRICECURRENCY]);
-                    $euroPrice.text(currentPlan[pro.UTQA_RES_INDEX_MONTHLYBASEPRICE] +
-                        ' ' + euroSign);
-                    // Calculate the monthly base price in local currency
-                    monthlyBasePrice = '' + currentPlan[pro.UTQA_RES_INDEX_LOCALPRICE];
+                if (pageType === "P") {
                     zeroPrice = currentPlan[pro.UTQA_RES_INDEX_LOCALPRICEZERO];
                     oneLocalPriceFound = true;
                 }
-                else {
-                    $euroPrice.addClass('hidden');
-                    $currncyAbbrev.addClass('hidden');
 
-                    // Calculate the monthly base price
-                    monthlyBasePrice = '' + currentPlan[pro.UTQA_RES_INDEX_MONTHLYBASEPRICE];
-                    monthlyBasePriceCurrencySign = euroSign;
+                // Set localCurrency indicator
+                if ($dialog) {
+                    $dialog.addClass('local-currency');
                 }
-
-                // Calculate the monthly base price
-                var monthlyBasePriceParts = monthlyBasePrice.split('.');
-                var monthlyBasePriceDollars = monthlyBasePriceParts[0];
-                var monthlyBasePriceCents = monthlyBasePriceParts[1] || '00';
-                // if (monthlyBasePrice.length > 10) {
-                    if (monthlyBasePriceDollars.length > 9) {
-                        if (monthlyBasePriceDollars.length > 11) {
-                            $priceDollars.addClass('tooBig2');
-                            $priceCents.addClass('toosmall2');
-                            monthlyBasePriceCents = '0';
-                        }
-                        else {
-                            $priceDollars.addClass('tooBig');
-                            $priceCents.addClass('toosmall');
-                            monthlyBasePriceCents = '00';
-                        }
-                        monthlyBasePriceDollars = Number.parseInt(monthlyBasePriceDollars) + 1;
-                    }
-                    else {
-                        if (monthlyBasePriceCents.length > 2) {
-                            monthlyBasePriceCents = monthlyBasePriceCents.substr(0, 2);
-                            monthlyBasePriceCents = Number.parseInt(monthlyBasePriceCents) + 1;
-                            monthlyBasePriceCents = (monthlyBasePriceCents + '0').substr(0, 2);
-                        }
-                    }
-                // }
-                // Get the current plan's bandwidth, then convert the number to 'x GBs' or 'x TBs'
-                var storageGigabytes = currentPlan[pro.UTQA_RES_INDEX_STORAGE];
-                var storageBytes = storageGigabytes * 1024 * 1024 * 1024;
-                var storageFormatted = numOfBytes(storageBytes, 0);
-                var storageSizeRounded = Math.round(storageFormatted.size);
-
-                // Get the current plan's bandwidth, then convert the number to 'x GBs' or 'x TBs'
-                var bandwidthGigabytes = currentPlan[pro.UTQA_RES_INDEX_TRANSFER];
-                var bandwidthBytes = bandwidthGigabytes * 1024 * 1024 * 1024;
-                var bandwidthFormatted = numOfBytes(bandwidthBytes, 0);
-                var bandwidthSizeRounded = Math.round(bandwidthFormatted.size);
-
-                // Update the plan name and price
-                $planName.text(planName);
-                if (currentPlan[pro.UTQA_RES_INDEX_LOCALPRICE]) {
-                    $priceDollars.text(monthlyBasePrice);
-                    $priceCents.text('');
-                }
-                else {
-                    $priceDollars.text(monthlyBasePriceDollars);
-                    $priceCents.text('.' + monthlyBasePriceCents + ' ' +
-                        monthlyBasePriceCurrencySign);
-                }
-
-                // Update storage
-                $storageAmount.text(storageSizeRounded);
-                $storageUnit.text(storageFormatted.unit);
-
-                // Update bandwidth
-                $bandwidthAmount.text(bandwidthSizeRounded);
-                $bandwidthUnit.text(bandwidthFormatted.unit);
             }
+            else {
+                // Calculate the base price
+                basePrice = currentPlan[pro.UTQA_RES_INDEX_PRICE].toString();
+                basePriceCurrencySign = euroSign;
+            }
+
+            // Calculate the monthly base price
+            var basePriceParts = basePrice.split('.');
+            var basePriceDollars = basePriceParts[0];
+            var basePriceCents = basePriceParts[1] || '00';
+
+            var storageGigabytes = currentPlan[pro.UTQA_RES_INDEX_STORAGE];
+            var storageBytes = storageGigabytes * 1024 * 1024 * 1024;
+            var storageFormatted = numOfBytes(storageBytes, 0);
+            var storageSizeRounded = Math.round(storageFormatted.size);
+            var storageValue;
+
+            var bandwidthGigabytes = currentPlan[pro.UTQA_RES_INDEX_TRANSFER];
+            var bandwidthBytes = bandwidthGigabytes * 1024 * 1024 * 1024;
+            var bandwidthFormatted = numOfBytes(bandwidthBytes, 0);
+            var bandwidthSizeRounded = Math.round(bandwidthFormatted.size);
+            var bandwidthValue;
+
+            // Update the plan name
+            $planName.text(planName);
+
+            // Update the button label plan name if plan is not a current one
+            if (!$pricingBox.first().is('.current')) {
+                $planButton.first().text(l[23776].replace('%1', planName));
+            }
+
+            $price.text(currentPlan[pro.UTQA_RES_INDEX_LOCALPRICE] ? basePrice :
+                basePriceDollars + mega.intl.decimalSeparator + basePriceCents + ' ' + basePriceCurrencySign);
+
+            // Get storage
+            storageValue = storageSizeRounded + ' ' + storageFormatted.unit;
+
+            // Get bandwidth
+            bandwidthValue = bandwidthSizeRounded + ' ' + bandwidthFormatted.unit;
+
+            // Update storage and bandwidth data
+            pro.proplan.updatePlanData($pricingBox, storageValue, bandwidthValue, period);
         }
-        var $pricingBoxFree = $pricingBoxes.filter('.free');
-        var $priceFree = $pricingBoxFree.find('.price');
-        var $priceCentsFree = $priceFree.find('.small');
-        var $priceDollarsFree = $priceFree.find('.big');
+
+        return pageType === "P" ? [oneLocalPriceFound, zeroPrice] : classType;
+    },
+
+    /**
+     * Update Storage and bandwidth data in plaan card
+     */
+    updatePlanData: function($pricingBox, storageValue, bandwidthValue, period) {
+
+        "use strict";
+
+        var $storageAmount = $('.plan-feature.storage', $pricingBox);
+        var $storageTip = $('i', $storageAmount);
+        var $bandwidthAmount = $('.plan-feature.transfer', $pricingBox);
+        var $bandwidthTip = $('i', $bandwidthAmount);
+        var bandwidthText = period === 1 ? l[23808] : l[24065];
+
+        // Update storage
+        if ($storageTip && $storageTip.attr('data-simpletip')) {
+            $('span', $storageAmount)
+                .safeHTML(l[23789].replace('%1', '<span>' + storageValue + '</span>'));
+            $storageTip.attr('data-simpletip', l[23807].replace('%1', '[U]' + storageValue + '[/U]'));
+        }
+
+        // Update bandwidth
+        if ($bandwidthTip && $bandwidthTip.data('simpletip')) {
+            $('span', $bandwidthAmount)
+                .safeHTML(l[23790].replace('%1', '<span>' + bandwidthValue + '</span>'));
+            $bandwidthTip.attr('data-simpletip', bandwidthText.replace('%1', '[U]' + bandwidthValue + '[/U]'));
+        }
+    },
+
+    /**
+     * Populate the monthly plans across the main /pro page
+     */
+    populateMembershipPlans: function() {
+
+        "use strict";
+
+        var $stepOne = $('.pricing-section', 'body');
+        var $pricingBoxes = $('.pricing-page.plan', $stepOne);
+        var $businessBoxes = $pricingBoxes.filter('.business');
+        var $businessPrice = $('.plan-price', $businessBoxes);
+        var $businessStorageInfo = $('.plan-feature.storage-b span', $businessBoxes);
+        var businessStorageAmount = '15 ' + l[20160];
+        var euroSign = '\u20ac';
+
+        var updateResults = pro.proplan.updateEachPriceBlock("P", $pricingBoxes, undefined, 1);
+        var oneLocalPriceFound = updateResults[0];
+
         if (oneLocalPriceFound) {
-            $('.reg-st3-txt-localcurrencyprogram').removeClass('hidden');
-            $pricingBoxes.addClass('local-currency');
-            $priceCentsFree.text('');
-            $priceDollarsFree.text(zeroPrice);
+            $stepOne.addClass('local-currency');
         }
         else {
-            $('.reg-st3-txt-localcurrencyprogram').addClass('hidden');
-            $priceCentsFree.text('.00 ' + euroSign);
-            $pricingBoxes.removeClass('local-currency');
-            $priceDollarsFree.text('0');
+            $stepOne.removeClass('local-currency');
         }
+
+        $businessPrice.text(
+            $businessPrice.text().replace('.', mega.intl.decimalSeparator)
+        );
+
+        $businessStorageInfo.safeHTML(
+            l[23789].replace('%1', '<span>' + businessStorageAmount + '</span>')
+        );
     },
 
     /**
@@ -303,34 +856,45 @@ pro.proplan = {
         }
 
         // Cache selectors
-        var $stepOne = $('.membership-step1');
-        var $pricingBoxes = $stepOne.find('.reg-st3-membership-bl');
-        var $noPlansSuitable = $stepOne.find('.no-plans-suitable');
-        var $currentStorageTerabytes = $noPlansSuitable.find('.current-storage .terabytes');
-        var $requestPlanButton = $noPlansSuitable.find('.btn-request-plan');
+        var $stepOne = $('.pricing-section', 'body');
+        var $pricingBoxes = $('.pricing-page.plan', $stepOne);
+        var $noPlansSuitable = $('.no-plans-suitable',  $stepOne);
+        var $currentStorageTerabytes = $('.current-storage .terabytes',  $noPlansSuitable);
+        var $requestPlanButton = $('.btn-request-plan',  $noPlansSuitable);
 
         // Calculate storage in gigabytes
         var totalNumOfPlans = 4;
         var numOfPlansNotApplicable = 0;
         var currentStorageGigabytes = pro.proplan.currentStorageBytes / 1024 / 1024 / 1024;
 
-        // Loop through membership plans
-        for (var i = 0, length = pro.membershipPlans.length; i < length; i++) {
+        if (u_attr && u_attr.b) {
 
-            // Get plan details
-            var currentPlan = pro.membershipPlans[i];
-            var proNum = parseInt(currentPlan[pro.UTQA_RES_INDEX_ACCOUNTLEVEL]);
-            var planStorageGigabytes = parseInt(currentPlan[pro.UTQA_RES_INDEX_STORAGE]);
-            var months = parseInt(currentPlan[pro.UTQA_RES_INDEX_MONTHS]);
+            // Show business plan
+            $('.plans-switcher .button.business', $stepOne).trigger('click');
+        }
+        else {
 
-            // If their current storage usage is more than the plan's grey it out
-            if ((months !== 12) && (currentStorageGigabytes > planStorageGigabytes)) {
+            // Show individual plans
+            $('.plans-switcher .button.individual', $stepOne).trigger('click');
 
-                // Grey out the plan
-                $pricingBoxes.filter('.pro' + proNum).addClass('sub-optimal-plan');
+            // Loop through membership plans
+            for (var i = 0, length = pro.membershipPlans.length; i < length; i++) {
 
-                // Add count of plans that aren't applicable
-                numOfPlansNotApplicable++;
+                // Get plan details
+                var currentPlan = pro.membershipPlans[i];
+                var proNum = parseInt(currentPlan[pro.UTQA_RES_INDEX_ACCOUNTLEVEL]);
+                var planStorageGigabytes = parseInt(currentPlan[pro.UTQA_RES_INDEX_STORAGE]);
+                var months = parseInt(currentPlan[pro.UTQA_RES_INDEX_MONTHS]);
+
+                // If their current storage usage is more than the plan's grey it out
+                if ((months !== 12) && (currentStorageGigabytes > planStorageGigabytes)) {
+
+                    // Grey out the plan
+                    $pricingBoxes.filter('.pro' + proNum).addClass('sub-optimal-plan');
+
+                    // Add count of plans that aren't applicable
+                    numOfPlansNotApplicable++;
+                }
             }
         }
 
@@ -372,6 +936,17 @@ pro.proplan = {
         var provider = pageParts[1];
         var status = pageParts[2];
 
+        var successPayText = l[19514];
+        var $pendingOverlay = $('.payment-result.pending.alternate');
+
+
+        // manipulate the texts if business account
+        if (status === 'success' && pageParts && pageParts[3] === 'b') {
+            successPayText = l[19809].replace('{0}', '1');
+        }
+
+        $pendingOverlay.find('.payment-result-txt').safeHTML(successPayText);
+
         // If returning from an paysafecard payment, do a verification on the sale ID
         if (provider === 'paysafecard') {
             paysafecard.verify(status);
@@ -391,6 +966,57 @@ pro.proplan = {
         else if (provider === 'sabadell') {
             sabadell.showPaymentResult(status);
         }
+    },
+
+    /**
+     * Processes current and next plan data from api response, and place tag(s) for it.
+     *
+     * @param {Object} data Api response data
+     * @param {Object} $pricingBoxes Pro cards blocks
+     */
+    processCurrentAndNextPlan: function(data, $pricingBoxes) {
+
+        'use strict';
+
+        var $currPlan = $pricingBoxes.filter('[data-payment="' + data.utype + '"]').addClass('current');
+        var currentExpireTimestamp;
+
+        // Set "Current plan"button label
+        $('.pricing-page.plan-button', $currPlan).text(l[20711]);
+
+        // Current plan
+        if (data.srenew) { // This is subscription plan
+
+            var renewTimestamp = data.srenew[0];
+            if (renewTimestamp === 0) {
+                $currPlan.addClass('renew');
+            }
+            else {
+                $currPlan.addClass('renew')
+                    .data('tag', l[20759].replace('%1', time2date(renewTimestamp, 2)));
+            }
+        }
+        else {
+            currentExpireTimestamp = data.nextplan ? data.nextplan.t : data.suntil;
+            $currPlan.data('tag', l[20713].replace('%1', time2date(currentExpireTimestamp, 2)));
+        }
+
+        // Next plan
+        if (data.nextplan) {
+
+            // Store next plan
+            pro.proplan.nextPlan = data.nextplan;
+
+            var $nextPlan = $pricingBoxes.filter('[data-payment="' + pro.proplan.nextPlan.p + '"]');
+
+            $nextPlan.addClass('next');
+            $nextPlan.data('tag', l[20714].replace('%1', time2date(pro.proplan.nextPlan.t, 2))
+                .replace('%2', pro.getProPlanName(pro.proplan.nextPlan.p)));
+
+            // Hide popular text on next plan
+            $('.pro-popular-txt', $nextPlan).addClass('hidden');
+        }
+
     }
 };
 
@@ -403,95 +1029,90 @@ pro.proplan = {
  * @param {String} password A password to be optionally pre-filled into the dialog
  */
 function showLoginDialog(email, password) {
-
-    megaAnalytics.log("pro", "loginDialog");
-    $.dialog = 'pro-login-dialog';
-
+    'use strict';
     var $dialog = $('.pro-login-dialog');
-    var $inputs = $dialog.find('.account.input-wrapper input');
+    var $inputs = $dialog.find('input');
     var $button = $dialog.find('.big-red-button');
 
-    M.safeShowDialog('pro-login-dialog', function() {
+    var closeLoginDialog = function() {
+        $('.fm-dialog-overlay').unbind('click.proDialog');
+        $('.fm-dialog-close', $dialog).unbind('click.proDialog');
+        closeDialog();
+        return false;
+    };
 
-        $dialog.css({
-            'margin-left': -1 * ($dialog.outerWidth() / 2),
-            'margin-top': -1 * ($dialog.outerHeight() / 2)
-        });
+    M.safeShowDialog('pro-login-dialog', function() {
 
         // Init inputs events
         accountinputs.init($dialog);
 
-        return $dialog;
-    });
+        // controls
+        $('.fm-dialog-close', $dialog).rebind('click.proDialog', closeLoginDialog);
+        $('.fm-dialog-overlay').rebind('click.proDialog', closeLoginDialog);
 
-    // controls
-    $('.fm-dialog-close', $dialog).rebind('click.proDialog', function() {
-        closeLoginDialog($dialog);
-    });
+        $('.input-email', $dialog).val(email || '');
+        $('.input-password', $dialog).val(password || '');
 
-    $('.fm-dialog-overlay')
-        .rebind('click.proDialog', function() {
-            closeLoginDialog($dialog);
+        $('.top-login-forgot-pass', $dialog).rebind('click.forgetPass', function() {
+
+            var email = document.getElementById('login-name').value;
+
+            if (isValidEmail(email)) {
+                $.prefillEmail = email;
+            }
+
+            loadSubPage('recovery');
         });
 
-    $('.input-email', $dialog).val(email || '');
-    $('.input-password', $dialog).val(password || '');
 
-    $inputs.rebind('keydown.initdialog', function(e) {
-        if (e.keyCode === 13) {
+        $inputs.rebind('keydown.initdialog', function(e) {
+            if (e.keyCode === 13) {
+                doProLogin($dialog);
+            }
+        });
+
+        $button.rebind('click.initdialog', function() {
             doProLogin($dialog);
-        }
+        });
+
+        $button.rebind('keydown.initdialog', function(e) {
+            if (e.keyCode === 13) {
+                doProLogin($dialog);
+            }
+        });
+
+        onIdle(clickURLs);
+        return $dialog;
     });
-
-    $button.rebind('click.initdialog', function() {
-        doProLogin($dialog);
-    });
-
-    $button.rebind('keydown.initdialog', function (e) {
-        if (e.keyCode === 13) {
-            doProLogin($dialog);
-        }
-    });
-
-    clickURLs();
-}
-
-function closeLoginDialog($dialog) {
-    'use strict';
-
-    closeDialog();
-    $('.fm-dialog-overlay').unbind('click.proDialog');
-    $('.fm-dialog-close', $dialog).unbind('click.proDialog');
 }
 
 var doProLogin = function($dialog) {
 
-    megaAnalytics.log('pro', 'doLogin');
+    if (typeof page !== 'undefined' && page !== 'chat') {
+        megaAnalytics.log('pro', 'doLogin');
+    }
+
     loadingDialog.show();
 
-    var $emailContainer = $dialog.find('.account.input-wrapper.email');
-    var $passwordContainer = $dialog.find('.account.input-wrapper.password');
     var $formWrapper = $dialog.find('form');
-    var $emailInput = $emailContainer.find('input');
-    var $passwordInput = $passwordContainer.find('input');
+    var $emailInput = $dialog.find('input#login-name3');
+    var $passwordInput = $dialog.find('input#login-password3');
     var $rememberMeCheckbox = $dialog.find('.login-check input');
 
-    var email = $emailInput.val();
+    var email = $emailInput.val().trim();
     var password = $passwordInput.val();
     var rememberMe = $rememberMeCheckbox.is('.checkboxOn');  // ToDo check if correct
     var twoFactorPin = null;
 
-    if (email === '' || checkMail(email)) {
-        $emailContainer.addClass('incorrect');
-        $emailInput.val('');
-        $emailInput.focus();
+    if (email === '' || !isValidEmail(email)) {
+        $emailInput.megaInputsShowError(l[141]);
+        $emailInput.val('').focus();
         loadingDialog.hide();
 
         return false;
     }
     else if (password === '') {
-        $emailContainer.removeClass('incorrect');
-        $formWrapper.addClass('both-incorrect-inputs');
+        $passwordInput.megaInputsShowError(l[1791]);
         loadingDialog.hide();
 
         return false;
@@ -539,10 +1160,8 @@ function completeProLogin(result) {
     'use strict';
 
     var $formWrapper = $('.pro-login-dialog form');
-    var $emailContainer = $formWrapper.find('.account.input-wrapper.email');
-    var $emailField = $emailContainer.find('input');
-    var $passwordContainer = $formWrapper.find('.account.input-wrapper.password');
-    var $passwordField = $passwordContainer.find('input');
+    var $emailField = $formWrapper.find('input#login-name3');
+    var $passwordField = $formWrapper.find('input#login-password3');
 
     loadingDialog.hide();
 
@@ -555,36 +1174,54 @@ function completeProLogin(result) {
     else if (result !== false && result >= 0) {
         passwordManager('#form_login_header');
 
-        $emailField.val('');
-        $passwordField.val('');
+        $emailField.val('').blur();
+        $passwordField.val('').blur();
 
         u_type = result;
 
         // Find the plan they clicked on before the login/register prompt popped up
-        var proNum = $('.reg-st3-membership-bl.selected').data('payment');
+        var proNum = $('.pricing-page.plan.selected').data('payment');
 
-        // Load the Pro payment page (step 2)
-        loadSubPage('propay_' + proNum);
+        if (page === "chat") {
+            var chatHash = getSitePath().replace("/chat/", "").split("#")[0];
+            megaChat.loginOrRegisterBeforeJoining(chatHash);
+        }
+        else {
+            // Load the Pro payment page (step 2)
+            loadSubPage('propay_' + proNum);
+        }
     }
     else {
         // Close the 2FA dialog for a generic error
         twofactor.loginDialog.closeDialog();
+        $emailField.megaInputsShowError();
+        $passwordField.megaInputsShowError(l[7431]);
 
-        $emailContainer.removeClass('incorrect');
-        $formWrapper.addClass('both-incorrect-inputs');
-        $passwordField.focus();
+        var $inputs = $emailField.add($passwordField);
+
+        $inputs.rebind('input.hideBothError', function() {
+
+            $emailField.megaInputsHideError();
+            $passwordField.megaInputsHideError();
+
+            $inputs.off('input.hideBothError');
+        });
     }
 }
 
 function showRegisterDialog() {
 
-    megaAnalytics.log("pro", "regDialog");
+    if (typeof page !== 'undefined' && page !== 'chat') {
+        megaAnalytics.log("pro", "regDialog");
+    }
 
     mega.ui.showRegisterDialog({
         title: l[5840],
 
         onCreatingAccount: function() {
-            megaAnalytics.log("pro", "doRegister");
+            if (typeof page !== 'undefined' && page !== 'chat') {
+                megaAnalytics.log("pro", "doRegister");
+            }
         },
 
         onLoginAttemptFailed: function(registerData) {
@@ -606,11 +1243,11 @@ function showRegisterDialog() {
             if (skipConfirmationStep) {
                 closeDialog();
                 if (!gotLoggedIn) {
-                    localStorage.awaitingConfirmationAccount = JSON.stringify(registerData);
+                    security.register.cacheRegistrationData(registerData);
                 }
 
                 // Find the plan they clicked on before the login/register prompt popped up
-                var proNum = $('.reg-st3-membership-bl.selected').data('payment');
+                var proNum = $('.pricing-page.plan.selected').data('payment');
 
                 // Load the Pro payment page (step 2)
                 loadSubPage('propay_' + proNum);
@@ -677,23 +1314,19 @@ var showSignupPromptDialog = function() {
                     return false;
                 }).find('span').text(l[1076]);
         });
+
+        signupPromptDialog.rebind('onHide', function() {
+
+            // Set default icon
+            $('.icon', this.$dialog).attr('class', 'icon fm-notification-icon');
+        });
     }
 
     signupPromptDialog.show();
 
-    var $selectedPlan = $('.reg-st3-membership-bl.selected');
-    var plan = 1;
+    var $selectedPlan = $('.pricing-page.plan.selected', 'body');
 
-    if ($selectedPlan.is(".lite")) { plan = 1; }
-    else if ($selectedPlan.is(".pro1")) { plan = 2; }
-    else if ($selectedPlan.is(".pro2")) { plan = 3; }
-    else if ($selectedPlan.is(".pro3")) { plan = 4; }
-
-    $('.fm-dialog.loginrequired-dialog .fm-notification-icon')
-        .removeClass('plan1')
-        .removeClass('plan2')
-        .removeClass('plan3')
-        .removeClass('plan4')
-        .addClass('plan' + plan);
+    $('.fm-dialog.loginrequired-dialog .icon')
+        .attr('class', 'icon pricing-sprite plan-icon pro' + $selectedPlan.data('payment'));
 };
 /* jshint +W003 */

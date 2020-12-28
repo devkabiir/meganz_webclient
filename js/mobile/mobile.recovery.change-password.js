@@ -18,6 +18,7 @@ mobile.recovery.changePassword = {
     init: function(type) {
 
         'use strict';
+        this.type = type;
 
         // Cache the selector for the change password process after entering the key
         this.$screen = $('.reset-password-after-entering-key');
@@ -27,122 +28,95 @@ mobile.recovery.changePassword = {
             this.$screen = $('.park-account-change-password');
         }
 
-        // Initialise functionality
-        this.loadPasswordEstimatorLibrary();
-        this.initKeyupEvents();
-        this.initPasswordStrengthCheck();
+        // Initialise page functionality
+        this.initDataLossCheckbox(type);
         this.initUpdateButton(type);
+
+        // Load password strength estimator
+        this.initPasswordFieldsChangeEvent();
+        mobile.initPasswordEstimatorLibrary(this.$screen);
+        mobile.initPasswordStrengthCheck(this.$screen);
 
         // Show the screen
         this.$screen.removeClass('hidden');
     },
 
-
     /**
-     * Load the ZXCVBN password strength estimator library
+     * Attach event listener to password fields to enable the button when conditions are met.
      */
-    loadPasswordEstimatorLibrary: function() {
-
+    initPasswordFieldsChangeEvent: function() {
         'use strict';
 
-        // Make sure the library is loaded
-        if (typeof zxcvbn === 'undefined') {
+        var $passwordField = this.$screen.find('.password-input');
+        var $confirmPasswordField = this.$screen.find('.password-confirm-input');
+        var $allFields = $passwordField.add($confirmPasswordField);
 
-            // Show loading spinner
-            var $loader = this.$screen.find('.estimator-loading-icon').addClass('loading');
+        // Add keyup event to the input fields
+        var self = this;
+        $allFields.rebind('keyup.buttonenable', function() {
+            self.updateButtonState();
+        });
+    },
 
-            // On completion of loading, hide the loading spinner
-            M.require('zxcvbn_js')
-                .done(function() {
-                    $loader.removeClass('loading');
-                });
+    /**
+     * Helper function to update the button state, call whenever the active state of the button should be quuestioned.
+     */
+    updateButtonState: function() {
+        'use strict';
+
+        var $passwordField = this.$screen.find('.password-input');
+        var $confirmPasswordField = this.$screen.find('.password-confirm-input');
+        var $button = this.$screen.find('.update-password-button');
+
+        var password = $passwordField.val();
+        var confirmPassword = $confirmPasswordField.val();
+        var checkResult = this.type === "key" ? true : this.$confirmDataLossCheck.is(':checked');
+
+        // Change the button to red to enable it if they have entered something in all the fields
+        if (password.length > 0 && confirmPassword.length > 0 && checkResult) {
+
+            // Activate the button
+            $button.addClass('active');
+
+            // If the Enter key is pressed try updating
+            if (event.which === 13) {
+                $button.trigger('tap');
+            }
+        }
+        else {
+            // Grey it out if they have not completed one of the fields
+            $button.removeClass('active');
         }
     },
 
     /**
-     * Show what strength the currently entered password is on key up
+     * Init event handlers for data loss confirmation checkbox.
+     * @param type
      */
-    initPasswordStrengthCheck: function() {
-
+    initDataLossCheckbox: function(type) {
         'use strict';
+        if (type !== "key") {
+            var self = this;
+            this.$confirmDataLossBlock = this.$screen.find('.mobile.park-account.confirm-data-loss');
+            this.$confirmDataLossCheck = this.$confirmDataLossBlock.find('input');
+            var $checkboxWrapper = this.$confirmDataLossBlock.find('.checkdiv');
 
-        var $passwordStrengthBar = this.$screen.find('.password-strength');
-        var $passwordInput = this.$screen.find('.recovery-password-input');
-
-        // Add keyup event to the password text field
-        $passwordInput.rebind('keyup', function() {
-
-            // Make sure the ZXCVBN password strength estimator library is loaded first
-            if (typeof zxcvbn !== 'undefined') {
-
-                // Estimate the password strength
-                var password = $.trim($passwordInput.val());
-                var passwordScore = zxcvbn(password).score;
-                var passwordLength = password.length;
-
-                // Remove previous strength classes that were added
-                $passwordStrengthBar.removeClass('good1 good2 good3 good4 good5');
-
-                // Add colour coding
-                if (passwordLength === 0) {
-                    return false;
-                }
-                else if (passwordLength < 8) {
-                    $passwordStrengthBar.addClass('good1');    // Too short
-                }
-                else if (passwordScore === 4) {
-                    $passwordStrengthBar.addClass('good5');    // Strong
-                }
-                else if (passwordScore === 3) {
-                    $passwordStrengthBar.addClass('good4');    // Good
-                }
-                else if (passwordScore === 2) {
-                    $passwordStrengthBar.addClass('good3');    // Medium
-                }
-                else if (passwordScore === 1) {
-                    $passwordStrengthBar.addClass('good2');    // Weak
+            this.$confirmDataLossBlock.off('tap').on('tap', function() {
+                // If checked already, uncheck it
+                if (self.$confirmDataLossCheck.is(':checked')) {
+                    $checkboxWrapper.addClass('checkboxOff').removeClass('checkboxOn');
+                    self.$confirmDataLossCheck.prop('checked', false);
+                    self.updateButtonState();
                 }
                 else {
-                    $passwordStrengthBar.addClass('good1');    // Very Weak
+                    // Otherwise check it
+                    $checkboxWrapper.removeClass('checkboxOff').addClass('checkboxOn');
+                    self.$confirmDataLossCheck.prop('checked', true);
+                    self.updateButtonState();
                 }
-            }
-        });
-    },
-
-    /**
-     * Enable the Update button if the fields are complete and correct
-     */
-    initKeyupEvents: function() {
-
-        'use strict';
-
-        var $passwordField = this.$screen.find('.recovery-password-input');
-        var $confirmPasswordField = this.$screen.find('.recovery-password-confirm-input');
-        var $updateButton = this.$screen.find('.update-password-button');
-        var $allFields = $passwordField.add($confirmPasswordField);
-
-        // Add keyup event to the input fields
-        $allFields.rebind('keyup', function(event) {
-
-            var password = $passwordField.val();
-            var confirmPassword = $confirmPasswordField.val();
-
-            // Change the button to red to enable it if they have entered something in all the fields
-            if (password.length > 0 && confirmPassword.length > 0) {
-
-                // Activate the register button
-                $updateButton.addClass('active');
-
-                // If the Enter key is pressed try updating
-                if (event.which === 13) {
-                    $updateButton.trigger('tap');
-                }
-            }
-            else {
-                // Grey it out if they have not completed one of the fields
-                $updateButton.removeClass('active');
-            }
-        });
+                return false;
+            });
+        }
     },
 
     /**
@@ -155,15 +129,17 @@ mobile.recovery.changePassword = {
 
         var $passwordField = this.$screen.find('.recovery-password-input');
         var $confirmPasswordField = this.$screen.find('.recovery-password-confirm-input');
-        var $passwordStrengthBar = this.$screen.find('.password-strength');
         var $updateButton = this.$screen.find('.update-password-button');
 
         // Add click/tap handler to button
         $updateButton.off('tap').on('tap', function() {
+            if (!$updateButton.hasClass('active')) {
+                return false;
+            }
 
             // Get the current text field values
-            var password = $.trim($passwordField.val());
-            var confirmPassword = $.trim($confirmPasswordField.val());
+            var password = $passwordField.val();
+            var confirmPassword = $confirmPasswordField.val();
 
             // If the fields are not completed, the button should not do anything and looks disabled anyway
             if (password.length < 1 || confirmPassword.length < 1) {
@@ -171,36 +147,20 @@ mobile.recovery.changePassword = {
             }
 
             // Unfocus (blur) the input fields to prevent the cursor showing on iOS and also hide the keyboard
-            $passwordField.add($confirmPasswordField).trigger("blur");
+            $passwordField.add($confirmPasswordField).trigger('blur');
 
-            // If the passwords are not the same
-            if (password !== confirmPassword) {
+            // Check if the entered passwords are valid or strong enough
+            var passwordValidationResult = security.isValidPassword(password, confirmPassword);
 
-                // Add red border, red text and show warning icon
+            // If bad result
+            if (passwordValidationResult !== true) {
+
+                // Add red border, red input text and show warning icon
                 $passwordField.parent().addClass('incorrect');
                 $confirmPasswordField.parent().addClass('incorrect');
 
-                // Show an error and don't proceed
-                mobile.messageOverlay.show(l[9066]);        // The passwords are not the same...
-                return false;
-            }
-
-            // Check for minimum password length
-            if (password.length < 8) {
-
-                // Then show an error and don't proceed
-                mobile.messageOverlay.show(l[18701]);
-                return false;
-            }
-
-            // If the password has the 'Very weak' class i.e. it's not strong enough
-            if ($passwordStrengthBar.hasClass('good1')) {
-
-                // Add red border, red text and show warning icon
-                $passwordField.parent().addClass('incorrect');
-
-                // Then show an error and don't proceed
-                mobile.messageOverlay.show(l[1104]);        // Please strengthen your password
+                // Show error dialog and return early
+                mobile.messageOverlay.show(passwordValidationResult);
                 return false;
             }
 
@@ -280,8 +240,8 @@ mobile.recovery.changePassword = {
         'use strict';
 
         // Get details from previous steps in the process
-        var recoveryEmail = mobile.recovery.fromEmailLink.recoveryEmail;
-        var recoveryCode = mobile.recovery.fromEmailLink.recoveryCode;
+        var recoveryEmail = mobile.recovery.fromEmailLink.recoveryEmail || sessionStorage.recoveryEmail;
+        var recoveryCode = mobile.recovery.fromEmailLink.recoveryCode || sessionStorage.recoveryCode;
 
         loadingDialog.show();
 
@@ -298,6 +258,10 @@ mobile.recovery.changePassword = {
 
                     // Pre-fill the email on the login page
                     mobile.signin.previousEmailUsed = recoveryEmail;
+
+                    // Clear session storage variables.
+                    sessionStorage.removeItem('recoveryEmail');
+                    sessionStorage.removeItem('recoveryCode');
 
                     // Load the login page
                     loadSubPage('login');

@@ -1,7 +1,7 @@
 var fs = require('fs');
-var RJSON = require('relaxed-json');
 var fileLimit = 512*1024;
-var useHtmlMin = false;
+const useHtmlMin = false;
+const usePostCSS = true;
 
 var Secureboot = function() {
     var content = fs.readFileSync("secureboot.js").toString().split("\n");
@@ -56,7 +56,7 @@ var Secureboot = function() {
     ns.addHeader = function(lines, files) {
         lines.push("    /* Bundle Includes:");
         files.forEach(function(file) {
-            lines.push("     *   " + file);
+            lines.push("     *   " + file.replace('build/', ''));
         });
         lines.push("     */");
     }
@@ -66,46 +66,71 @@ var Secureboot = function() {
         var lines = [];
         var jsgroup = [];
         var cssgroup = [];
+        var seenFiles = {};
+        var bundleFiles = [];
+        var outOfBundle = [];
+        var watchSeenFiles = true;
         var jsGroups = this.getJSGroups();
         var jsKeys   = Object.keys(jsGroups);
         var cssGroups = this.getCSSGroups();
         var cssKeys   = Object.keys(cssGroups);
+        var allowExtraHTML = false;
         for (var i in content) {
+            var file = null;
             if (content[i].match(/jsl\.push.+(js)/)) {
-                var file = content[i].match(/'.+\.(js)'/);
+                file = content[i].match(/'.+\.(js)'/);
                 if (!file) {
                     lines.push(content[i]);
                     continue;
                 }
-                file = file[0].substr(1, file[0].length-2);
+                file = file[0].substr(1, file[0].length - 2);
+                if (file === 'js/staticPages.js') {
+                    allowExtraHTML = true;
+                }
                 if (jsGroups[jsKeys[0]] && jsGroups[jsKeys[0]][0] == file) {
                     ns.addHeader(lines, jsGroups[jsKeys[0]]);
                     lines.push("    jsl.push({f:'" + jsKeys[0] + "', n: '" + jsKeys[0].replace(/[^a-z0-9]/ig, "-") + "', j: 1, w: " + getWeight(jsKeys[0]) + "});");
+                    bundleFiles.push(jsKeys[0]);
                     jsgroup = jsGroups[jsKeys.shift()];
                 } else if (jsgroup.indexOf(file) == -1) {
+                    outOfBundle.push(content[i]);
                     lines.push(content[i]);
                 }
             } else if (content[i].match(/jsl\.push.+(css)/)) {
-                var file = content[i].match(/'.+\.(css)'/);
+                file = content[i].match(/'.+\.(css)'/);
                 if (!file) {
                     lines.push(content[i]);
                     continue;
                 }
-                file = file[0].substr(1, file[0].length-2);
+                file = (usePostCSS ? 'build/' : '') + file[0].substr(1, file[0].length - 2);
                 if (cssGroups[cssKeys[0]] && cssGroups[cssKeys[0]][0] == file) {
                     ns.addHeader(lines, cssGroups[cssKeys[0]]);
                     lines.push("    jsl.push({f:'" + cssKeys[0] + "', n: '" + cssKeys[0].replace(/[^a-z0-9]/ig, "-") + "', j: 2, w: " + getWeight(cssKeys[0]) + "});");
+                    bundleFiles.push(cssKeys[0]);
                     cssgroup = cssGroups[cssKeys.shift()];
                 } else if (cssgroup.indexOf(file) == -1) {
+                    outOfBundle.push(content[i]);
                     lines.push(content[i]);
                 }
             } else if (content[i].match(/jsl\.push.+html/) && content[i].indexOf('embedplayer') < 0) {
-                if (!addedHtml) {
+                if (!addedHtml || allowExtraHTML ) {
                     lines.push("    jsl.push({f:'html/templates.json', n: 'templates', j: 0, w: " + getWeight("html/templates.json") +  "});");
+                    if (allowExtraHTML) {
+                        allowExtraHTML = false;
+                    }
                 }
                 addedHtml = true;
             } else {
                 lines.push(content[i]);
+
+                if (content[i].indexOf('if (is_embed') > 0) {
+                    // no longer need to check for seen-files
+                    watchSeenFiles = false;
+                }
+            }
+
+            if (watchSeenFiles && file) {
+                seenFiles[file] = (seenFiles[file] | 0) + 1;
             }
         }
         lines = lines.join("\n");
@@ -151,6 +176,7 @@ var Secureboot = function() {
                         if (content.length) {
                             var filename = pfx + '/' + g + '-group' + (++idx) + '.' + pfx;
                             fs.writeFileSync(filename, content.join("\n"));
+                            bundleFiles.push(filename);
 
                             if (!jsl3_new[g]) {
                                 jsl3_new[g] = {};
@@ -194,6 +220,38 @@ var Secureboot = function() {
         });
 
         fs.writeFileSync(name, lines);
+
+        // print out coverage
+        outOfBundle = outOfBundle.map(function(f) {
+            f = String(f).trim();
+            if (!f.startsWith('//')) {
+                f = f.match(/f:'([^']+)'/)[1];
+                if (!/^(js\/(beta|vendor))|makecache|dont-deploy/.test(f)) {
+                    return f + ' (' + fs.statSync(f).size + ' bytes)';
+                }
+            }
+            return '';
+        }).filter(String).sort();
+
+        if (outOfBundle.length) {
+            console.info('Files leaved out of a bundle:\n- ' + outOfBundle.join('\n- '));
+            console.info('-- %d', outOfBundle.length);
+        }
+
+        // check for small bundles.
+        bundleFiles.forEach(function(f) {
+            var size = fs.statSync(f).size;
+            if (size < 24000) {
+                console.warn('WARNING: Small bundle generated, file "%s" of %d bytes', f, size);
+            }
+        });
+
+        // check for files included more than once.
+        for (var k in seenFiles) {
+            if (seenFiles[k] > 1) {
+                console.error('ERROR The file "%s" was included %d times!', k, seenFiles[k]);
+            }
+        }
     };
 
     ns.getJS = function() {
@@ -205,6 +263,11 @@ var Secureboot = function() {
     ns.getCSS = function() {
         return jsl.filter(function(f) {
             return f.f.match(/(?:css|jsx)$/);
+        }).map(function(f) {
+            if (usePostCSS && String(f.f).startsWith('css/')) {
+                f.f = 'build/' + f.f;
+            }
+            return f;
         });
     };
 
@@ -248,16 +311,10 @@ var Secureboot = function() {
     };
 
     ns.getGroups = function(header) {
-        var groups = this.getJSGroups();
-        var css = this.getCSSGroups();
-        for (var i in css) {
-            if (css.hasOwnProperty(i)) {
-                groups[i] = css[i];
-            }
-        }
+        const groups = Object.assign({}, this.getJSGroups(), this.getCSSGroups());
+
         if (header) {
             var lines = [];
-            var tmp = [];
             var file;
             var i = 0;
             for (var e in groups) {
@@ -269,15 +326,7 @@ var Secureboot = function() {
                     groups[e].unshift(file);
                 }
             }
-            setTimeout(function() {
-                console.error('delete');
-                tmp.forEach(function(file) {
-                    console.error(file);
-                    fs.unlink(file);
-                });
-            }, 100);
         }
-
 
         return groups;
     };
@@ -291,9 +340,13 @@ var Secureboot = function() {
             if (f.f == "\0.jsx") {
                 groups.push(null);
                 size = 0;
-            } else {
+            }
+            else if (f.j == 5) {
+                groups.push(null);
+                size = 0;
+            }else {
                 // if (f.f === 'sjcl.js' && ++sjcl) fileLimit = 78e4; // bigger files for embed player
-                var fsize = fs.statSync(f.f)['size'];
+                var fsize = f.f.startsWith('js/mobile/') ? 0 : fs.statSync(f.f)['size'];
                 if (size + fsize > fileLimit) {
                     size = 0;
                     groups.push(null);
@@ -321,28 +374,76 @@ var Secureboot = function() {
     return ns;
 }();
 
+const log = console.log;
+console.log = function(s) {
+    if (s && s[0] !== '>') {
+        log.apply(console, arguments);
+    }
+};
 
 module.exports = function(grunt) {
     // Project configuration.
     grunt.initConfig({
         pkg: grunt.file.readJSON('package.json'),
-        uglify: {
-            prod: {
-                options: {
-                    sourceMap: true,
-                },
-                files: Secureboot.getJSGroups(),
-            }
+        postcss: {
+            options: {
+                safe: true,
+                failOnError: true,
+                sequential: true,
+                processors: [
+                    require('cssnano')({
+                        preset: [
+                            'default', {
+                                svgo: false,
+                                discardDuplicates: false,
+                                normalizeWhitespace: false,
+                            }
+                        ]
+                    }),
+                    (css) => {
+                        css.walk((node) => {
+                            const {type} = node;
+
+                            if (type === 'decl') {
+                                if (node.raws.before) {
+                                    const prev = node.prev();
+
+                                    if (prev && prev.type !== 'rule') {
+                                        node.raws.before = node.raws.before.replace(/;/g, '');
+                                    }
+                                    node.raws.before = node.raws.before.replace(/[\t ]+/g, '\t');
+                                }
+
+                                node.raws.between = ':';
+                                node.raws.semicolon = false;
+                            }
+                            else if (type === 'rule' || type === 'atrule') {
+                                node.raws.after = '\n';
+                                node.raws.before = '\n';
+                                node.raws.between = '';
+                                node.raws.semicolon = false;
+                            }
+                        });
+                    }
+                ]
+            },
+            dist: {expand: true, flatten: true, src: ['css/*.css', 'css/**/*.css'], dest: 'build/css/'}
         },
         concat: {
             prod: {
                 options: {
                     sourceMap: false,
                     process: function(content, filename) {
+                        if (String(filename).endsWith('.css')) {
+                            content = content.replace(/(?:\.\.\/)+/g, '../');
+                        }
                         return content.trim() + "\n";
                     }
                 },
-                files: Secureboot.getGroups(true),
+                get files() {
+                    console.log = log;
+                    return Secureboot.getGroups(true);
+                },
             }
         },
         htmlmin: {
@@ -372,17 +473,23 @@ module.exports = function(grunt) {
     });
 
     // Load the plugin that provides the "uglify" task.
-    grunt.loadNpmTasks('grunt-contrib-uglify');
     grunt.loadNpmTasks('grunt-htmljson');
-    grunt.loadNpmTasks('grunt-contrib-htmlmin');
     grunt.loadNpmTasks('grunt-contrib-concat');
 
-
     // Default task(s).
+    var tasks = ['concat', 'htmljson', 'secureboot'];
+    if (useHtmlMin) {
+        grunt.loadNpmTasks('grunt-contrib-htmlmin');
+        tasks.unshift('htmlmin');
+    }
+    if (usePostCSS) {
+        grunt.loadNpmTasks('@lodder/grunt-postcss');
+        tasks.unshift('postcss');
+    }
     grunt.registerTask('secureboot', function() {
         console.log("Write secureboot.prod.js");
         Secureboot.rewrite("secureboot.prod.js");
     });
-    grunt.registerTask('default', ['htmlmin', 'concat', 'htmljson', 'secureboot']);
-    grunt.registerTask('prod', ['htmlmin', 'htmljson', 'uglify', 'secureboot']);
+    grunt.registerTask('default', tasks);
+    grunt.registerTask('prod', tasks); // <- remove me if unused
 };

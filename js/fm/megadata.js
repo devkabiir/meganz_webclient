@@ -9,7 +9,7 @@
  * @property {String} u
  *     Mega user handle as base64 URL encoded 88-bit value.
  * @property {Number} c
- *     Contact access right/status: 2: owner, 1: active contact, 0: otherwise.
+ *     Contact access right/status: 2: owner, 1: active contact, 0: inactive/deleted.
  * @property {String} m
  *     Email address of the contact.
  * @property {Array} m2
@@ -19,6 +19,10 @@
  *     If First and Last name in user profile are undefined holds users email.
  *     It's used at least like index field for search contacts in share dialog.
  *     It combines `firstname` and `lastname` of user attributes.
+ * @property {String} nickname
+ *     A custom nickname for a contact, it won't be set for the current user.
+ *     This information comes from a private encrypted attribute !*>alias which
+ *     stores all contact nicknames for the user.
  * @property {String} h
  *     Holds user handle, value equal to 'u' param. Used only when synching with
  *     M.d, deeply rooted in code. should not be removed.
@@ -48,9 +52,12 @@
  *     activity.
  */
 
-Object.defineProperty(this, 'MEGA_USER_STRUCT', {
-    value: Object.freeze({
+mBroadcaster.once('boot_done', function() {
+    'use strict';
+
+    var struct = {
         "u": undefined,
+        "b": undefined,
         "c": undefined,
         "m": undefined,
         "m2": undefined,
@@ -58,16 +65,20 @@ Object.defineProperty(this, 'MEGA_USER_STRUCT', {
         "h": undefined,
         "t": undefined,
         "p": undefined,
-        "presence": undefined,
+        "presence": 'unavailable',
         "presenceMtime": undefined,
-        "displayColor": NaN,
         "shortName": "",
         "firstName": "",
         "lastName": "",
+        "nickname": "",
         "ts": undefined,
+        "ats": undefined,
         "rTimeStamp": undefined,
-        "avatar": undefined
-    })
+        "avatar": undefined,
+        "lastGreen": undefined
+    };
+
+    Object.defineProperty(window, 'MEGA_USER_STRUCT', {value: Object.freeze(Object.setPrototypeOf(struct, null))});
 });
 
 
@@ -100,8 +111,13 @@ function MegaData() {
                 }
                 return maf;
             }
-        })
+        });
     })(this);
+
+    // Initialize affiliate dataset on-demand
+    lazy(this, 'affiliate', function() {
+        return new AffiliateData();
+    });
 
     this.sortRules = {
         'name': this.sortByName.bind(this),
@@ -118,7 +134,9 @@ function MegaData() {
         'status': this.sortByStatus.bind(this),
         'fav': this.sortByFav.bind(this),
         'email': this.sortByEmail.bind(this),
-        'label': this.sortByLabel.bind(this)
+        'label': this.sortByLabel.bind(this),
+        'sharedwith': this.sortBySharedWith.bind(this),
+        'versions': this.sortByVersion.bind(this)
     };
 
     /** EventListener interface. */
@@ -143,14 +161,92 @@ function MegaData() {
     };
 
     if (is_mobile) {
+        /* eslint-disable no-useless-concat */
         var dummy = function() {
             return MegaPromise.resolve();
         };
-        // this['check' + 'StorageQuota'] = dummy;
-        this['show' + 'OverStorageQuota'] = dummy;
         this['init' + 'UIKeyEvents'] = dummy;
         this['abort' + 'Transfers'] = dummy;
         this['search' + 'Path'] = dummy;
+
+        this['initFile' + 'ManagerUI'] = function() {
+            if (typeof window.InitFileDrag === 'function') {
+                window.InitFileDrag();
+                delete window.InitFileDrag;
+            }
+        };
+        mobile.uploadOverlay.shim(this);
+
+        this['addWeb' + 'Download'] = function(nodes) {
+            // @see filesystem.js/abortAndStartOver
+            if (d) {
+                console.assert(Array.isArray(nodes) && nodes.length === 1 && arguments.length === 1, 'bogus usage');
+            }
+            M.resetUploadDownload();
+            later(function() {
+                mobile.downloadOverlay.startDownload(nodes[0]);
+            });
+        };
+
+        // this['check' + 'StorageQuota'] = dummy;
+        this['show' + 'OverStorageQuota'] = function(data) {
+            if (data && (data === EPAYWALL || (data.isFull && Object(u_attr).uspw))) {
+                data = Object.create(null);
+                data.isFull = data.isAlmostFull = data.EPAYWALL = true;
+            }
+            if (data.isAlmostFull) {
+                var ab = mobile.alertBanner;
+                var isPro = Object(u_attr).p;
+
+                var action = function() {
+                    if (data.EPAYWALL) {
+                        if (!M.account) {
+                            M.accountData(function() {
+                                action();
+                            });
+                            return;
+                        }
+                        var overlayTexts = odqPaywallDialogTexts(u_attr || {}, M.account);
+                        ab.showError(overlayTexts.fmBannerText);
+                        mobile.overStorageQuotaOverlay.show(overlayTexts.dialogText, overlayTexts.dlgFooterText);
+                        ab.onTap(function() {
+                            loadSubPage('pro');
+                        });
+                    }
+                    else {
+                        var mStoragePossible = bytesToSize(pro.maxPlan[2] * 1024 * 1024 * 1024, 0) +
+                            ' (' + pro.maxPlan[2] + ' ' + l[17696] + ')';
+
+                        var msg = isPro ? l[22667].replace('%1', mStoragePossible) :
+                            l[22671].replace('%1', mStoragePossible);
+
+                        if (data.isFull) {
+
+                            ab.showError(msg); // Your account is full
+
+                            mobile.overStorageQuotaOverlay.show(msg);
+                        }
+                        else {
+                            ab.showWarning(isPro ? l[22668].replace('%1', mStoragePossible) :
+                                l[22672].replace('%1', bytesToSize(pro.maxPlan[2] * 1024 * 1024 * 1024, 0))
+                                    .replace('%2', bytesToSize(pro.maxPlan[3] * 1024 * 1024 * 1024, 0))
+                            ); // Your account is almost full.
+                        }
+                        // When the banner is taped, show pro page.
+                        ab.onTap(function() {
+                            loadSubPage('pro');
+                        });
+                    }
+                };
+
+                if (!pro.membershipPlans || !pro.membershipPlans.length) {
+                    pro.loadMembershipPlans(action);
+                }
+                else {
+                    action();
+                }
+            }
+        };
 
         this['render' + 'Main'] = function(aUpdate) {
             if (aUpdate) {
@@ -162,9 +258,7 @@ function MegaData() {
             return true;
         };
 
-        this['ul' + 'progress'] = function() {
-            return mobile.uploadOverlay.showUploadProgress.apply(mobile.uploadOverlay, arguments);
-        };
+        this['updFile' + 'ManagerUI'] = mobile.updFileManagerUI;
 
         var tf = [
             "renderTree", "buildtree", "initTreePanelSorting", "treeSearchUI",

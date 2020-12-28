@@ -45,7 +45,7 @@
             localStorage.enableAllPaymentGateways = '1';
         }
         else if (window.location.search.indexOf('apipath=prod') > -1) {
-            localStorage.apipath = 'https://eu.api.mega.co.nz/';
+            localStorage.apipath = 'https://g.api.mega.co.nz/';
         }
         else if (window.location.search.indexOf('apipath=sandbox4') > -1) {
             localStorage.apipath = 'https://api-sandbox4.developers.mega.co.nz/';
@@ -72,6 +72,11 @@
         }
         else if (window.location.search.indexOf('twofactor=0') > -1) {
             localStorage.twoFactorAuthEnabled = '0';
+        }
+
+        // SMS debug mode for testing the same phone number multiple times
+        if (window.location.search.indexOf('sms=1') > -1) {
+            localStorage.smsDebugMode = '1';
         }
 
         // Use the beta CMS if requested
@@ -104,7 +109,7 @@
         localStorage.dd = '1';
 
         // Set the static path
-        localStorage.staticpath = window.location.protocol + "//" + devhost + pathSuffix + "/";
+        //localStorage.staticpath = window.location.protocol + "//" + devhost + pathSuffix + "/";
 
         // Turn on full debugging.
         localStorage.d = '1'; // Using console.*
@@ -116,6 +121,11 @@
         }
         if (window.location.search.indexOf('jj=2') > -1) {
             localStorage.jjnocache = '1';
+        }
+
+        if (window.location.search.indexOf('contentcheck=') > -1) {
+            sessionStorage.dbgContentCheck = '1';
+            delete localStorage.jj;
         }
 
         // localStorage.contextmenu = '1';

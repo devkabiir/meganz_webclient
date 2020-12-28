@@ -415,6 +415,11 @@ ZipEntryIO.prototype.setCredentials = function() {
 };
 
 ZipEntryIO.prototype.push = function(obj) {
+    'use strict';
+    if (oIsFrozen(this.zipWriter)) {
+        console.warn('The ZipWriter instance have already been destroyed.', this);
+        return;
+    }
     this.queued++;
     obj.zfile = this;
     this.zipWriter.zwriter.push(obj, function() {
@@ -435,6 +440,7 @@ function ZipWriter(dl_id, dl) {
     this.dirData = [];
     this.offset = 0;
     this.file_offset = 0;
+    this.eblocked = 0;
 
     if ((dlMethod === FileSystemAPI) || ((typeof FirefoxIO !== 'undefined') && dlMethod === FirefoxIO)) {
         this.io = new CacheIO(dl_id, dl);
@@ -611,6 +617,23 @@ ZipWriter.prototype.finalize_file = function() {
 };
 
 ZipWriter.prototype._eof = function() {
+
+    'use strict';
+
+    var msg;
+
+    if (this.eblocked === this.nfiles) {
+        msg = this.nfiles === 1 ? l[20818] : l[20819];
+        msgDialog('warninga', 'Warning', escapeHTML(msg));
+        this.dl.onDownloadError(this.dl, EBLOCKED);
+        this.destroy();
+        return false;
+    }
+    else if (this.eblocked) {
+        msg = l[20820].replace('%1', this.nfiles - this.eblocked).replace('%2', this.nfiles);
+        msgDialog('warninga', 'Warning', escapeHTML(msg));
+    }
+
     this.dl.onBeforeDownloadComplete(this.dl.pos);
     this.io.download(this.dl.zipname, '');
     this.dl.onDownloadComplete(this.dl);

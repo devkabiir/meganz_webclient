@@ -1,26 +1,35 @@
 var React = require("react");
 var ReactDOM = require("react-dom");
-var utils = require("./utils.jsx");
-var MegaRenderMixin = require("../stores/mixins.js").MegaRenderMixin;
-var Tooltips = require("./tooltips.jsx");
-var Forms = require("./forms.jsx");
+import utils  from "./utils.jsx";
+import {MegaRenderMixin} from "../stores/mixins.js";
+import Tooltips from "./tooltips.jsx";
+import Forms from "./forms.jsx";
 
 var ContactsUI = require('./../chat/ui/contacts.jsx');
 
-var ExtraFooterElement = React.createClass({
+export class ExtraFooterElement extends MegaRenderMixin {
     render() {
         return this.props.children;
     }
-});
+};
 
-var ModalDialog = React.createClass({
-    mixins: [MegaRenderMixin],
-    getDefaultProps() {
-        return {
-            'hideable': true
-        }
-    },
-    componentDidMount: function() {
+class ModalDialog extends MegaRenderMixin {
+    static defaultProps = {
+        'hideable': true,
+        'closeDlgOnClickOverlay': true,
+        'showSelectedNum': false,
+        'selectedNum': 0
+    };
+
+    constructor (props) {
+        super(props);
+        this.onBlur = this.onBlur.bind(this);
+        this.onCloseClicked = this.onCloseClicked.bind(this);
+        this.onPopupDidMount = this.onPopupDidMount.bind(this);
+    }
+
+    componentDidMount() {
+        super.componentDidMount();
         var self = this;
         $(document.body).addClass('overlayed');
         $('.fm-dialog-overlay').removeClass('hidden');
@@ -29,74 +38,80 @@ var ModalDialog = React.createClass({
         $('textarea:focus').trigger("blur");
 
 
-        document.querySelector('.conversationsApp').removeEventListener('click', this.onBlur);
-        document.querySelector('.conversationsApp').addEventListener('click', this.onBlur);
+        var convApp = document.querySelector('.conversationsApp');
+        if (convApp) {
+            convApp.removeEventListener('click', this.onBlur);
+            convApp.addEventListener('click', this.onBlur);
+        }
+
+
+        $('.fm-modal-dialog').rebind('click.modalDialogOv' + this.getUniqueId(), function(e) {
+            if ($(e.target).is('.fm-modal-dialog')) {
+                self.onBlur();
+            }
+        });
 
         $(document).rebind('keyup.modalDialog' + self.getUniqueId(), function(e) {
             if (e.keyCode == 27) { // escape key maps to keycode `27`
                 self.onBlur();
             }
         });
-        $(window).rebind('resize.modalDialog' + self.getUniqueId(), function() {
-            self.onResize();
-        });
-    },
-    onBlur: function(e) {
-        var $element = $(ReactDOM.findDOMNode(this));
 
-        if(
+        $('.fm-dialog-overlay').rebind('click.modalDialog' + self.getUniqueId(), function() {
+            if (self.props.closeDlgOnClickOverlay) {
+                self.onBlur();
+            }
+            return false;
+        });
+    }
+    onBlur(e) {
+        var $element = $(this.findDOMNode());
+
+        if (
             (!e || !$(e.target).closest(".fm-dialog").is($element))
         ) {
-            document.querySelector('.conversationsApp').removeEventListener('click', this.onBlur);
+            var convApp = document.querySelector('.conversationsApp');
+            if (convApp) {
+                convApp.removeEventListener('click', this.onBlur);
+            }
             this.onCloseClicked();
         }
-
-
-    },
-    componentWillUnmount: function() {
-        document.querySelector('.conversationsApp').removeEventListener('click', this.onBlur);
+    }
+    componentWillUnmount() {
+        super.componentWillUnmount();
+        var convApp = document.querySelector('.conversationsApp');
+        if (convApp) {
+            convApp.removeEventListener('click', this.onBlur);
+        }
         $(document).off('keyup.modalDialog' + this.getUniqueId());
+        $(this.domNode).off('dialog-closed.modalDialog' + this.getUniqueId());
         $(document.body).removeClass('overlayed');
         $('.fm-dialog-overlay').addClass('hidden');
-        $(window).off('resize.modalDialog' + this.getUniqueId());
-
-    },
-    onCloseClicked: function(e) {
+        $('.fm-dialog-overlay').off('click.modalDialog' + this.getUniqueId());
+    }
+    onCloseClicked() {
         var self = this;
 
         if (self.props.onClose) {
             self.props.onClose(self);
         }
-    },
-    onResize: function() {
-        if (!this.domNode) {
-            return;
-        }
-
-        // always center modal dialogs after they are mounted
-        $(this.domNode)
-            .css({
-                'margin': 'auto'
-            })
-            .position({
-                of: $(document.body)
-            });
-    },
-    onPopupDidMount: function(elem) {
+    }
+    onPopupDidMount(elem) {
         this.domNode = elem;
 
-        this.onResize();
+        $(elem).rebind('dialog-closed.modalDialog' + this.getUniqueId(), () => this.onCloseClicked());
 
         if (this.props.popupDidMount) {
             // bubble up...
             this.props.popupDidMount(elem);
         }
-    },
-    render: function() {
+    }
+    render() {
         var self = this;
 
         var classes = "fm-dialog " + self.props.className;
 
+        var selectedNumEle = null;
         var footer = null;
 
         var extraFooterElements = [];
@@ -110,7 +125,7 @@ var ModalDialog = React.createClass({
             }
 
             if (
-                child.type.displayName === 'ExtraFooterElement'
+                child.type.name === 'ExtraFooterElement'
             ) {
                 extraFooterElements.push(React.cloneElement(child, {
                     key: x++
@@ -125,34 +140,52 @@ var ModalDialog = React.createClass({
             }
         }.bind(this));
 
+        if (self.props.showSelectedNum && self.props.selectedNum) {
+            selectedNumEle = <div className="selected-num"><span>{self.props.selectedNum}</span></div>;
+        }
 
-        if(self.props.buttons) {
+        if (self.props.buttons) {
             var buttons = [];
-            self.props.buttons.forEach(function(v) {
-                buttons.push(
-                    <a href="javascript:;" className={"default-white-button right" + (v.className ? " " + v.className : "")} onClick={(e) => {
-                        if (v.onClick) {
-                            v.onClick(e, self);
-                        }
-                    }} key={v.key}>
-                        {v.label}
-                    </a>
-                );
+            self.props.buttons.forEach(function(v, i) {
+                if (v) {
+                    buttons.push(
+                        <a
+                            className={
+                                (v.defaultClassname ? v.defaultClassname : "default-white-button right") +
+                                (v.className ? " " + v.className : "")
+                            }
+                            onClick={(e) => {
+                                if ($(e.target).is(".disabled")) {
+                                    return false;
+                                }
+                                if (v.onClick) {
+                                    v.onClick(e, self);
+                                }
+                            }} key={v.key + i}>
+                            {v.iconBefore ? <i className={v.iconBefore} /> : null}
+                            {v.label}
+                            {v.iconAfter ? <i className={v.iconAfter} /> : null}
+                        </a>
+                    );
+                }
             });
 
             footer = <div className="fm-dialog-footer white">
                 {extraFooterElements}
-                {buttons}
+                <div className="footer-buttons">
+                    {buttons}
+                </div>
                 <div className="clear"></div>
             </div>;
         }
 
         return (
-            <utils.RenderTo element={document.body} className={classes} popupDidMount={this.onPopupDidMount}>
-                <div>
+            <utils.RenderTo element={document.body} className="fm-modal-dialog" popupDidMount={this.onPopupDidMount}>
+                <div className={classes}>
                     <div className="fm-dialog-close" onClick={self.onCloseClicked}></div>
                     {
-                        self.props.title ? <div className="fm-dialog-title">{self.props.title}</div> : null
+                        self.props.title ?
+                            <div className="fm-dialog-title">{self.props.title}{selectedNumEle}</div> : null
                     }
 
                     <div className="fm-dialog-content">
@@ -164,43 +197,43 @@ var ModalDialog = React.createClass({
             </utils.RenderTo>
         );
     }
-});
+};
 
 
 
-var SelectContactDialog = React.createClass({
-    mixins: [MegaRenderMixin],
-    clickTime: 0,
-    getDefaultProps: function() {
-        return {
-            'selectLabel': __(l[1940]),
-            'cancelLabel': __(l[82]),
-            'hideable': true
-        }
-    },
-    getInitialState: function() {
-        return {
+class SelectContactDialog extends MegaRenderMixin {
+    static clickTime = 0;
+    static defaultProps = {
+        'selectLabel': l[1940],
+        'cancelLabel': l[82],
+        'hideable': true
+    };
+
+    constructor (props) {
+        super(props);
+        this.state = {
             'selected': this.props.selected ? this.props.selected : []
-        }
-    },
-    onSelected: function(nodes) {
+        };
+
+        this.onSelected = this.onSelected.bind(this);
+    }
+    onSelected(nodes) {
         this.setState({'selected': nodes});
         if (this.props.onSelected) {
             this.props.onSelected(nodes);
         }
-    },
-    onSelectClicked: function() {
+    }
+    onSelectClicked() {
         this.props.onSelectClicked();
-    },
-    render: function() {
+    }
+    render() {
         var self = this;
 
-        var classes = "send-contact " + self.props.className;
-
+        var classes = "send-contact contrast small-footer " + self.props.className;
 
         return (
             <ModalDialog
-                title={__(l[8628])}
+                title={l[8628]}
                 className={classes}
                 selected={self.state.selected}
                 onClose={() => {
@@ -210,6 +243,7 @@ var SelectContactDialog = React.createClass({
                         {
                             "label": self.props.selectLabel,
                             "key": "select",
+                            "defaultClassname": "default-grey-button lato right",
                             "className": self.state.selected.length === 0 ? "disabled" : null,
                             "onClick": function(e) {
                                 if (self.state.selected.length > 0) {
@@ -225,6 +259,7 @@ var SelectContactDialog = React.createClass({
                         {
                             "label": self.props.cancelLabel,
                             "key": "cancel",
+                            "defaultClassname": "link-button lato left",
                             "onClick": function(e) {
                                 self.props.onClose(self);
                                 e.preventDefault();
@@ -234,36 +269,36 @@ var SelectContactDialog = React.createClass({
             ]}>
             <ContactsUI.ContactPickerWidget
                 megaChat={self.props.megaChat}
-                contacts={self.props.contacts}
                 exclude={self.props.exclude}
+                selectableContacts="true"
                 onSelectDone={self.props.onSelectClicked}
                 onSelected={self.onSelected}
                 selected={self.state.selected}
+                contacts={M.u}
                 headerClasses="left-aligned"
+                multiple={true}
                 />
             </ModalDialog>
         );
     }
-});
+};
 
-var ConfirmDialog = React.createClass({
-    mixins: [MegaRenderMixin],
-    getDefaultProps: function() {
-        return {
-            'confirmLabel': __(l[6826]),
-            'cancelLabel': __(l[82]),
-            'dontShowAgainCheckbox': true,
-            'hideable': true
-        }
-    },
-    getInitialState: function() {
-        return {
-        }
-    },
-    unbindEvents: function() {
+class ConfirmDialog extends MegaRenderMixin {
+    static defaultProps = {
+        'confirmLabel': l[6826],
+        'cancelLabel': l[82],
+        'dontShowAgainCheckbox': true,
+        'hideable': true
+    };
+    constructor (props) {
+        super(props);
+        this._wasAutoConfirmed = undefined;
+    }
+    unbindEvents() {
         $(document).off('keyup.confirmDialog' + this.getUniqueId());
-    },
-    componentDidMount: function() {
+    }
+    componentDidMount() {
+        super.componentDidMount();
         var self = this;
 
         // since ModalDialogs can be opened in other keyup (on enter) event handlers THIS is required to be delayed a
@@ -287,22 +322,28 @@ var ConfirmDialog = React.createClass({
                 }
             });
         }, 75);
-    },
-    componentWillUnmount: function() {
+    }
+    componentWillUnmount() {
+        super.componentWillUnmount();
         var self = this;
         self.unbindEvents();
-    },
-    onConfirmClicked: function() {
+        delete this._wasAutoConfirmed;
+    }
+    onConfirmClicked() {
         this.unbindEvents();
         if (this.props.onConfirmClicked) {
             this.props.onConfirmClicked();
         }
-    },
-    render: function() {
+    }
+    render() {
         var self = this;
 
         if (self.props.dontShowAgainCheckbox && mega.config.get('confirmModal_' + self.props.name) === true)  {
+            if (this._wasAutoConfirmed) {
+                return null;
+            }
             if (this.props.onConfirmClicked) {
+                this._wasAutoConfirmed = 1;
                 // this would most likely cause a .setState, so it should be done in a separate cycle/call stack.
                 setTimeout(function() {
                     self.unbindEvents();
@@ -370,11 +411,10 @@ var ConfirmDialog = React.createClass({
             </ModalDialog>
         );
     }
-});
+};
 
-module.exports = window.ModalDialogUI = {
+export default {
     ModalDialog,
     SelectContactDialog,
-    ConfirmDialog,
-    ExtraFooterElement
+    ConfirmDialog
 };

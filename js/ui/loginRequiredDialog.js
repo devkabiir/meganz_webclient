@@ -11,7 +11,7 @@
             });
         }
         else if (options.skipInitialDialog) {
-            showLoginDialog(promise);
+            showLoginDialog(promise, options);
         }
         else {
             var icon;
@@ -36,6 +36,7 @@
                 $('.fm-dialog-title', this.$dialog)
                     .text(this.options.title);
 
+
                 // custom buttons, because of the styling
                 $('.fm-notification-info', this.$dialog)
                     .safeHTML('<p>@@</p>', options.textContent || l[7679]);
@@ -46,7 +47,7 @@
                 $('.default-white-button.pro-login', this.$dialog)
                     .rebind('click.loginrequired', function() {
                         loginRequiredDialog.hide();
-                        showLoginDialog(promise);
+                        showLoginDialog(promise, options);
                         promise = undefined;
                         return false;
                     });
@@ -75,17 +76,45 @@
         return promise;
     }
 
-    function showLoginDialog(aPromise) {
+    function showLoginDialog(aPromise, options) {
         var $dialog = $('.fm-dialog.pro-login-dialog');
-        var $inputs = $dialog.find('.account.input-wrapper input');
+        var $inputs = $dialog.find('input');
         var $button = $dialog.find('.big-red-button');
 
-        M.safeShowDialog('pro-login-dialog', function() {
-
-            $dialog.css({
-                'margin-left': -1 * ($dialog.outerWidth() / 2),
-                'margin-top': -1 * ($dialog.outerHeight() / 2)
+        if (M.chat) {
+            $('.fm-dialog-subheading', $dialog).removeClass('hidden');
+            $('.fm-dialog-subheading > a', $dialog).rebind('click.doSignup', function() {
+                closeDialog();
+                megaChat.loginOrRegisterBeforeJoining(undefined, true, false);
             });
+        }
+        else if (options.showRegister) {
+            $('.fm-dialog-subheading', $dialog).removeClass('hidden');
+            $('.fm-dialog-subheading > a', $dialog).rebind('click.doSignup', function() {
+                closeDialog();
+                mega.ui.showRegisterDialog({
+                    showLogin: true,
+                    body: options.showRegister,
+                    onAccountCreated: function(gotLoggedIn, accountData) {
+                        if (gotLoggedIn) {
+                            completeLogin(u_type);
+                        }
+                        else {
+                            security.register.cacheRegistrationData(accountData);
+
+                            if (!options.noSignupLinkDialog) {
+                                mega.ui.sendSignupLinkDialog(accountData);
+                            }
+                        }
+                    }
+                });
+            });
+        }
+        else {
+            $('.fm-dialog-subheading', $dialog).addClass('hidden');
+        }
+
+        M.safeShowDialog('pro-login-dialog', function() {
 
             // Init inputs events
             accountinputs.init($dialog);
@@ -102,6 +131,9 @@
         $inputs.val('');
 
         $inputs.rebind('keydown', function(e) {
+
+            $inputs.removeClass('errored').parent().removeClass('error');
+
             if (e.keyCode == 13) {
                 doLogin($dialog, aPromise);
             }
@@ -133,29 +165,25 @@
         // Save the promise for use in the completeLogin function
         completePromise = aPromise;
 
-        var $emailContainer = $dialog.find('.account.input-wrapper.email');
-        var $passwordContainer = $dialog.find('.account.input-wrapper.password');
         var $formWrapper = $dialog.find('form');
-        var $emailInput = $emailContainer.find('input');
-        var $passwordInput = $passwordContainer.find('input');
+        var $emailInput = $dialog.find('#login-name3');
+        var $passwordInput = $dialog.find('#login-password3');
         var $rememberMeCheckbox = $dialog.find('.login-check input');
 
-        var email = $emailInput.val();
+        var email = $emailInput.val().trim();
         var password = $passwordInput.val();
         var rememberMe = $rememberMeCheckbox.is('.checkboxOn');  // ToDo check if correct
         var twoFactorPin = null;
 
-        if (email === '' || checkMail(email)) {
-            $emailContainer.addClass('incorrect');
-            $emailInput.val('');
+        if (email === '' || !isValidEmail(email)) {
+            $emailInput.megaInputsShowError(l[141]);
             $emailInput.focus();
             loadingDialog.hide();
 
             return false;
         }
         else if (password === '') {
-            $emailContainer.removeClass('incorrect');
-            $formWrapper.addClass('both-incorrect-inputs');
+            $passwordInput.megaInputsShowError(l[1791]);
             loadingDialog.hide();
 
             return false;
@@ -197,12 +225,10 @@
      */
     function completeLogin(result) {
         'use strict';
-    
+
         var $formWrapper = $('.pro-login-dialog form');
-        var $emailContainer = $formWrapper.find('.account.input-wrapper.email');
-        var $emailField = $emailContainer.find('input');
-        var $passwordContainer = $formWrapper.find('.account.input-wrapper.password');
-        var $passwordField = $passwordContainer.find('input');
+        var $emailInput = $formWrapper.find('#login-name3');
+        var $passwordInput = $formWrapper.find('#login-password3');
 
         loadingDialog.hide();
 
@@ -219,6 +245,15 @@
             u_checked = true;
 
             if (u_type === 3) {
+                onIdle(topmenuUI);
+                console.assert($.dialog === 'pro-login-dialog', 'Uhm, unexpected dialog... ' + $.dialog);
+                if ($.dialog === 'pro-login-dialog') {
+                    closeDialog();
+                }
+                if (window.n_h) {
+                    // set new u_sid under folderlinks
+                    api_setfolder(n_h);
+                }
                 completePromise.resolve();
             }
             else {
@@ -226,16 +261,16 @@
                 completePromise.reject();
             }
 
-            $emailField.val('');
-            $passwordField.val('');
+            $emailInput.val('');
+            $passwordInput.val('');
         }
         else {
             // Close the 2FA dialog for a generic error
             twofactor.loginDialog.closeDialog();
 
-            $emailContainer.removeClass('incorrect');
-            $formWrapper.addClass('both-incorrect-inputs');
-            $passwordField.focus();
+            $emailInput.megaInputsShowError();
+            $passwordInput.megaInputsShowError(l[7431]);
+            $passwordInput.focus();
         }
     }
 

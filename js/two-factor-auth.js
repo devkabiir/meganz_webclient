@@ -21,21 +21,7 @@ var twofactor = {
             return (localStorage.getItem('twoFactorAuthEnabled') === '1') ? true : false;
         }
 
-        // Otherwise if logged in, use the flag returned and set from the 'ug' request
-        else if (typeof u_attr !== 'undefined' && u_attr.flags.mfae) {
-            return (u_attr.flags.mfae === 1) ? true : false;
-        }
-
-        // Otherwise if not logged in, use the flag set by the 'gmf' request
-        // NB: Probably not needed as all 2FA enabling/disabling functions require the user to be logged in
-        else if (typeof u_attr === 'undefined' && typeof mega.apiMiscFlags.mfae !== 'undefined') {
-            return (mega.apiMiscFlags.mfae === 1) ? true : false;
-        }
-
-        // Otherwise default to disabled
-        else {
-            return false;
-        }
+        return mega.flags.mfae;
     },
 
     /**
@@ -47,9 +33,13 @@ var twofactor = {
 
         'use strict';
 
+        loadingDialog.show();
+
         // Make Multi-Factor Auth Get request
         api_req({ a: 'mfag', e: u_attr.email }, {
             callback: function(result) {
+
+                loadingDialog.hide();
 
                 // Pass the result to the callback
                 if (result === 1) {
@@ -129,6 +119,9 @@ twofactor.loginDialog = {
                 $submitButton.addClass('active');
             }
         });
+
+        // Put the focus in the PIN input field
+        $pinCodeInput.trigger('focus');
     },
 
     /**
@@ -152,7 +145,7 @@ twofactor.loginDialog = {
             var pinCode = $.trim($pinCodeInput.val());
 
             // Get cached data from the login form
-            var email = security.login.email;
+            var email = security.login.email.trim();
             var password = security.login.password;
             var rememberMe = security.login.rememberMe;
 
@@ -223,6 +216,9 @@ twofactor.loginDialog = {
         $submitButton.removeClass('loading');
         $warningText.removeClass('hidden');
         $pinCodeInput.val('');
+
+        // Put the focus back in the PIN input field
+        $pinCodeInput.trigger('focus');
     },
 
     /**
@@ -285,6 +281,7 @@ twofactor.account = {
         'use strict';
 
         var $twoFactorSection = $('.account.two-factor-authentication');
+        var $button = $twoFactorSection.find('.enable-disable-2fa-button');
 
         // Check if 2FA is actually enabled on the API for everyone
         if (twofactor.isEnabledGlobally()) {
@@ -294,14 +291,13 @@ twofactor.account = {
 
             // Check if 2FA is enabled on their account
             twofactor.isEnabledForAccount(function(result) {
-
                 // If enabled, show red button, disable PIN entry text box and Deactivate text
                 if (result) {
-                    $twoFactorSection.addClass('enabled');
+                    $button.addClass('toggle-on enabled');
                 }
                 else {
                     // Otherwise show green button and Enable text
-                    $twoFactorSection.removeClass('enabled');
+                    $button.removeClass('toggle-on enabled');
                 }
 
                 // Init the click handler now for the button now that the enabled/disabled status has been retrieved
@@ -324,10 +320,12 @@ twofactor.account = {
         $button.rebind('click', function() {
 
             // If 2FA is enabled
-            if ($accountPageTwoFactorSection.hasClass('enabled')) {
-
-                // Disable 2FA
-                twofactor.account.disableTwoFactorAuthentication();
+            if ($button.hasClass('enabled')) {
+                // Show the verify 2FA dialog to collect the user's PIN
+                twofactor.verifyActionDialog.init(function(twoFactorPin) {
+                    // Disable 2FA
+                    twofactor.account.disableTwoFactorAuthentication(twoFactorPin);
+                });
             }
             else {
                 // Setup 2FA
@@ -339,24 +337,17 @@ twofactor.account = {
     /**
      * Disable the Two Factor Authentication
      */
-    disableTwoFactorAuthentication: function() {
+    disableTwoFactorAuthentication: function(twoFactorPin) {
 
         'use strict';
-
-        // Get the Google Authenticator PIN code from the user
-        var $disablePinCodeField = $('.account.two-factor-authentication .two-factor-disable-pin');
-        var pinCode = $.trim($disablePinCodeField.val());
 
         loadingDialog.show();
 
         // Run Multi-Factor Auth Disable (mfad) request
-        api_req({ a: 'mfad', mfa: pinCode }, {
+        api_req({ a: 'mfad', mfa: twoFactorPin }, {
             callback: function(response) {
 
                 loadingDialog.hide();
-
-                // Clear the text field
-                $disablePinCodeField.val('');
 
                 // The Two-Factor has already been disabled
                 if (response === ENOENT) {
@@ -416,6 +407,8 @@ twofactor.setupDialog = {
         // Show the dialog
         this.$dialog.removeClass('hidden');
         this.$overlay.removeClass('hidden');
+
+        dialogPositioning('.two-factor-dialog.setup-two-factor');
     },
 
     /**
@@ -610,6 +603,9 @@ twofactor.verifySetupDialog = {
         // Show the dialog
         this.$dialog.removeClass('hidden');
         this.$overlay.removeClass('hidden');
+
+        // Put the focus in the PIN input field after its visible
+        this.$dialog.find('.pin-input').trigger('focus');
     },
 
     /**
@@ -667,12 +663,18 @@ twofactor.verifySetupDialog = {
         // Cache selectors
         var $pinCodeInput = this.$dialog.find('.pin-input');
         var $warningText = this.$dialog.find('.information-highlight.warning');
+        var $verifyButton = this.$dialog.find('.next-button');
 
         // On keyup or clicking out of the text field
-        $pinCodeInput.rebind('keyup blur', function() {
+        $pinCodeInput.rebind('keyup blur', function(event) {
 
             // Hide previous warnings for incorrect PIN codes
             $warningText.addClass('hidden');
+
+            // If Enter key is pressed, verify the code
+            if (event.keyCode === 13) {
+                $verifyButton.trigger('click');
+            }
         });
     },
 
@@ -683,8 +685,10 @@ twofactor.verifySetupDialog = {
 
         'use strict';
 
+        var $backButton = this.$dialog.find('.back-button');
+
         // On button click
-        this.$dialog.find('.back-button').rebind('click', function() {
+        $backButton.removeClass('disabled').rebind('click', function() {
 
             // Don't let them go back if they already activated 2FA, they need to go forward
             if ($(this).hasClass('disabled')) {
@@ -704,7 +708,7 @@ twofactor.verifySetupDialog = {
         'use strict';
 
         // Cache selectors
-        var $pinCode = this.$dialog.find('.pin-input');
+        var $pinCodeInput = this.$dialog.find('.pin-input');
         var $backButton = this.$dialog.find('.back-button');
         var $closeButton = this.$dialog.find('.fm-dialog-close');
         var $verifyButton = this.$dialog.find('.next-button');
@@ -721,7 +725,7 @@ twofactor.verifySetupDialog = {
             if ($successText.hasClass('hidden')) {
 
                 // Get the Google Authenticator PIN code from the user
-                var pinCode = $.trim($pinCode.val());
+                var pinCode = $.trim($pinCodeInput.val());
 
                 // Run Multi-Factor Auth Setup (mfas) request
                 api_req({ a: 'mfas', mfa: pinCode }, {
@@ -740,7 +744,10 @@ twofactor.verifySetupDialog = {
 
                             // If there was an error, show message that the code was incorrect and clear the text field
                             $warningText.removeClass('hidden');
-                            $pinCode.val('');
+                            $pinCodeInput.val('');
+
+                            // Put the focus back in the PIN input field
+                            $pinCodeInput.trigger('focus');
                         }
                         else {
                             // Disable the back button and hide the close button to force them to go to the next step
@@ -797,35 +804,8 @@ twofactor.backupKeyDialog = {
      * Initialise the button to save the Recovery Key to a file
      */
     initSaveRecoveryKeyButton: function() {
-
         'use strict';
-
-        var $saveButton = this.$dialog.find('.recovery-key-button');
-
-        // Load the FileSaver.js library
-        M.require('filesaver')
-            .done(function() {
-
-                // On button click
-                $saveButton.rebind('click', function() {
-
-                    // Convert the key to Base64 and prompt a file save dialog
-                    var recoveryKeyBase64 = a32_to_base64(u_k);
-                    var blob = new Blob([recoveryKeyBase64], {
-                        type: "text/plain;charset=utf-8"
-                    });
-                    saveAs(blob, 'MEGA-RECOVERYKEY.txt');
-
-                    // Update other tabs
-                    mBroadcaster.sendMessage('keyexported');
-
-                    // Update UI
-                    if (!localStorage.recoverykey) {
-                        localStorage.recoverykey = 1;
-                        $('body').addClass('rk-saved');
-                    }
-                });
-            });
+        this.$dialog.find('.recovery-key-button').rebind('click', u_savekey);
     },
 
     /**
@@ -886,11 +866,15 @@ twofactor.verifyActionDialog = {
         this.resetState();
         this.initKeyupFunctionality();
         this.initSubmitButton(completeCallback);
+        this.initLostAuthenticatorDeviceButton();
         this.initCloseButton();
 
         // Show the modal dialog
         this.$dialog.removeClass('hidden');
         this.$overlay.removeClass('hidden');
+
+        // Put the focus in the PIN input field after its visible
+        this.$dialog.find('.pin-input').trigger('focus');
     },
 
     /**
@@ -950,6 +934,22 @@ twofactor.verifyActionDialog = {
 
             // Send the PIN code to the callback
             completeCallback(pinCode);
+        });
+    },
+
+    /**
+     * Initialise the Lost Authenticator Device button
+     */
+    initLostAuthenticatorDeviceButton: function() {
+
+        'use strict';
+
+        // Cache selectors
+        var $lostDeviceButton = this.$dialog.find('.lost-authenticator-button');
+
+        // On button click
+        $lostDeviceButton.rebind('click', function() {
+            M.showRecoveryKeyDialog();
         });
     },
 

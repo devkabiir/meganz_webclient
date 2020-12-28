@@ -174,6 +174,11 @@
         if (oldVal != self._counters[group]) {
             self.trigger("onCounterUpdated", [self, group, type]);
         }
+
+        if (window.megaChatIsReady) {
+            megaChat.updateSectionUnreadCount();
+        }
+
         return this;
     };
 
@@ -196,6 +201,11 @@
         if (oldVal != this._counters[group]) {
             this.trigger("onCounterUpdated", [this, group, notificationObj]);
         }
+
+        if (window.megaChatIsReady) {
+            megaChat.updateSectionUnreadCount();
+        }
+
         return this;
     };
 
@@ -221,6 +231,11 @@
         if (oldVal != this._counters[group]) {
             this.trigger("onCounterUpdated", [this, group, notificationObj]);
         }
+
+        if (window.megaChatIsReady) {
+            megaChat.updateSectionUnreadCount();
+        }
+
         return this;
     };
 
@@ -236,6 +251,14 @@
         } else {
             return this._counters[group];
         }
+    };
+
+    MegaNotifications.prototype.isBusy = function() {
+        if (!u_handle || !M.u[u_handle]) {
+            // should never happen.
+            return;
+        }
+        return M.u[u_handle].presence === UserPresence.PRESENCE.DND;
     };
 
 
@@ -263,7 +286,7 @@
             self.setUnread(unread);
         }
 
-        if (unread === true || self.options.alwaysPlaySound === true) {
+        if (!self.megaNotifications.isBusy() && (unread === true || self.options.alwaysPlaySound === true)) {
             if (self.options.anfFlag && mega.notif.has(self.options.anfFlag) !== 0) {
                 if (self.options.sound) {
                     var playSound = function() {
@@ -292,7 +315,7 @@
         }
 
         if (unread === true) {
-            if (self.options.anfFlag && mega.notif.has(self.options.anfFlag) !== 0) {
+            if (!self.megaNotifications.isBusy() && self.options.anfFlag && mega.notif.has(self.options.anfFlag) !== 0) {
                 self._showDesktopNotification();
             }
         }

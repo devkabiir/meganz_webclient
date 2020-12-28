@@ -94,7 +94,7 @@ BacktickRtfFilter.prototype.escapeAndProcessMessage = function(e, eventData, pro
             return; // ignore, maybe its a system message (or composing/paused composing notification)
         }
 
-        messageContents = messageContents ? $.trim(messageContents) : "";
+        messageContents = messageContents ? messageContents.trim() : "";
 
         /*jshint -W049 */
         if (prop === "messageHtml") {
@@ -132,7 +132,22 @@ BacktickRtfFilter.PARSER_STATE = {
     IN_PLACEHOLDER_MULTI: 2,
 };
 
-BacktickRtfFilter.PARSER_VALID_PREV_CHAR_MATCH = new RegExp(/\n|\s|\r/);
+BacktickRtfFilter.PARSER_VALID_PREV_CHAR_MATCH = new RegExp(/\n|\s|\r|[.,\/#!$%\^&\*;:{}=\-_~()]/);
+
+BacktickRtfFilter.processUrlsInTickStrings = function(s) {
+    return Autolinker.link(s, {
+        truncate: 80,
+        className: 'chatlink',
+        newWindow: true,
+        stripPrefix: false,
+        twitter: false,
+        urls:{
+            schemeMatches: true,
+            wwwMatches: false,
+            tldMatches: false
+        }
+    });
+};
 
 BacktickRtfFilter.prototype.processBackticks = function(msgString, replaceGenCb) {
     var self = this;
@@ -155,9 +170,13 @@ BacktickRtfFilter.prototype.processBackticks = function(msgString, replaceGenCb)
         ) {
             if (state === BacktickRtfFilter.PARSER_STATE.IN_PLACEHOLDER_MULTI) {
                 state = BacktickRtfFilter.PARSER_STATE.REGULAR;
+                // linkify http(s?):// ONLY urls
+
+                var newPlaceHolderString = BacktickRtfFilter.processUrlsInTickStrings(placeholderString);
+
                 newString += replaceGenCb(
                     "```" + placeholderString + "```",
-                    '<pre class="rtf-multi">' + placeholderString + '</pre>',
+                    '<pre class="rtf-multi">' + newPlaceHolderString + '</pre>',
                     placeholderString
                 );
                 placeholderString = "";
@@ -179,7 +198,7 @@ BacktickRtfFilter.prototype.processBackticks = function(msgString, replaceGenCb)
             if (state === BacktickRtfFilter.PARSER_STATE.IN_PLACEHOLDER_SINGLE) {
 
                 // ensure the placeholder is not just empty thing.
-                if ($.trim(placeholderString) === "") {
+                if (placeholderString.trim() === "") {
                     // current char is `, try to start a new placeholder state
                     newString += "`" + placeholderString;
                     placeholderString = "";
@@ -198,9 +217,10 @@ BacktickRtfFilter.prototype.processBackticks = function(msgString, replaceGenCb)
                 }
                 else {
                     state = BacktickRtfFilter.PARSER_STATE.REGULAR;
+                    var newPlaceHolderString = BacktickRtfFilter.processUrlsInTickStrings(placeholderString);
                     newString += replaceGenCb(
                         "`" + placeholderString + "`",
-                        '<pre class="rtf-single">' + placeholderString + '</pre>',
+                        '<pre class="rtf-single">' + newPlaceHolderString + '</pre>',
                         placeholderString
                     );
                     placeholderString = "";
@@ -229,7 +249,6 @@ BacktickRtfFilter.prototype.processBackticks = function(msgString, replaceGenCb)
             newString += msgString[i];
         }
     }
-    // console.error("finished:", [msgString, newString, state, placeholderString]);
 
     if (state !== BacktickRtfFilter.PARSER_STATE.REGULAR) {
         // have started parsing something, but string ended unexpectedly.
@@ -276,7 +295,7 @@ BacktickRtfFilter.prototype.unescapeAndProcessMessage = function(e, eventData, p
             return; // ignore, maybe its a system message (or composing/paused composing notification)
         }
 
-        messageContents = messageContents ? $.trim(messageContents) : "";
+        messageContents = messageContents ? messageContents.trim() : "";
 
         /*jshint -W049 */
         if (prop === "messageHtml") {

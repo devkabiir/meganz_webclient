@@ -1,102 +1,77 @@
 // libs
 var React = require("react");
 var ReactDOM = require("react-dom");
-var utils = require('./../../ui/utils.jsx');
-var RenderDebugger = require('./../../stores/mixins.js').RenderDebugger;
-var MegaRenderMixin = require('./../../stores/mixins.js').MegaRenderMixin;
-var ButtonsUI = require('./../../ui/buttons.jsx');
-var ModalDialogsUI = require('./../../ui/modalDialogs.jsx');
-var DropdownsUI = require('./../../ui/dropdowns.jsx');
-var ContactsUI = require('./../ui/contacts.jsx');
-var ConversationsUI = require('./../ui/conversations.jsx');
-var DropdownEmojiSelector = require('./../../ui/emojiDropdown.jsx').DropdownEmojiSelector;
-var EmojiAutocomplete = require('./emojiAutocomplete.jsx').EmojiAutocomplete;
+import { MegaRenderMixin, SoonFcWrap } from './../../stores/mixins.js';
+import { DropdownEmojiSelector } from './../../ui/emojiDropdown.jsx';
+import { Button } from './../../ui/buttons.jsx';
+import { EmojiAutocomplete } from './emojiAutocomplete.jsx';
+import GifPanel from './gifPanel/gifPanel.jsx';
 
-var TypingArea = React.createClass({
-    mixins: [MegaRenderMixin, RenderDebugger],
-    validEmojiCharacters: new RegExp("[\w\:\-\_0-9]", "gi"),
-    getDefaultProps: function() {
-        return {
-            'textareaMaxHeight': "40%"
-        };
-    },
-    getInitialState: function () {
+export class TypingArea extends MegaRenderMixin {
+    static defaultProps = {
+        'textareaMaxHeight': "40%"
+    };
+
+    constructor(props) {
+        super(props);
+
         var initialText = this.props.initialText;
 
-        return {
+        this.state = {
             emojiSearchQuery: false,
             typedMessage: initialText ? initialText : "",
-            textareaHeight: 20
+            textareaHeight: 20,
+            gifPanelActive: false
         };
-    },
-    onEmojiClicked: function (e, slug, meta) {
+    }
+    onEmojiClicked(e, slug) {
         if (this.props.disabled) {
             e.preventDefault();
             e.stopPropagation();
             return;
         }
 
-        var self = this;
+        slug = slug[0] === ':' || slug.substr(-1) === ':' ? slug : `:${slug}:`;
 
-        var txt = ":" + slug + ":";
-        if (slug.substr(0, 1) == ":" || slug.substr(-1) == ":") {
-            txt = slug;
-        }
+        const textarea = $('.messages-textarea', this.$container)[0];
+        const cursorPosition = this.getCursorPosition(textarea);
 
-        self.setState({
-            typedMessage: self.state.typedMessage + " " + txt + " "
+        this.setState({
+            typedMessage:
+                this.state.typedMessage.slice(0, cursorPosition) +
+                slug +
+                this.state.typedMessage.slice(cursorPosition)
+        }, () => {
+            // `Sample |message` -> `Sample :smile:| message`
+            textarea.selectionEnd = cursorPosition + slug.length;
         });
-
-        var $container = $(ReactDOM.findDOMNode(this));
-        var $textarea = $('.chat-textarea:visible textarea:visible', $container);
-
-        setTimeout(function () {
-            $textarea.click();
-            moveCursortoToEnd($textarea[0]);
-        }, 100);
-    },
-
-    stoppedTyping: function () {
-        if (this.props.disabled) {
+    }
+    stoppedTyping() {
+        if (this.props.disabled || !this.props.chatRoom) {
             return;
         }
-        var self = this;
-        var room = this.props.chatRoom;
 
-        self.iAmTyping = false;
-
-        delete self.lastTypingStamp;
-
-        room.trigger('stoppedTyping');
-    },
-    typing: function () {
-        if (this.props.disabled) {
+        this.iAmTyping = false;
+        this.props.chatRoom.trigger('stoppedTyping');
+    }
+    typing() {
+        if (this.props.disabled || !this.props.chatRoom) {
             return;
         }
 
         var self = this;
-        var room = this.props.chatRoom;
+        var now = Date.now();
 
-        if (self.stoppedTypingTimeout) {
-            clearTimeout(self.stoppedTypingTimeout);
-        }
+        delay(this.getReactId(), () => self.iAmTyping && self.stoppedTyping(), 4e3);
 
-        self.stoppedTypingTimeout = setTimeout(function() {
-            if (room && self.iAmTyping) {
-                self.stoppedTyping();
-            }
-        }, 4000);
-
-        if (
-            (room && !self.iAmTyping) ||
-            (room && self.iAmTyping && (unixtime() - self.lastTypingStamp) >= 4)
-        ) {
+        if (!self.iAmTyping || now - self.lastTypingStamp > 4e3) {
             self.iAmTyping = true;
-            self.lastTypingStamp = unixtime();
-            room.trigger('typing');
+            self.lastTypingStamp = now;
+            self.props.chatRoom.trigger('typing');
         }
-    },
-    triggerOnUpdate: function(forced) {
+    }
+
+    triggerOnUpdate(forced) {
         var self = this;
         if (!self.props.onUpdate || !self.isMounted()) {
             return;
@@ -104,14 +79,13 @@ var TypingArea = React.createClass({
 
         var shouldTriggerUpdate = forced ? forced : false;
 
-        if (!shouldTriggerUpdate && self.state.typedMessage != self.lastTypedMessage) {
+        if (!shouldTriggerUpdate && self.state.typedMessage !== self.lastTypedMessage) {
             self.lastTypedMessage = self.state.typedMessage;
             shouldTriggerUpdate = true;
         }
 
         if (!shouldTriggerUpdate) {
-            var $container = $(ReactDOM.findDOMNode(this));
-            var $textarea = $('.chat-textarea:visible textarea:visible', $container);
+            var $textarea = $('.chat-textarea:visible textarea:visible', self.$container);
             if (!self._lastTextareaHeight || self._lastTextareaHeight !== $textarea.height()) {
                 self._lastTextareaHeight = $textarea.height();
                 shouldTriggerUpdate = true;
@@ -121,19 +95,11 @@ var TypingArea = React.createClass({
             }
         }
 
-
-
         if (shouldTriggerUpdate) {
-            if (self.onUpdateThrottling) {
-                clearTimeout(self.onUpdateThrottling);
-            }
-
-            self.onUpdateThrottling = setTimeout(function() {
-                self.props.onUpdate();
-            }, 70);
+            self.props.onUpdate();
         }
-    },
-    onCancelClicked: function(e) {
+    }
+    onCancelClicked(e) {
         var self = this;
         self.setState({typedMessage: ""});
         if (self.props.chatRoom && self.iAmTyping) {
@@ -141,16 +107,15 @@ var TypingArea = React.createClass({
         }
         self.onConfirmTrigger(false);
         self.triggerOnUpdate();
-    },
-    onSaveClicked: function(e) {
+    }
+    onSaveClicked(e) {
         var self = this;
 
         if (self.props.disabled || !self.isMounted()) {
             return;
         }
 
-        var $container = $(ReactDOM.findDOMNode(self));
-        var val = $.trim($('.chat-textarea:visible textarea:visible', $container).val());
+        var val = $.trim($('.chat-textarea:visible textarea:visible', self.$container).val());
 
         if (self.onConfirmTrigger(val) !== true) {
             self.setState({typedMessage: ""});
@@ -159,8 +124,8 @@ var TypingArea = React.createClass({
             self.stoppedTyping();
         }
         self.triggerOnUpdate();
-    },
-    onConfirmTrigger: function(val) {
+    }
+    onConfirmTrigger(val) {
         var result = this.props.onConfirm(val);
 
         if (val !== false && result !== false) {
@@ -181,8 +146,8 @@ var TypingArea = React.createClass({
             }
         }
         return result;
-    },
-    onTypeAreaKeyDown: function(e) {
+    }
+    onTypeAreaKeyDown(e) {
         if (this.props.disabled) {
             e.preventDefault();
             e.stopPropagation();
@@ -198,13 +163,13 @@ var TypingArea = React.createClass({
             return;
         }
         if (key === 13 && !e.shiftKey && !e.ctrlKey && !e.altKey) {
-
             if (e.isPropagationStopped() || e.isDefaultPrevented()) {
                 return;
             }
 
             if (self.onConfirmTrigger(val) !== true) {
                 self.setState({typedMessage: ""});
+                $(document).trigger('closeDropdowns');
             }
             e.preventDefault();
             e.stopPropagation();
@@ -213,8 +178,8 @@ var TypingArea = React.createClass({
             }
             return;
         }
-    },
-    onTypeAreaKeyUp: function (e) {
+    }
+    onTypeAreaKeyUp(e) {
         if (this.props.disabled) {
             e.preventDefault();
             e.stopPropagation();
@@ -283,16 +248,35 @@ var TypingArea = React.createClass({
             if (self.prefillMode && (
                     key === 8 /* backspace */ ||
                     key === 32 /* space */ ||
+                    key === 186 /* : */ ||
                     key === 13 /* backspace */
                 )
             ) {
                 // cancel prefill mode.
                 self.prefillMode = false;
             }
-            var char = String.fromCharCode(key);
+
+            var currentContent = element.value;
+            var currentCursorPos = self.getCursorPosition(element) - 1;
+            if (self.prefillMode && (
+                    currentCursorPos > self.state.emojiEndPos ||
+                    currentCursorPos < self.state.emojiStartPos
+                )
+            ) {
+                // cancel prefill mode, user typed some character, out of the current emoji position.
+                self.prefillMode = false;
+                self.setState({
+                    'emojiSearchQuery': false,
+                    'emojiStartPos': false,
+                    'emojiEndPos': false
+                });
+                return;
+            }
+
             if (self.prefillMode) {
                 return; // halt next checks if its in prefill mode.
             }
+            var char = String.fromCharCode(key);
 
             if (
                 key === 16 /* shift */ ||
@@ -305,100 +289,19 @@ var TypingArea = React.createClass({
                 key === 40 /* down */ ||
                 key === 38 /* up */ ||
                 key === 9 /* tab */ ||
-                char.match(self.validEmojiCharacters)
+                /[\w:-]/.test(char)
             ) {
-                var currentContent = element.value;
-                var currentCursorPos = self.getCursorPosition(element) - 1;
 
 
-                var startPos = false;
-                var endPos = false;
-                // back
-                var matchedWord = "";
-                var currentChar;
-                for (var x = currentCursorPos; x >= 0; x--) {
-                    currentChar = currentContent.substr(x, 1);
-                    if (currentChar && currentChar.match(self.validEmojiCharacters)) {
-                        matchedWord = currentChar + matchedWord;
-                    }
-                    else {
-                        startPos = x + 1;
-                        break;
-                    }
-                }
+                var parsedResult = mega.utils.emojiCodeParser(currentContent, currentCursorPos);
 
-                // fwd
-                for (var x = currentCursorPos+1; x < currentContent.length; x++) {
-                    currentChar = currentContent.substr(x, 1);
-                    if (currentChar && currentChar.match(self.validEmojiCharacters)) {
-                        matchedWord = matchedWord + currentChar;
-                    }
-                    else {
-                        endPos = x;
-                        break;
-                    }
-                }
+                self.setState({
+                    'emojiSearchQuery': parsedResult[0],
+                    'emojiStartPos': parsedResult[1],
+                    'emojiEndPos': parsedResult[2]
+                });
 
-                if (matchedWord && matchedWord.length > 2 && matchedWord.substr(0, 1) === ":") {
-                    endPos = endPos ? endPos : startPos + matchedWord.length;
-
-                    if (matchedWord.substr(-1) === ":") {
-                        matchedWord = matchedWord.substr(0, matchedWord.length - 1);
-                    }
-
-
-                    var strictMatch = currentContent.substr(startPos, endPos - startPos);
-
-
-                    if (strictMatch.substr(0, 1) === ":" && strictMatch.substr(-1) === ":") {
-                        strictMatch = strictMatch.substr(1, strictMatch.length - 2);
-                    }
-                    else {
-                        strictMatch = false;
-                    }
-
-                    if (strictMatch && megaChat.isValidEmojiSlug(strictMatch)) {
-                        // emoji already filled in, dot set emojiSearchQuery/trigger emoji auto complete
-                        if (self.state.emojiSearchQuery) {
-                            self.setState({
-                                'emojiSearchQuery': false,
-                                'emojiStartPos': false,
-                                'emojiEndPos': false
-                            });
-                        }
-                        return;
-                    }
-
-
-                    self.setState({
-                        'emojiSearchQuery': matchedWord,
-                        'emojiStartPos': startPos ? startPos : 0,
-                        'emojiEndPos': endPos
-                    });
-                    return;
-                }
-                else {
-                    if (
-                        !matchedWord &&
-                        self.state.emojiStartPos !== false &&
-                        self.state.emojiEndPos !== false
-                    ) {
-                        matchedWord = element.value.substr(self.state.emojiStartPos, self.state.emojiEndPos);
-                    }
-
-                    if (
-                        !element.value ||
-                        element.value.length <= 2 ||
-                        matchedWord.length === 1 /* used backspace to delete the emoji search query?*/
-                    ) {
-                        self.setState({
-                            'emojiSearchQuery': false,
-                            'emojiStartPos': false,
-                            'emojiEndPos': false
-                        });
-                    }
-                    return;
-                }
+                return;
             }
             if (self.state.emojiSearchQuery) {
                 self.setState({'emojiSearchQuery': false});
@@ -406,8 +309,8 @@ var TypingArea = React.createClass({
         }
 
         self.updateScroll(true);
-    },
-    onTypeAreaBlur: function (e) {
+    }
+    onTypeAreaBlur(e) {
         if (this.props.disabled) {
             e.preventDefault();
             e.stopPropagation();
@@ -429,8 +332,8 @@ var TypingArea = React.createClass({
                 }
             }, 300);
         }
-    },
-    onTypeAreaChange: function (e) {
+    }
+    onTypeAreaChange(e) {
         if (this.props.disabled) {
             e.preventDefault();
             e.stopPropagation();
@@ -473,38 +376,48 @@ var TypingArea = React.createClass({
         // if (self.props.onUpdate) {
         //     self.props.onUpdate();
         // }
-    },
-    focusTypeArea: function () {
+    }
+    focusTypeArea() {
         if (this.props.disabled) {
             return;
         }
 
-        var $container = $(ReactDOM.findDOMNode(this));
-        if ($('.chat-textarea:visible textarea:visible', $container).length > 0) {
-            if (!$('.chat-textarea:visible textarea:visible:first', $container).is(":focus")) {
-                moveCursortoToEnd($('.chat-textarea:visible:first textarea', $container)[0]);
-            }
+        if (
+            $('.chat-textarea:visible textarea:visible', this.$container).length > 0 &&
+            !$('.chat-textarea:visible textarea:visible:first', this.$container).is(":focus")
+        ) {
+            moveCursortoToEnd($('.chat-textarea:visible:first textarea', this.$container)[0]);
         }
-    },
-    componentDidMount: function() {
+    }
+    componentDidMount() {
+        super.componentDidMount();
         var self = this;
-        window.addEventListener('resize', self.handleWindowResize);
+        this.$container = $(ReactDOM.findDOMNode(this));
 
-        var $container = $(ReactDOM.findDOMNode(this));
+        chatGlobalEventManager.addEventListener(
+            'resize',
+            'typingArea' + self.getUniqueId(),
+            () => self.handleWindowResize()
+        );
+
         // initTextareaScrolling($('.chat-textarea-scroll textarea', $container), 100, true);
         self._lastTextareaHeight = 20;
         if (self.props.initialText) {
             self.lastTypedMessage = this.props.initialText;
         }
 
-        var $container = $(self.findDOMNode());
-        $('.jScrollPaneContainer', $container).rebind('forceResize.typingArea' + self.getUniqueId(), function() {
+        $('.jScrollPaneContainer', self.$container).rebind('forceResize.typingArea' + self.getUniqueId(), function() {
             self.updateScroll(false);
         });
-        self.triggerOnUpdate(true);
 
-    },
-    componentWillMount: function() {
+        if (!this.scrollingInitialised) {
+            this.initScrolling();
+        }
+
+        self.triggerOnUpdate(true);
+        self.updateScroll(false);
+    }
+    componentWillMount() {
         var self = this;
         var chatRoom = self.props.chatRoom;
         var megaChat = chatRoom.megaChat;
@@ -534,7 +447,7 @@ var TypingArea = React.createClass({
                         }
                     });
             }
-            $(megaChat.plugins.persistedTypeArea.data).rebind(
+            megaChat.plugins.persistedTypeArea.data.rebind(
                 'onChange.typingArea' + self.getUniqueId(),
                 function(e, k, v) {
                     if (chatRoom.roomId == k) {
@@ -544,25 +457,28 @@ var TypingArea = React.createClass({
                 }
             );
         }
-    },
-    componentWillUnmount: function() {
+    }
+    componentWillUnmount() {
+        super.componentWillUnmount();
         var self = this;
-        var chatRoom = self.props.chatRoom;
         self.triggerOnUpdate();
-        window.removeEventListener('resize', self.handleWindowResize);
-    },
-    componentDidUpdate: function () {
+        // window.removeEventListener('resize', self.handleWindowResize);
+        chatGlobalEventManager.removeEventListener('resize', 'typingArea' + self.getUniqueId());
+    }
+    componentDidUpdate() {
         var self = this;
-        var room = this.props.chatRoom;
 
-        if (room.isCurrentlyActive && self.isMounted()) {
-            if ($('textarea:focus,select:focus,input:focus').filter(":visible").length === 0) {
+        if (self.isComponentEventuallyVisible()) {
+            if ($(
+                document.querySelector('textarea:focus,select:focus,input:focus')
+            ).filter(":visible").length === 0) {
                 // no other element is focused...
                 this.focusTypeArea();
             }
 
             self.handleWindowResize();
         }
+
         if (!this.scrollingInitialised) {
             this.initScrolling();
         }
@@ -570,18 +486,16 @@ var TypingArea = React.createClass({
             this.updateScroll();
         }
         if (self.onUpdateCursorPosition) {
-            var $container = $(ReactDOM.findDOMNode(this));
-            var el = $('.chat-textarea:visible:first textarea:visible', $container)[0];
+            var el = $('.chat-textarea:visible:first textarea:visible', self.$container)[0];
             el.selectionStart = el.selectionEnd = self.onUpdateCursorPosition;
             self.onUpdateCursorPosition = false;
         }
-    },
-    initScrolling: function() {
+    }
+    initScrolling() {
         var self = this;
         self.scrollingInitialised = true;
         var $node = $(self.findDOMNode());
         var $textarea = $('textarea:first', $node);
-        var $textareaClone = $('message-preview', $node);
         self.textareaLineHeight = parseInt($textarea.css('line-height'));
         var $textareaScrollBlock = $('.textarea-scroll', $node);
         $textareaScrollBlock.jScrollPane({
@@ -591,8 +505,8 @@ var TypingArea = React.createClass({
             animateScroll: false,
             maintainPosition: false
         });
-    },
-    getTextareaMaxHeight: function() {
+    }
+    getTextareaMaxHeight() {
         var self = this;
         var textareaMaxHeight = self.props.textareaMaxHeight;
 
@@ -607,23 +521,25 @@ var TypingArea = React.createClass({
             }
         }
         return textareaMaxHeight;
-    },
-    updateScroll: function(keyEvents) {
+    }
+
+    @SoonFcWrap(60)
+    updateScroll(keyEvents) {
         var self = this;
 
         // DONT update if not visible...
-        if (!self.isComponentEventuallyVisible()) {
+        if (!this.isComponentEventuallyVisible()) {
             return;
         }
 
+        var $node = self.$node = self.$node || $(self.findDOMNode());
 
-        var $node = $(self.findDOMNode());
-
-        var $textarea = $('textarea:first', $node);
-        var $textareaClone = $('.message-preview', $node);
+        var $textarea = self.$textarea = self.$textarea || $('textarea:first', $node);
+        var $textareaClone = self.$textareaClone = self.$textareaClone || $('.message-preview', $node);
         var textareaMaxHeight = self.getTextareaMaxHeight();
 
-        var $textareaScrollBlock = $('.textarea-scroll', $node);
+        var $textareaScrollBlock = self.$textareaScrollBlock = self.$textareaScrollBlock ||
+            $('.textarea-scroll', $node);
 
 
         var textareaContent = $textarea.val();
@@ -634,14 +550,12 @@ var TypingArea = React.createClass({
         var scrPos = 0;
         var viewRatio = 0;
 
-
         // try NOT to update the DOM twice if nothing had changed (and this is NOT a resize event).
         if (
-            keyEvents &&
             self.lastContent === textareaContent &&
             self.lastPosition === cursorPosition
         ) {
-                return;
+            return;
         }
         else {
             self.lastContent = textareaContent;
@@ -680,7 +594,7 @@ var TypingArea = React.createClass({
             jsp = $textareaScrollBlock.data('jsp');
 
             if (!textareaIsFocused) {
-                moveCursortoToEnd($('textarea:visible:first', $node)[0]);
+                moveCursortoToEnd($textarea[0]);
             }
         }
 
@@ -751,8 +665,8 @@ var TypingArea = React.createClass({
         else {
             self.handleWindowResize();
         }
-    },
-    getCursorPosition: function(el) {
+    }
+    getCursorPosition(el) {
         var pos = 0;
         if ('selectionStart' in el) {
             pos=el.selectionStart;
@@ -765,41 +679,45 @@ var TypingArea = React.createClass({
             pos = sel.text.length - selLength;
         }
         return pos;
-    },
-    onTypeAreaSelect: function(e) {
+    }
+
+    onTypeAreaSelect(e) {
         this.updateScroll(true);
-    },
-    handleWindowResize: function (e, scrollToBottom) {
-        var self = this;
-        if(!self.isMounted()) {
-            return;
-        }
-        if (!self.props.chatRoom.isCurrentlyActive) {
+    }
+
+    customIsEventuallyVisible() {
+        return this.props.chatRoom.isCurrentlyActive;
+    }
+
+    @SoonFcWrap(54, true)
+    handleWindowResize(e) {
+        if (!this.isComponentEventuallyVisible()) {
             return;
         }
 
         if (e) {
-            self.updateScroll(false);
+            this.updateScroll(false);
         }
-        self.triggerOnUpdate();
+        this.triggerOnUpdate();
 
-    },
-    isActive: function () {
+    }
+
+    isActive() {
         return document.hasFocus() && this.$messages && this.$messages.is(":visible");
-    },
-    resetPrefillMode: function() {
+    }
+    resetPrefillMode() {
         this.prefillMode = false;
-    },
-    onCopyCapture: function(e) {
+    }
+    onCopyCapture(e) {
         this.resetPrefillMode();
-    },
-    onCutCapture: function(e) {
+    }
+    onCutCapture(e) {
         this.resetPrefillMode();
-    },
-    onPasteCapture: function(e) {
+    }
+    onPasteCapture(e) {
         this.resetPrefillMode();
-    },
-    render: function () {
+    }
+    render() {
         var self = this;
 
         var room = this.props.chatRoom;
@@ -811,19 +729,19 @@ var TypingArea = React.createClass({
 
         if (self.props.showButtons === true) {
             buttons = [
-                <ButtonsUI.Button
+                <Button
                     key="save"
                     className="default-white-button right"
                     icon=""
-                    onClick={self.onSaveClicked}
-                    label={__(l[776])} />,
+                    onClick={self.onSaveClicked.bind(self)}
+                    label={l[776]} />,
 
-                <ButtonsUI.Button
+                <Button
                     key="cancel"
                     className="default-white-button right"
                     icon=""
-                    onClick={self.onCancelClicked}
-                    label={__(l[1718])} />
+                    onClick={self.onCancelClicked.bind(self)}
+                    label={l[1718]} />
             ];
         }
 
@@ -837,7 +755,6 @@ var TypingArea = React.createClass({
         if (newHeight > 0) {
             textareaScrollBlockStyles['height'] = newHeight;
         }
-
 
         var emojiAutocomplete = null;
         if (self.state.emojiSearchQuery) {
@@ -854,18 +771,30 @@ var TypingArea = React.createClass({
                     ) {
                         var msg = self.state.typedMessage;
                         var pre = msg.substr(0, self.state.emojiStartPos);
-                        var post = msg.substr(self.state.emojiEndPos, msg.length);
+                        var post = msg.substr(self.state.emojiEndPos + 1, msg.length);
+                        var startPos = self.state.emojiStartPos;
+                        var fwdPos = startPos + emojiAlias.length;
+                        var endPos = fwdPos;
 
-                        self.onUpdateCursorPosition = self.state.emojiStartPos + emojiAlias.length;
+                        self.onUpdateCursorPosition = fwdPos;
 
                         self.prefillMode = true;
+
+                        // in case of concat'ed emojis like:
+                        // :smile::smile:
+
+                        if (post.substr(0, 2) == "::" && emojiAlias.substr(-1) == ":") {
+                            emojiAlias = emojiAlias.substr(0, emojiAlias.length - 1);
+                            endPos -= 1;
+                        }
+                        else {
+                            post = post ? (post.substr(0, 1) !== " " ? " " + post : post) : " ";
+                            self.onUpdateCursorPosition++;
+                        }
+
                         self.setState({
-                            'typedMessage': pre + emojiAlias + (
-                                post ? (post.substr(0, 1) !== " " ? " " + post : post) : " "
-                            ),
-                            'emojiEndPos': self.state.emojiStartPos + emojiAlias.length + (
-                                post ? (post.substr(0, 1) !== " " ? 1 : 0) : 1
-                            )
+                            'typedMessage': pre + emojiAlias + post,
+                            'emojiEndPos': endPos
                         });
                     }
                 }}
@@ -876,11 +805,22 @@ var TypingArea = React.createClass({
                     ) {
                         var msg = self.state.typedMessage;
                         var pre = msg.substr(0, self.state.emojiStartPos);
-                        var post = msg.substr(self.state.emojiEndPos, msg.length);
-                        var val = pre + emojiAlias + (
-                            post ? (post.substr(0, 1) !== " " ? " " + post : post) : " "
-                        );
+                        var post = msg.substr(self.state.emojiEndPos + 1, msg.length);
+
+                        // in case of concat'ed emojis like:
+                        // :smile::smile:
+
+                        if (post.substr(0, 2) == "::" && emojiAlias.substr(-1) == ":") {
+                            emojiAlias = emojiAlias.substr(0, emojiAlias.length - 1);
+                        }
+                        else {
+                            post = post ? (post.substr(0, 1) !== " " ? " " + post : post) : " ";
+                        }
+
+                        var val = pre + emojiAlias + post;
+
                         self.prefillMode = false;
+
                         self.setState({
                             'typedMessage': val,
                             'emojiSearchQuery': false,
@@ -907,44 +847,62 @@ var TypingArea = React.createClass({
         var placeholder = l[18669];
         placeholder = placeholder.replace("%s", room.getRoomTitle(false, true));
 
-        return <div className={"typingarea-component" + self.props.className}>
+        var disabledTextarea = room.pubCu25519KeyIsMissing === true || this.props.disabled ? true : false;
+
+        return <div className={"typingarea-component" + self.props.className + (disabledTextarea ? " disabled" : "")}>
+            {this.state.gifPanelActive &&
+                <GifPanel
+                    chatRoom={this.props.chatRoom}
+                    onToggle={() =>
+                        this.setState({ gifPanelActive: false })
+                    }
+                />
+            }
             <div className={"chat-textarea " + self.props.className}>
                 {emojiAutocomplete}
-                <i className={self.props.iconClass ? self.props.iconClass : "small-icon conversations"}></i>
-                <div className="chat-textarea-buttons">
-                    <ButtonsUI.Button
-                        className="popup-button"
-                        icon="smiling-face"
+                {self.props.children}
+                {self.props.editing ? null : (
+                    <Button
+                        className={`
+                            popup-button
+                            gif-button
+                            ${this.state.gifPanelActive ? 'active' : ''}
+                        `}
+                        icon="small-icon gif"
                         disabled={this.props.disabled}
-                    >
-                        <DropdownEmojiSelector
-                            className="popup emoji"
-                            vertOffset={12}
-                            onClick={self.onEmojiClicked}
-                        />
-                    </ButtonsUI.Button>
-
-                    {self.props.children}
-                </div>
+                        onClick={() =>
+                            this.setState(state => ({ gifPanelActive: !state.gifPanelActive }))
+                        }
+                    />
+                )}
+                <Button
+                    className="popup-button emoji-button"
+                    icon="smiling-face"
+                    disabled={this.props.disabled}>
+                    <DropdownEmojiSelector
+                        className="popup emoji"
+                        vertOffset={17}
+                        onClick={self.onEmojiClicked.bind(self)} />
+                </Button>
+                <hr />
                 <div className="chat-textarea-scroll textarea-scroll jScrollPaneContainer"
                      style={textareaScrollBlockStyles}>
                     <textarea
                         className={messageTextAreaClasses}
                         placeholder={placeholder}
-                        roomTitle={room.getRoomTitle()}
-                        onKeyUp={self.onTypeAreaKeyUp}
-                        onKeyDown={self.onTypeAreaKeyDown}
-                        onBlur={self.onTypeAreaBlur}
-                        onChange={self.onTypeAreaChange}
-                        onSelect={self.onTypeAreaSelect}
+                        onKeyUp={self.onTypeAreaKeyUp.bind(self)}
+                        onKeyDown={self.onTypeAreaKeyDown.bind(self)}
+                        onBlur={self.onTypeAreaBlur.bind(self)}
+                        onChange={self.onTypeAreaChange.bind(self)}
+                        onSelect={self.onTypeAreaSelect.bind(self)}
                         value={self.state.typedMessage}
                         ref="typearea"
                         style={textareaStyles}
-                        disabled={room.pubCu25519KeyIsMissing === true || this.props.disabled ? true : false}
-                        readOnly={room.pubCu25519KeyIsMissing === true || this.props.disabled ? true : false}
-                        onCopyCapture={self.onCopyCapture}
-                        onPasteCapture={self.onPasteCapture}
-                        onCutCapture={self.onCutCapture}
+                        disabled={disabledTextarea ? true : false}
+                        readOnly={disabledTextarea ? true : false}
+                        onCopyCapture={self.onCopyCapture.bind(self)}
+                        onPasteCapture={self.onPasteCapture.bind(self)}
+                        onCutCapture={self.onCutCapture.bind(self)}
                     ></textarea>
                     <div className="message-preview"></div>
                 </div>
@@ -952,10 +910,4 @@ var TypingArea = React.createClass({
             {buttons}
         </div>
     }
-});
-
-
-module.exports = {
-    TypingArea
 };
-

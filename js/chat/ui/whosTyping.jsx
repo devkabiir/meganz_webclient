@@ -1,15 +1,16 @@
 var React = require("react");
 var ReactDOM = require("react-dom");
-var MegaRenderMixin = require('./../../stores/mixins.js').MegaRenderMixin;
+import {MegaRenderMixin} from './../../stores/mixins.js';
+var RenderDebugger = require('./../../stores/mixins.js').RenderDebugger;
 
-var WhosTyping = React.createClass({
-    mixins: [MegaRenderMixin],
-    getInitialState: function() {
-        return {
+class WhosTyping extends MegaRenderMixin {
+    constructor(props) {
+        super(props);
+        this.state = {
             currentlyTyping: {}
         };
-    },
-    componentWillMount: function() {
+    }
+    componentWillMount() {
         var self = this;
         var chatRoom = self.props.chatRoom;
         var megaChat = self.props.chatRoom.megaChat;
@@ -54,15 +55,16 @@ var WhosTyping = React.createClass({
 
             self.forceUpdate();
         });
-    },
-    componentWillUnmount: function() {
+    }
+    componentWillUnmount() {
+        super.componentWillUnmount();
         var self = this;
         var chatRoom = self.props.chatRoom;
         var megaChat = chatRoom.megaChat;
 
         chatRoom.off("onParticipantTyping.whosTyping");
-    },
-    stoppedTyping: function(u_h) {
+    }
+    stoppedTyping(u_h) {
         var self = this;
         if (self.state.currentlyTyping[u_h]) {
             var newState = clone(self.state.currentlyTyping);
@@ -72,8 +74,8 @@ var WhosTyping = React.createClass({
             delete newState[u_h];
             self.setState({currentlyTyping: newState});
         }
-    },
-    render: function() {
+    }
+    render() {
         var self = this;
 
         var typingElement = null;
@@ -82,6 +84,9 @@ var WhosTyping = React.createClass({
             var names = Object.keys(self.state.currentlyTyping).map((u_h) => {
                 var contact = M.u[u_h];
                 if (contact && contact.firstName) {
+                    if (contact.nickname !== '') {
+                        return contact.nickname;
+                    }
                     return contact.firstName;
                 }
                 else {
@@ -104,12 +109,12 @@ var WhosTyping = React.createClass({
 
             var msg;
             if (areMultipleUsersTyping === true) {
-                msg = __(l[8872])
+                msg = l[8872]
                     .replace("%1", namesDisplay[0])
                     .replace("%2", namesDisplay[1]);
             }
             else {
-                msg = __(l[8629]).replace("%1", namesDisplay[0]);
+                msg = l[8629].replace("%1", namesDisplay[0]);
             }
 
             typingElement = <div className="typing-block">
@@ -128,8 +133,8 @@ var WhosTyping = React.createClass({
         return typingElement;
     }
 
-});
+};
 
-module.exports = {
+export {
     WhosTyping
 };

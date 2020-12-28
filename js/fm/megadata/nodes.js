@@ -57,7 +57,7 @@
 
         if (fminitialized) {
             // Handle Inbox/RubbishBin UI changes
-            delay(fmtopUI);
+            delay(fmLeftMenuUI);
         }
 
         if (this.d[h] && !this.d[h].t && this.d[h].tvf) {
@@ -116,7 +116,7 @@ MegaData.prototype.addNode = function(n, ignoreDB) {
     if (this.u[n.h] && this.u[n.h] !== n) {
         for (var k in n) {
             // merge changes from n->M.u[n.h]
-            if (n.hasOwnProperty(k) && k !== 'name') {
+            if (k !== 'name' && k in MEGA_USER_STRUCT) {
                 this.u[n.h][k] = n[k];
             }
         }
@@ -127,7 +127,7 @@ MegaData.prototype.addNode = function(n, ignoreDB) {
         newnodes.push(n);
 
         // Handle Inbox/RubbishBin UI changes
-        delay(fmtopUI);
+        delay(fmLeftMenuUI);
     }
 };
 
@@ -135,12 +135,9 @@ MegaData.prototype.delHash = function(n) {
     "use strict";
 
     if (this.h[n.hash]) {
-        var p = this.h[n.hash].indexOf(n.h);
-
-        if (p >= 0) {
-            this.h[n.hash] = this.h[n.hash].substr(0, p) + this.h[n.hash].substr(p + 9);
-
-            if (!this.h[n.hash]) {
+        if (this.h[n.hash][n.h]) {
+            delete this.h[n.hash][n.h];
+            if (!Object.keys(this.h[n.hash]).length) {
                 delete this.h[n.hash];
             }
         }
@@ -171,6 +168,9 @@ MegaData.prototype.getPath = function(id) {
     var result = [];
     var loop = true;
     var inshare;
+    var cv = this.isCustomView(id);
+
+    id = cv ? cv.nodeID : id;
 
     while (loop) {
         if ((id === 'contacts') && (result.length > 1)) {
@@ -187,6 +187,8 @@ MegaData.prototype.getPath = function(id) {
             || (id === 'contacts')
             || (id === 'messages')
             || (id === 'shares')
+            || (id === 'out-shares')
+            || (id === 'public-links')
             || (id === this.InboxID)
             || (id === 'opc')
             || (id === 'ipc')
@@ -223,6 +225,88 @@ MegaData.prototype.getPath = function(id) {
         }
     }
 
+    // Get path for Out-shares and Public links.
+    // This also cut off all path from invalid out-share and public-link path and return []
+    if (cv && result.length > 1) {
+
+        var outShareTree = M.getOutShareTree();
+
+        for (var i = result.length - 1; i >= 0; i--) {
+            if (cv.type === 'public-links' && typeof M.su.EXP !== 'undefined' && M.su.EXP[result[i]]) {
+                result[i + 1] = 'public-links';
+                break;
+            }
+            else if (outShareTree[result[i]]) {
+                result[i + 1] = 'out-shares';
+                break;
+            }
+            result.pop();
+        }
+    }
+
+    return result;
+};
+
+/**
+ * Check entered path or id is a custom view like out-shares and public-links
+ * If it is, return a set of object that contain detail of it.
+ * If it is not, return false
+ * @param {String} pathOrID Path or id of current element.
+ * @return {Object|Boolean}
+ */
+MegaData.prototype.isCustomView = function(pathOrID) {
+
+    "use strict";
+
+    if (!pathOrID || typeof pathOrID !== 'string') {
+        return false;
+    }
+
+    var result = Object.create(null);
+    result.original = pathOrID;
+
+    // This is a out-share id from tree
+    if (pathOrID.substr(0, 3) === 'os_') {
+        result.type = 'out-shares';
+        result.nodeID = pathOrID.replace('os_', '');
+        result.prefixTree = 'os_';
+        result.prefixPath = 'out-shares/';
+    }
+    // This is a public-link id from tree
+    else if (pathOrID.substr(0, 3) === 'pl_') {
+        result.type = 'public-links';
+        result.nodeID = pathOrID.replace('pl_', '');
+        result.prefixTree = 'pl_';
+        result.prefixPath = 'public-links/';
+    }
+    // This is a out-share path
+    else if (pathOrID.substr(0, 11) === 'out-shares/') {
+        result.type = 'out-shares';
+        result.nodeID = pathOrID.replace('out-shares/', '');
+        result.prefixTree = 'os_';
+        result.prefixPath = 'out-shares/';
+    }
+    // This is a public-link path
+    else if (pathOrID.substr(0, 13) === 'public-links/') {
+        result.type = 'public-links';
+        result.nodeID = pathOrID.replace('public-links/', '');
+        result.prefixTree = 'pl_';
+        result.prefixPath = 'public-links/';
+    }
+    else if (pathOrID === 'out-shares') {
+        result.type = result.nodeID = 'out-shares';
+        result.prefixTree = 'os_';
+        result.prefixPath = '';
+    }
+    else if (pathOrID === 'public-links') {
+        result.type = result.nodeID = 'public-links';
+        result.prefixTree = 'pl_';
+        result.prefixPath = '';
+    }
+    // This is not a out-share or a public-link
+    else {
+        result = false;
+    }
     return result;
 };
 
@@ -236,6 +320,10 @@ MegaData.prototype.getPath = function(id) {
 MegaData.prototype.clearRubbish = function(all) {
     "use strict";
 
+    if (M.isInvalidUserStatus()) {
+        return;
+    }
+
     if (M.account) {
         // reset cached account data
         M.account.lastupdate = 0;
@@ -243,19 +331,26 @@ MegaData.prototype.clearRubbish = function(all) {
 
     if (all) {
         loadingDialog.show();
+        ulmanager.ulClearTargetDeleted(M.getTreeHandles(M.RubbishID));
         return M.req('dr').finally(loadingDialog.hide.bind(loadingDialog));
     }
 
     var selids;
+    var fail = 0;
     var success = 0;
     var idtag = mRandomToken('cr');
     var promise = new MegaPromise();
 
-    var apiReq = function apiReq(handle) {
-        api_req({ a: 'd', n: handle, i: idtag }, {
+    var apiReq = function apiReq(handle, i) {
+        api_req({a: 'd', n: handle, i: i}, {
             callback: function(res) {
                 if (res !== 0) {
                     console.warn('Failed to delete node with handle: ' + handle + ' Result: ' + res);
+
+                    if (++fail === selids.length && typeof M.scAckQueue[idtag] === 'function') {
+                        onIdle(M.scAckQueue[idtag]);
+                        delete M.scAckQueue[idtag];
+                    }
                 }
                 else {
                     success++;
@@ -286,7 +381,13 @@ MegaData.prototype.clearRubbish = function(all) {
                 promise.reject(selids.length - success);
             }
         };
-        selids.forEach(apiReq);
+
+        for (var i = selids.length; i--;) {
+            apiReq(selids[i], i ? idtag.substr(-5) : idtag);
+        }
+
+        // Check is there a upload target the deleted folder.
+        ulmanager.ulClearTargetDeleted(selids);
     }
     else {
         promise.reject(EINCOMPLETE);
@@ -338,18 +439,24 @@ MegaData.prototype.injectNodes = function(nodes, target, callback) {
 
 /**
  * @param {Array}       cn            Array of nodes that needs to be copied
- * @param {String}      t             Destination node
+ * @param {String}      t             Destination node handle
  * @param {Boolean}     [del]         Should we delete the node after copying? (Like a move operation)
  * @param {MegaPromise} [promise]     promise to notify completion on (Optional)
  * @param {Array}       [tree]        optional tree from M.getCopyNodes
+ * @returns {MegaPromise} The promise provided to this function, if any.
  */
 MegaData.prototype.copyNodes = function copynodes(cn, t, del, promise, tree) {
+    'use strict';
     var todel = [];
 
     if (typeof promise === 'function') {
         var tmp = promise;
         promise = new MegaPromise();
         promise.always(tmp);
+    }
+
+    if (M.isInvalidUserStatus()) {
+        return;
     }
 
     loadingDialog.pshow();
@@ -388,62 +495,40 @@ MegaData.prototype.copyNodes = function copynodes(cn, t, del, promise, tree) {
                 var promise = new MegaPromise();
 
                 if (t === M.RubbishID) {
-                    var promises = [];
 
-                    // allow to revert nodes sent to the rubbish bin
-                    for (var i = cn.length; i--;) {
-                        var h = cn[i];
-                        var n = M.getNodeByHandle(h);
+                    return promise.resolve(null, cn);
+                }
+                else {
+                    // 2. check for conflicts
+                    fileconflict.check(cn, t, 'copy')
+                        .always(function(files) {
+                            var handles = [];
+                            var parentsToKeep = Object.create(null);
+                            var names = Object.create(null);
 
-                        if (M.getNodeRoot(h) !== M.RubbishID) {
-                            if (window.d) {
-                                console.debug('Adding rr attribute...', n.rr, n.p);
+                            for (var i = files.length; i--;) {
+                                var n = files[i];
+
+                                names[n.h] = n.name;
+                                handles.push(n.h);
+
+                                if (n._replaces) {
+                                    todel.push(n._replaces);
+                                }
+                                if (n.keepParent) {
+                                    parentsToKeep[n.h] = n.keepParent;
+                                    del = false;
+                                    // it's complicated. For now if merging involved we wont delete
+                                    // as move to/from inshare is excuted as copy + del
+                                    // ---> here i am stopping 'del'
+                                }
                             }
-                            if (!n.rr || n.rr !== n.p) {
-                                n.rr = n.p;
-                                promises.push(api_setattr(n, mRandomToken('rrc')));
-                            }
-                        }
-                    }
 
-                    MegaPromise.allDone(promises)
-                        .always(function() {
-                            promise.resolve(null, cn);
+                            // 3. in case of new names, provide them back to getCopyNodes
+                            promise.resolve(names, handles, parentsToKeep);
                         });
-
                     return promise;
                 }
-
-                // 2. check for conflicts
-                fileconflict.check(cn, t, 'copy')
-                    .always(function(files) {
-                        var handles = [];
-                        var parentsToKeep = Object.create(null);
-                        var names = Object.create(null);
-
-                        for (var i = files.length; i--;) {
-                            var n = files[i];
-
-                            names[n.h] = n.name;
-                            handles.push(n.h);
-
-                            if (n._replaces) {
-                                todel.push(n._replaces);
-                            }
-                            if (n.keepParent) {
-                                parentsToKeep[n.h] = n.keepParent;
-                                del = false;
-                                // it's complicated. For now if merging involved we wont delete
-                                // as move to/from inshare is excuted as copy + del
-                                // ---> here i am stopping 'del'
-                            }
-                        }
-
-                        // 3. in case of new names, provide them back to getCopyNodes
-                        promise.resolve(names, handles, parentsToKeep);
-                    });
-
-                return promise;
             })
                 .always(function _(tree) {
                     assert(tree, 'No tree provided...');
@@ -474,20 +559,29 @@ MegaData.prototype.copyNodes = function copynodes(cn, t, del, promise, tree) {
     if (del && !tree.safeToDel) {
         tree.safeToDel = true;
 
-        var mdList = mega.megadrop.isDropExist(cn);
-        if (mdList.length) {
+        var shared = mega.megadrop.isDropExist(cn);
+        for (var i = tree.length; i--;) {
+            var n = M.d[tree[i].h] || false;
+
+            console.assert(n, 'Node not found... (%s)', tree[i].h);
+
+            if (n.shares || M.ps[n.h]) {
+                shared.push(n.h);
+            }
+        }
+
+        if (shared.length) {
             loadingDialog.phide();
-            mega.megadrop.showRemoveWarning(mdList)
-                .done(function() {
-                    // No MEGAdrop folders found, proceed with copy+del
-                    M.copyNodes(cn, t, del, promise, tree);
-                })
-                .fail(function() {
-                    // The user didn't want to disable MEGAdrop folders
-                    if (promise) {
-                        promise.reject(EBLOCKED);
-                    }
-                });
+
+            // Confirm with the user the operation will revoke shares and he wants to
+            msgDialog('confirmation', l[870], l[34] + ' ' + l[7410], l[6994], function(yes) {
+                if (yes) {
+                    M.revokeShares(shared).always(M.copyNodes.bind(M, cn, t, del, promise, tree));
+                }
+                else if (promise) {
+                    promise.reject(EBLOCKED);
+                }
+            });
             return promise;
         }
     }
@@ -573,31 +667,78 @@ MegaData.prototype.copyNodes = function copynodes(cn, t, del, promise, tree) {
         var objj = { a: 'p', t: d, n: opsArr[d] };
         objj.v = 3;
         objj.i = mRandomToken('pn');
+
         this.scAckQueue[objj.i] = onScDone;
         var s = this.getShareNodesSync(d);
         if (s && s.length) {
             objj.cr = crypto_makecr(opsArr[d], s, false);
         }
         objj.sm = 1;
+        // eventually append 'cauth' ticket in the objj req.
+        if (M.chat && megaChatIsReady) {
+            megaChat.eventuallyAddDldTicketToReq(objj);
+        }
+
+        if (d === M.RubbishID) {
+            // since we are copying to rubbish we don't have multiple "d" as duplications are allowed in Rubbish
+            // but below code is generic and will work regardless
+            for (var b = 0; b < cn.length; b++) {
+                var srcNode = M.getNodeByHandle(cn[b]);
+                if (!srcNode) {
+                    continue;
+                }
+                if (M.getNodeRoot(srcNode.h) === M.RubbishID) {
+                    continue;
+                }
+
+                for (var j = 0; j < opsArr[d].length; j++) {
+                    if (opsArr[d][j].h === srcNode.h) {
+
+                        if (window.d) {
+                            console.debug('Adding rr attribute handle,parent...', opsArr[d][j].h, srcNode.p);
+                        }
+                        var newNode = {};
+                        var originlNode = clone(M.d[opsArr[d][j].h]);
+
+                        if (!originlNode) {
+                            break;
+                        }
+                        if (!originlNode.t) {
+                            newNode.k = originlNode.k;
+                        }
+                        originlNode.rr = srcNode.p;
+
+                        newNode.a = ab_to_base64(crypto_makeattr(originlNode, newNode));
+
+                        // new node inherits handle, parent and type
+                        newNode.h = originlNode.h;
+                        newNode.t = originlNode.t;
+
+                        opsArr[d][j] = newNode;
+                        break;
+                    }
+                }
+
+            }
+
+        }
+        var c = (d || "").length === 11;
+        for (var q = 0; q < opsArr[d].length; q++) {
+
+            try {
+                opsArr[d][q].k = c
+                    ? base64urlencode(encryptto(d, a32_to_str(opsArr[d][q].k)))
+                    : a32_to_base64(encrypt_key(u_k_aes, opsArr[d][q].k));
+            }
+            catch (ex) {
+                reportError(ex);
+                return promise;
+            }
+        }
+
         ops.push(objj);
     }
     promiseResolves = ops.length;
-
-    // encrypt nodekeys, either by RSA or by AES, depending on whether
-    // we're sending them to a contact's inbox or not
-    // FIXME: do this in a worker
-    var c = (t || "").length == 11;
-    for (var i = a.length; i--;) {
-        try {
-            a[i].k = c
-                ? base64urlencode(encryptto(t, a32_to_str(a[i].k)))
-                : a32_to_base64(encrypt_key(u_k_aes, a[i].k));
-        }
-        catch (ex) {
-            reportError(ex);
-            return promise;
-        }
-    }
 
     api_req(ops, {
         cn: cn,
@@ -608,9 +749,16 @@ MegaData.prototype.copyNodes = function copynodes(cn, t, del, promise, tree) {
             if (typeof res === 'number' && res < 0) {
                 loadingDialog.phide();
                 if (promise) {
-                    return promise.reject(res);
+                    promise.reject(res);
                 }
-                return M.ulerror(null, res);
+
+                // If target of copy/move is in-shared folder, -17 may means ESHAREROVERQUOTA
+                if (res === EOVERQUOTA && sharer(ctx.t)) {
+                    return M.ulerror(null, ESHAREROVERQUOTA);
+                }
+                else {
+                    return M.ulerror(null, res);
+                }
             }
 
             if (ctx.del) {
@@ -623,11 +771,9 @@ MegaData.prototype.copyNodes = function copynodes(cn, t, del, promise, tree) {
             }
 
             nodesCount = importNodes - Object.keys(res).length;
-
-            // accelerate arrival of SC-conveyed new nodes by directly
-            // issuing a fetch
-            // (instead of waiting for waitxhr's connection to drop)
-            getsc();
+            if (ctx.t && ctx.t.length === 11) {
+                getsc(true);
+            }
         }
     });
 
@@ -639,12 +785,16 @@ MegaData.prototype.copyNodes = function copynodes(cn, t, del, promise, tree) {
  * @param {Array}   n       Array of node handles
  * @param {String}  t       Target folder node handle
  * @param {Boolean} [quiet] omit loading overlay
+ * @param {Number} folderDefaultConflictResolution pass a default conflict resolution {optional}
  * @returns {MegaPromise} Resolves with the number of moves
  */
-MegaData.prototype.moveNodes = function moveNodes(n, t, quiet) {
+MegaData.prototype.moveNodes = function moveNodes(n, t, quiet, folderDefaultConflictResolution) {
     'use strict'; /* jshint -W089, -W074 */
     var promise = new MegaPromise();
 
+    if (M.isInvalidUserStatus()) {
+        return;
+    }
     if (!quiet) {
         loadingDialog.pshow();
     }
@@ -732,8 +882,8 @@ MegaData.prototype.moveNodes = function moveNodes(n, t, quiet) {
                     var targetHandle = keys[0];
                     var nodeHandle = ctx.handle[targetHandle][0];
 
-                    // A hook for the mobile web to remove the node from the view and close the dialog
-                    mobile.deleteOverlay.completeDeletionProcess(nodeHandle);
+                    // A hook for mobile web to handle node changes.
+                    mobile.cloud.moveFinishedCallback(nodeHandle);
                 }
                 else {
                     renderPromise = M.updFileManagerUI();
@@ -741,7 +891,7 @@ MegaData.prototype.moveNodes = function moveNodes(n, t, quiet) {
             }
 
             renderPromise.always(function() {
-                Soon(fmtopUI);
+                Soon(fmLeftMenuUI);
                 $.tresizer();
 
                 onMoveNodesDone(ctx.pending.cnt);
@@ -763,6 +913,12 @@ MegaData.prototype.moveNodes = function moveNodes(n, t, quiet) {
                 if (!n.rr || n.rr !== p) {
                     n.rr = p;
                     api_setattr(n, mRandomToken('rrm'));
+                }
+            }
+            else {
+                if (n.rr) {
+                    delete n.rr;
+                    api_setattr(n, mRandomToken('rrm-d'));
                 }
             }
 
@@ -821,7 +977,10 @@ MegaData.prototype.moveNodes = function moveNodes(n, t, quiet) {
                 }
             }
 
-            removeUInode(h, p);
+            // If user is on out-shares or public-link list page, move should not remove node from the list
+            if (M.currentdirid !== 'out-shares' && M.currentdirid !== 'public-links') {
+                removeUInode(h, p);
+            }
             M.nodeUpdated(n);
             newnodes.push(n);
 
@@ -938,7 +1097,16 @@ MegaData.prototype.moveNodes = function moveNodes(n, t, quiet) {
 
             for (var dd in opsArr) {
                 for (var nn = 0; nn < opsArr[dd].length; nn++) {
-                    var objj = {a: 'm', t: dd, n: opsArr[dd][nn], i: requesti};
+                    var h = opsArr[dd][nn];
+                    var n = M.d[h] || false;
+                    var objj = {a: 'm', t: dd, n: h, i: requesti};
+
+                    // Rename nodes before performing the move to prevent race conditions from other clients...
+                    if (names[h] && n.name !== names[h]) {
+                        M.rename(h, names[h]);
+                        delete names[h];
+                    }
+
                     processmove(objj);
                     ops.push(objj);
                 }
@@ -957,8 +1125,16 @@ MegaData.prototype.moveNodes = function moveNodes(n, t, quiet) {
         // If the target folder is not the Rubbish, check whether we have to handle conflicts.
         if (t !== M.RubbishID) {
             mega.megadrop.preMoveCheck(n, t).done(function(n, t) {
-                fileconflict.check(n, t, 'move')
+                fileconflict.check(n, t, 'move', null, folderDefaultConflictResolution)
                     .always(function(files) {
+                        if (!files.length) {
+                            // user canceled the operation.
+                            if (!quiet) {
+                                loadingDialog.phide();
+                            }
+                            promise.reject(EBLOCKED);
+                            return false;
+                        }
                         if (!quiet) { // closing conflict dialogs is hiding the loading
                             loadingDialog.phide(); // making sure it's not visible.
                             loadingDialog.pshow();
@@ -995,9 +1171,12 @@ MegaData.prototype.moveNodes = function moveNodes(n, t, quiet) {
                             foreach(handles);
                         }
                         else {
-                            msgDialog('warninga', 'Moving Error',
-                                l[17739],
-                                'Error in Merging');
+                            if (is_mobile) {
+                                mobile.showErrorToast(l[17739]);
+                            }
+                            else {
+                                msgDialog('warninga', 'Moving Error', l[17739], 'Error in Merging');
+                            }
                             if (!quiet) {
                                 loadingDialog.phide();
                             }
@@ -1005,7 +1184,7 @@ MegaData.prototype.moveNodes = function moveNodes(n, t, quiet) {
                         }
                     });
             }).fail(function() {
-                loadingDialog.hide();
+                loadingDialog.hide('force');
                 // The user didn't want to disable MEGAdrop folders
                 promise.reject(EBLOCKED);
             });
@@ -1027,6 +1206,10 @@ MegaData.prototype.moveNodes = function moveNodes(n, t, quiet) {
  */
 MegaData.prototype.safeMoveNodes = function safeMoveNodes(target, nodes) {
     var promise = new MegaPromise();
+
+    if (M.isInvalidUserStatus()) {
+        return;
+    }
 
     nodes = nodes || $.selected || [];
 
@@ -1090,6 +1273,10 @@ MegaData.prototype.safeMoveNodes = function safeMoveNodes(target, nodes) {
  */
 MegaData.prototype.safeRemoveNodes = function(handles) {
     'use strict';
+
+    if (M.isInvalidUserStatus()) {
+        return;
+    }
     var masterPromise = new MegaPromise();
 
     handles = handles || [];
@@ -1127,11 +1314,11 @@ MegaData.prototype.safeRemoveNodes = function(handles) {
             var delPromise = new MegaPromise();
 
             for (i = toDel.length; i--;) {
-                promises.push(M.req({a: 'd', n: toDel[i], i: idtag}));
+                promises.push(M.req({a: 'd', n: toDel[i], i: i ? idtag.substr(-5) : idtag}));
             }
 
             M.scAckQueue[idtag] = function() {
-                delPromise.resolve.apply(delPromise, arguments);
+                delPromise.resolve();
             };
             promises.push(delPromise);
         }
@@ -1151,8 +1338,11 @@ MegaData.prototype.revertRubbishNodes = function(handles) {
     'use strict'; /* jshint -W089 */
     var masterPromise = new MegaPromise();
 
-    handles = handles || [];
+    if (M.isInvalidUserStatus()) {
+        return;
+    }
 
+    handles = handles || [];
     if (!Array.isArray(handles)) {
         handles = [handles];
     }
@@ -1182,6 +1372,10 @@ MegaData.prototype.revertRubbishNodes = function(handles) {
             var h = handles[i];
             var n = M.getNodeByHandle(h);
             var t = n.rr;
+
+            if (n.p !== M.RubbishID) {
+                continue;
+            }
 
             if (!t || !M.d[t] || M.getNodeRoot(t) === M.RubbishID) {
                 if (d) {
@@ -1223,6 +1417,18 @@ MegaData.prototype.revertRubbishNodes = function(handles) {
                     }
                     return M.d[h];
                 });
+
+                if (is_mobile) {
+                    loadingDialog.hide();
+
+                    if (error) {
+                        masterPromise.reject(error);
+                    }
+                    else {
+                        masterPromise.resolve(targets);
+                    }
+                    return;
+                }
 
                 // removeUInode may queued another `delay('openfolder', ...)`, let's overwrite it.
                 delay('openfolder', function() {
@@ -1316,9 +1522,14 @@ MegaData.prototype.revokeShares = function(handles) {
     'use strict'; /* jshint -W089, -W074 */
     var promise = new MegaPromise();
 
+    if (M.isInvalidUserStatus()) {
+        return;
+    }
+
     if (!Array.isArray(handles)) {
         handles = [handles];
     }
+    handles = array.unique(handles);
 
     if (d) {
         console.group('revokeShares for %s nodes...', handles.length, handles);
@@ -1423,6 +1634,10 @@ MegaData.prototype.revokeFolderShare = function(h, usr, isps) {
     'use strict';
     var promise = new MegaPromise();
 
+    if (M.isInvalidUserStatus()) {
+        return;
+    }
+
     if (String(h).length !== 8 || String(usr).length !== 11) {
         if (d) {
             console.warn('revokeFolderShare: Invalid arguments...', h, usr);
@@ -1470,17 +1685,16 @@ MegaData.prototype.nodeUpdated = function(n, ignoreDB) {
             n.tf = 0;
             n.tb = 0;
         }
-        if (n.rr && n.p !== M.RubbishID) {
-            if (d) {
-                console.debug('Removing rr attribute...', n.rr, n.p, n);
-            }
-            delete n.rr;
-            api_setattr(n, mRandomToken('rru'));
-        }
+
         ufsc.addToDB(n);
 
         if (this.nn && n.name && !n.fv) {
             this.nn[n.h] = n.name;
+        }
+
+        // update My chat files folder
+        if (this.cf.h === n.h) {
+            this.cf = n.p === M.RubbishID ? false : n;
         }
 
         // sync missingkeys with this node's key status
@@ -1528,6 +1742,11 @@ MegaData.prototype.nodeUpdated = function(n, ignoreDB) {
                 }
             }
         }
+        // if node in cached mode in editor, clear it
+        if (mega && mega.fileTextEditor) {
+            mega.fileTextEditor.clearCachedFileData(n.h);
+        }
+
         // Update versioning dialog if it is open and the folder is its parent folder,
         // the purpose of the following code is to update permisions of historical files.
         if ($.selected
@@ -1545,6 +1764,40 @@ MegaData.prototype.nodeUpdated = function(n, ignoreDB) {
     }
 };
 
+
+/**
+ * Fire DOM updating when a folder node's size gets updated
+ * @param {MegaNode} node  node object to update in UI
+ */
+MegaData.prototype.onFolderSizeChangeUIUpdate = function(node) {
+    "use strict";
+    var p = this.viewmode === 0 && this.currentdirid || false;
+    if (p && String(p).slice(-8) === node.p || M.currentCustomView || p === 'shares') {
+        var elm = document.getElementById(node.h);
+
+        if (elm) {
+            var s1 = elm.querySelector('.size');
+            var s2 = elm.querySelector('.shared-folder-size');
+
+            if (s1 || s2) {
+                var sizeText = bytesToSize(node.tb);
+
+                if (s1) {
+                    s1.textContent = sizeText;
+                }
+                if (s2) {
+                    s2.textContent = sizeText;
+
+                    if ((s2 = elm.querySelector('.shared-folder-info'))) {
+                        s2.textContent = fm_contains(node.tf, node.td);
+                    }
+                }
+            }
+        }
+
+        // @todo consider bringing back an approach to re-sort by size, one that wouldn't lead to uncaught exceptions.
+    }
+};
 
 /**
  * Fire DOM updating when a node gets a new name
@@ -1592,6 +1845,20 @@ MegaData.prototype.onRenameUIUpdate = function(itemHandle, newItemName) {
                 }
             }, 50);
         }
+
+        if ($('#treeli_' + n.h).length > 0) {
+            // Since n.h may not be a folder, we need to do some check to ensure we really need to do a tree redraw.
+            // In case its rendered in the dom as #treeli_hash, then this is 100% a folder that was rendered in its old
+            // order.
+            // Last but not least, we throttle this, so that big move/rename operations would only redraw the tree once
+            delay('onRenameUIUpdateTreePane', function () {
+                M.redrawTree();
+            }, 50);
+        }
+    }
+
+    if (M.recentsRender) {
+        M.recentsRender.nodeChanged(itemHandle);
     }
 };
 
@@ -1603,9 +1870,23 @@ MegaData.prototype.rename = function(itemHandle, newItemName) {
     }
 
     if (n && n.name !== newItemName) {
+        var oldItemName = n.name;
+
         n.name = newItemName;
-        api_setattr(n, mRandomToken('mv'));
+        if (n.t && M.tree[n.p]) {
+            Object(M.tree[n.p][n.h]).name = newItemName;
+        }
+
         this.onRenameUIUpdate(itemHandle, newItemName);
+        api_setattr(n, mRandomToken('mv'))
+            .fail(function(error) {
+                n.name = oldItemName;
+                if (n.t && M.tree[n.p]) {
+                    Object(M.tree[n.p][n.h]).name = oldItemName;
+                }
+                msgDialog('warninga', l[135], l[47], api_strerror(error));
+                M.onRenameUIUpdate(itemHandle, oldItemName);
+            });
     }
 };
 
@@ -1619,7 +1900,7 @@ MegaData.prototype.colourLabelcmUpdate = function(node) {
     var $items = $('.files-menu .dropdown-colour-item');
     var value;
 
-    value = node.lbl;
+    value = node.lbl | 0;
 
     // Reset label submenu
     $items.removeClass('active');
@@ -1648,23 +1929,33 @@ MegaData.prototype.labelDomUpdate = function(handle, value) {
     "use strict";
 
     if (fminitialized) {
+        var n = M.d[handle] || false;
         var labelId = parseInt(value);
         var removeClasses = 'colour-label red orange yellow blue green grey purple';
         var color = '<div class="colour-label-ind %1"></div>';
+        var prefixTree = M.currentCustomView.prefixTree || '';
+        var $treeElements = $('#treea_' + handle).add('#treea_os_' + handle).add('#treea_pl_' + handle);
 
         // Remove all colour label classes
-        $('#' + handle).removeClass(removeClasses);
-        $('#' + handle + ' a').removeClass(removeClasses);
-        $('#treea_' + handle).removeClass('labeled').find('.colour-label-ind').remove();
+        var $item = $('#' + handle);
+        $item.removeClass(removeClasses);
+        $('a', $item).removeClass(removeClasses);
+        $('.label', $item).text('');
+        $treeElements.removeClass('labeled');
+        $('.colour-label-ind', $treeElements).remove();
 
         if (labelId) {
             // Add colour label classes.
-            var colourClass = 'colour-label ' + M.getLabelClassFromId(labelId);
+            var lblColor = M.getLabelClassFromId(labelId);
+            var colourClass = 'colour-label ' + lblColor;
 
-            $('#' + handle).addClass(colourClass);
-            $('#' + handle + ' a').addClass(colourClass);
-            $('#treea_' + handle).append(color.replace('%1', M.getLabelClassFromId(labelId)))
+            $item.addClass(colourClass);
+            $('a', $item).addClass(colourClass);
+            $treeElements.safeAppend(color.replace('%1', M.getLabelClassFromId(labelId)))
                 .addClass('labeled');
+            if (M.megaRender) {
+                $('.label', $item).text(M.megaRender.labelsColors[lblColor]);
+            }
         }
 
         var currentTreeLabel = M.filterTreePanel[M.currentTreeType + '-label'];
@@ -1672,11 +1963,11 @@ MegaData.prototype.labelDomUpdate = function(handle, value) {
         if (currentTreeLabel && Object.keys(currentTreeLabel).length > 0) {
             // and action is assigning new tag
             if (labelId && currentTreeLabel[labelId]) {
-                $('#treeli_' + handle).removeClass("tree-item-on-filter-hidden");
+                $('#treeli_' + prefixTree + handle).removeClass("tree-item-on-filter-hidden");
             }
             // and action is unassigning old tag
             else {
-                $('#treeli_' + handle).addClass("tree-item-on-filter-hidden");
+                $('#treeli_' + prefixTree + handle).addClass("tree-item-on-filter-hidden");
             }
         }
 
@@ -1684,11 +1975,26 @@ MegaData.prototype.labelDomUpdate = function(handle, value) {
         $('.dropdown-section .dropdown-item-label')
             .add('.dropdown-section.filter-by .labels')
             .addClass('disabled static');
-        if (M.checkFilterAvailable()) {
+
+        if (M.isLabelExistNodeList(M.v)) {
             $('.dropdown-section .dropdown-item-label')
                 .add('.dropdown-section.filter-by .labels')
                 .removeClass('disabled static');
         }
+
+        delay('labelDomUpdate:' + n.p, function() {
+            // We only required to re-render if there is filter on the page.
+            if (M.filterLabel[M.currentCustomView.type]) {
+
+                // remember current scroll position and make user not losing it.
+                var $megaContainer = $('.megaListContainer:visible');
+                var currentScrollPosition = $megaContainer.prop('scrollTop');
+
+                M.openFolder(M.currentdirid, true).always(function() {
+                    $megaContainer.prop('scrollTop', currentScrollPosition);
+                }).done(reselect);
+            }
+        }, 50);
     }
 };
 
@@ -1699,35 +2005,50 @@ MegaData.prototype.labelDomUpdate = function(handle, value) {
  * @param {Integer} labelId Numeric value of label
  */
 MegaData.prototype.labeling = function(handles, labelId) {
-
-    var newLabelState = 0;
+    'use strict';
 
     if (fminitialized && handles) {
         if (!Array.isArray(handles)) {
             handles = [handles];
         }
 
-        $.each(handles, function(index, handle) {
-
+        for (var i = handles.length; i--;) {
+            var newLabelState = labelId | 0;
+            var handle = handles[i];
             var node = M.d[handle];
-            newLabelState = labelId;
+            if (!node) {
+                if (d) {
+                    console.warn('Node not found.', handle);
+                }
+                continue;
+            }
 
-            if (node.lbl === labelId) {
+            if (node.lbl === newLabelState) {
                 newLabelState = 0;
             }
             node.lbl = newLabelState;
+            if (!node.lbl) {
+                delete node.lbl;
+            }
+
             if (node.tvf) {
                 fileversioning.labelVersions(handle, newLabelState);
             }
+
             api_setattr(node, mRandomToken('lbl'));
 
             // sync with global tree
             if (node.t > 0) {
-                M.tree[node.p][node.h].lbl = node.lbl;
+                var tn = M.tree[node.p][node.h];
+
+                tn.lbl = node.lbl;
+                if (!tn.lbl) {
+                    delete tn.lbl;
+                }
             }
 
             M.labelDomUpdate(handle, newLabelState);
-        });
+        }
 
         M.initLabelFilter(M.v);
     }
@@ -1742,7 +2063,8 @@ MegaData.prototype.labelFilterBlockUI = function() {
     $('.files-grid-view.fm .filter-block.body').addClass('hidden');
 
     if (M.currentLabelFilter) {
-        if (fmconfig.viewmodes[M.currentdirid]) {// Block view
+
+        if (M.viewmode) {// Block view
             if (type === 'shares') {
                 $('.fm-right-header.fm .filter-block.' + type + '.body').removeClass('hidden');
             }
@@ -1778,6 +2100,12 @@ MegaData.prototype.labelType = function() {
     switch (M.currentrootid) {
         case 'shares':
             result = 'shares';
+            break;
+        case 'out-shares':
+            result = 'out-shares';
+            break;
+        case 'public-links':
+            result = 'public-links';
             break;
         case M.RubbishID:
             result = 'rubbish';
@@ -1879,7 +2207,7 @@ MegaData.prototype.applyLabelFilter = function (e) {
         $menuItems.filter('[data-label-id=' + labelId + ']').addClass('active');
         $filterBlock.find('.content').append(fltIndicator.replace('%1', M.getLabelClassFromId(labelId)));
 
-        if (fmconfig.viewmodes[M.currentdirid]) {
+        if (M.viewmode) {// Block view
             $('.fm-right-header.fm .filter-block.' + type + '.body').removeClass('hidden');
         }
         else {
@@ -1918,10 +2246,9 @@ MegaData.prototype.applyLabelFilter = function (e) {
 MegaData.prototype.isLabelExistNodeList = function(nodelist) {
     "use strict";
 
-    for (var i = 0; i < nodelist.length; i++) {
-        if (typeof nodelist[i] !== 'undefined'
-            && (typeof nodelist[i].lbl !== 'undefined'
-            && nodelist[i].lbl !== 0)){
+    for (var i = nodelist.length; i--;) {
+        var lbl = (nodelist[i] || {}).lbl | 0;
+        if (lbl) {
             return true;
         }
     }
@@ -1995,7 +2322,10 @@ MegaData.prototype.favourite = function(handles, newFavState) {
             var node = M.getNodeByHandle(handle);
 
             if (node && !exportLink.isTakenDown(handle)) {
-                node.fav = newFavState;
+                node.fav = newFavState | 0;
+                if (!node.fav) {
+                    delete node.fav;
+                }
                 api_setattr(node, mRandomToken('fav'));
                 if (node.tvf) {
                     fileversioning.favouriteVersions(handle, newFavState);
@@ -2041,12 +2371,20 @@ MegaData.prototype.isFavourite = function(nodesId) {
  */
 MegaData.prototype.versioningDomUpdate = function(fh) {
     var $nodeView = $('#' + fh);
+    var $versionsCol = $nodeView.find('td[megatype="versions"]');
 
     if (M.d[fh] && M.d[fh].tvf) {// Add versioning
         $nodeView.addClass('versioning');
+        if ($versionsCol && $versionsCol.length) {
+            var $verHtml = M.megaRender.versionColumnPrepare(M.d[fh].tvf, M.d[fh].tvb || 0);
+            $versionsCol.empty().append($verHtml);
+        }
     }
     else {// Remove versioning
         $nodeView.removeClass('versioning');
+        if ($versionsCol && $versionsCol.length) {
+            $versionsCol.empty();
+        }
     }
 };
 
@@ -2258,10 +2596,26 @@ MegaData.prototype.getCopyNodesSync = function fm_getcopynodesync(handles, names
             nn.k = n.k;
         }
 
+        var cloned = false;
         // check if renaming should be done
         if (names && names[n.h]) {
             n = clone(n);
+            cloned = true;
             n.name = M.getSafeName(names[n.h]);
+        }
+
+        // check it need to clear node attribute
+        if ($.clearCopyNodeAttr) {
+            delete n.lbl;
+            delete n.fav;
+        }
+
+        // regardless to where the copy is remove rr
+        if (n.rr) {
+            if (!cloned) {
+                n = clone(n);
+            }
+            delete n.rr;
         }
 
         // new node inherits all attributes
@@ -2339,6 +2693,214 @@ MegaData.prototype.getShareNodesSync = function fm_getsharenodessync(h, root) {
     }
 
     return sn;
+};
+
+/**
+ * Retrieve a list of recent nodes
+ * @param {Number} [limit] Limit the returned results, defaults to last 10000 nodes.
+ * @param {Number} [until] Get nodes not older than this unix timestamp, defaults to nodes from past month.
+ * @return {Promise}
+ */
+MegaData.prototype.getRecentNodes = function(limit, until) {
+    'use strict';
+    console.time("recents:collectNodes");
+
+    return new Promise(function(resolve) {
+        var rubTree = M.getTreeHandles(M.RubbishID);
+        var rubFilter = function(n) {
+            return rubTree.indexOf(n.p) < 0;
+        };
+        var getLocalNodes = function() {
+            rubTree = rubFilter.tree;
+            var nodes = Object.values(M.d)
+                .filter(function(n) {
+                    return !n.t && n.ts > until && rubFilter(n);
+                });
+
+            resolve(nodes, limit);
+        };
+        rubFilter.tree = rubTree;
+        limit = limit | 0 || 1e4;
+        until = until || Math.round((Date.now() - 7776e6) / 1e3);
+
+        resolve = (function(resolve) {
+            return function(nodes) {
+                var sort = M.getSortByDateTimeFn();
+                nodes = nodes.filter(function(n) {
+                    return !n.fv;
+                }).sort(function(a, b) {
+                    return sort(a, b, -1);
+                });
+                console.timeEnd("recents:collectNodes");
+                resolve(limit ? nodes.slice(0, limit) : nodes);
+            };
+        })(resolve);
+
+        if (fmdb) {
+            rubTree = rubTree.map(function(h) {
+                return fmdb.toStore(h);
+            });
+            var binRubFilter = function(n) {
+                for (var i = rubTree.length; i--;) {
+                    if (!indexedDB.cmp(rubTree[i], n.p)) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            var dbRubFilter = FMDB.$useBinaryKeys ? binRubFilter : rubFilter;
+            var options = {
+                limit: limit,
+
+                query: function(db) {
+                    return db.orderBy('t').reverse().filter(dbRubFilter)
+                        .until(function(row) {
+                            return until > row.t;
+                        });
+                },
+                include: function(row) {
+                    return row.t > until;
+                }
+            };
+            fmdb.getbykey('f', options).then(resolve).catch(getLocalNodes);
+        }
+        else {
+            getLocalNodes();
+        }
+    });
+};
+
+/**
+ * Get Recent Actions
+ * @param {Number} [limit] Limit the returned nodes in the interactions results, defaults to last 10000 nodes.
+ * @param {Number} [until] Get nodes not older than this unix timestamp, defaults to nodes from past month.
+ * @return {Promise}
+ */
+MegaData.prototype.getRecentActionsList = function(limit, until) {
+    'use strict';
+
+    var tree = Object.assign.apply(null, [{}].concat(Object.values(M.tree)));
+
+    // Get date from timestamp with Today & Yesterday titles.
+    var getDate = function(ts) {
+        var today = moment().startOf('day');
+        var yesterday = today.clone().subtract(1, 'days');
+        var format = {weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'};
+
+        getDate = function(ts) {
+            var date = moment(ts * 1e3);
+            return date.isSame(today, 'd')
+                ? l[1301]
+                : date.isSame(yesterday, 'd')
+                    ? l[1302]
+                    : time2date(ts, 4);
+        };
+        return getDate(ts);
+    };
+
+    // Sort array of objects by ts, most recent first.
+    var byTimeDesc = function(a, b) {
+        if (a.ts === b.ts) {
+            return 0;
+        }
+        return a.ts > b.ts ? -1 : 1;
+    };
+
+    // Create a new action object based off first node in group.
+    var newActionBucket = function(n, actionType, blockType) {
+        var b = [];
+        b.ts = n.ts;
+        b.date = getDate(b.ts);
+        b.path = [];
+        b.user = n.u;
+        b.action = actionType;
+        b.type = blockType;
+        var p = n.p;
+
+        while (tree[p]) {
+            var t = tree[p];
+            p = t.p;
+            b.path.push({
+                name: t.h === M.RootID ? l[164] : t.name || t.h,
+                h: t.h,
+                pathPart: true
+            });
+            if (t.t & M.IS_SHARED) {
+                b.outshare = true;
+            }
+            if (t.su && !tree[p]) {
+                b.path.push({
+                    name: l[5542],
+                    h: 'shares',
+                    pathPart: true
+                });
+                b.inshare = true;
+            }
+        }
+        return b;
+    };
+
+    return new Promise(function(resolve, reject) {
+        M.getRecentNodes(limit, until).then(function(nodes) {
+            console.time("recents:collateActions");
+            nodes.sort(byTimeDesc);
+
+            // Index is used for finding correct bucket for node.
+            var index = {};
+
+            // Action list to return to caller.
+            var recentActions = [];
+            recentActions.nodeCount = nodes.length;
+
+            // Radix sort nodes into buckets.
+            for (var i = 0; i < nodes.length; i++) {
+                var n = new MegaNode(nodes[i]);
+                var actionType = n.tvf ? "updated" : "added";
+                var blockType = is_image2(n) || is_video(n) === 1 ? 'media' : 'files';
+                index[n.u] = index[n.u] || Object.create(null);
+                index[n.u][n.p] = index[n.u][n.p] || Object.create(null);
+                index[n.u][n.p][actionType] = index[n.u][n.p][actionType] || Object.create(null);
+                index[n.u][n.p][actionType][blockType] = index[n.u][n.p][actionType][blockType] || { endts: 0 };
+
+                // Split nodes into groups based on time separation.
+                var bucket = index[n.u][n.p][actionType][blockType];
+                if (bucket.endts === 0 || n.ts < bucket.endts) {
+                    bucket.endts = n.ts - 21600; // 6 Hours
+                    bucket.group = newActionBucket(n, actionType, blockType);
+                    recentActions.push(bucket.group);
+                }
+
+                // Populate node properties.
+                n.recent = true;
+                delete n.ar;
+
+                // Add node to bucket.
+                bucket.group.push(n);
+            }
+
+            console.timeEnd("recents:collateActions");
+            M.recentActions = recentActions;
+            resolve(recentActions);
+        }).catch(reject);
+    });
+};
+
+/**
+ * Retrieve all folders hierarchy starting from provided handle
+ * @param {String} h The root node handle
+ * @return {Array} node handles
+ */
+MegaData.prototype.getTreeHandles = function _(h) {
+    'use strict';
+
+    var result = [h];
+    var tree = Object.keys(M.tree[h] || {});
+
+    for (var i = tree.length; i--;) {
+        result.push.apply(result, _(tree[i]));
+    }
+
+    return result;
 };
 
 /**
@@ -2460,107 +3022,99 @@ MegaData.prototype.isFolder = function(nodesId) {
 
 /**
  * Create new folder on the cloud
- * @param {String} toid The handle where the folder will be created.
+ * @param {String} target The handle where the folder will be created.
  * @param {String|Array} name Either a string with the folder name to create, or an array of them.
- * @param {Object|MegaPromise} ulparams Either an old-fashion object with a `callback` function or a MegaPromise.
- * @return {Object} The `ulparams`, whatever it is.
+ * @return {Promise} the handle of the deeper created folder.
  */
-MegaData.prototype.createFolder = function(toid, name, ulparams) {
+MegaData.prototype.createFolder = promisify(function(resolve, reject, target, name) {
     "use strict";
+    var self = this;
+    var inflight = self.cfInflightR;
 
-    // This will be called when the folder creation succeed, pointing
-    // the caller with the handle of the deeper created folder.
-    var resolve = function(folderHandle) {
-        if (ulparams) {
-            if (ulparams instanceof MegaPromise) {
-                ulparams.resolve(folderHandle);
-            }
-            else {
-                ulparams.callback(ulparams, folderHandle);
-            }
-        }
-        return ulparams;
-    };
+    target = String(target || M.RootID);
 
-    // This will be called when the operation failed.
-    var reject = function(error) {
-        if (ulparams instanceof MegaPromise) {
-            ulparams.reject(error);
-        }
-        else {
-            msgDialog('warninga', l[135], l[47], api_strerror(error));
-        }
-        return ulparams;
-    };
-
-    toid = toid || M.RootID;
-
-    // Prevent unneeded API calls if toid is not a valid handle
-    if ([8, 11].indexOf(String(toid).length) === -1) {
+    // Prevent unneeded API calls if target is not a valid handle
+    if (target.length !== 8 && target.length !== 11) {
         return reject(EACCESS);
     }
 
     if (Array.isArray(name)) {
         name = name.map(String.trim).filter(String).slice(0);
 
-        if (!name.length) {
-            name = undefined;
-        }
-        else {
+        if (name.length) {
             // Iterate through the array of folder names, creating one at a time
-            var next = function(target, folderName) {
-                M.createFolder(target, folderName, new MegaPromise())
-                    .done(function(folderHandle) {
-                        if (!name.length) {
-                            resolve(folderHandle);
-                        }
-                        else {
+            (function next(target, folderName) {
+                self.createFolder(target, folderName)
+                    .then(function(folderHandle) {
+                        if (name.length) {
                             next(folderHandle, name.shift());
                         }
+                        else {
+                            resolve(folderHandle);
+                        }
                     })
-                    .fail(function(error) {
-                        reject(error);
-                    });
-            };
-            next(toid, name.shift());
-            return ulparams;
+                    .catch(reject);
+            })(target, name.shift());
+            return;
         }
+
+        name = null;
     }
 
     if (!name) {
-        return resolve(toid);
+        return resolve(target);
     }
+
+    if (!inflight[target]) {
+        inflight[target] = Object.create(null);
+    }
+    if (!inflight[target][name]) {
+        inflight[target][name] = [];
+    }
+
+    if (inflight[target][name].push([resolve, reject]) > 1) {
+        if (d) {
+            console.debug('deduplicated folder creation attempt on %s for "%s"...', target, name);
+        }
+        return;
+    }
+
+    var _dispatch = function(idx, result) {
+        var queue = inflight[target][name];
+
+        delete inflight[target][name];
+        if (!$.len(inflight[target])) {
+            delete inflight[target];
+        }
+
+        for (var i = 0; i < queue.length; i++) {
+            queue[i][idx](result);
+        }
+    };
+    reject = _dispatch.bind(null, 1);
+    resolve = _dispatch.bind(null, 0);
 
     var _done = function cfDone() {
 
-        if (M.c[toid]) {
+        if (M.c[target]) {
             // Check if a folder with the same name already exists.
-            for (var handle in M.c[toid]) {
+            for (var handle in M.c[target]) {
                 if (M.d[handle] && M.d[handle].t && M.d[handle].name === name) {
                     return resolve(M.d[handle].h);
                 }
             }
         }
 
-        var n = { name: name };
+        var n = {name: name};
         var attr = ab_to_base64(crypto_makeattr(n));
         var key = a32_to_base64(encrypt_key(u_k_aes, n.k));
-        var req = { a: 'p', t: toid, n: [{ h: 'xxxxxxxx', t: 1, a: attr, k: key }], i: requesti };
-        var sn = M.getShareNodesSync(toid);
+        var req = {a: 'p', t: target, n: [{h: 'xxxxxxxx', t: 1, a: attr, k: key}], i: requesti};
+        var sn = M.getShareNodesSync(target);
 
         if (sn.length) {
             req.cr = crypto_makecr([n], sn, false);
             req.cr[1][0] = 'xxxxxxxx';
         }
-
-        if (!ulparams) {
-            loadingDialog.pshow();
-        }
-        var hideOverlay = function() {
-            if (!ulparams) {
-                loadingDialog.phide();
-            }
-        };
 
         api_req(req, {
             callback: function(res) {
@@ -2573,7 +3127,6 @@ MegaData.prototype.createFolder = function(toid, name, ulparams) {
                     var n = Array.isArray(res.f) && res.f[0];
 
                     if (typeof n !== 'object' || typeof n.h !== 'string' || n.h.length !== 8) {
-                        hideOverlay();
                         return reject(EINTERNAL);
                     }
 
@@ -2594,10 +3147,9 @@ MegaData.prototype.createFolder = function(toid, name, ulparams) {
                         $('.create-new-folder input').val('');
 
                         M.updFileManagerUI().always(function() {
-                            if ($.copyDialog || $.moveDialog) {
+                            if ($.copyDialog || $.moveDialog || $.selectFolderDialog || $.saveAsDialog) {
                                 refreshDialogContent();
                             }
-                            hideOverlay();
 
                             for (var i = M._cfUIUpdateQ.length; i--;) {
                                 var q = M._cfUIUpdateQ[i];
@@ -2608,22 +3160,19 @@ MegaData.prototype.createFolder = function(toid, name, ulparams) {
                     });
                 }
                 else {
-                    hideOverlay();
                     reject(res);
                 }
             }
         });
     };
 
-    if (M.c[toid]) {
+    if (M.c[target]) {
         _done();
     }
     else {
-        dbfetch.get(toid, new MegaPromise()).always(_done);
+        dbfetch.get(target).always(_done);
     }
-
-    return ulparams;
-};
+});
 
 /**
  * Create new folder on the cloud
@@ -2662,7 +3211,7 @@ MegaData.prototype.createFolders = function(paths, target) {
             logger.debug('mkdir under %s (%s) for...', t, M.getNodeByHandle(t).name, s);
         }
         Object.keys(s).forEach(function(name) {
-            M.createFolder(t, name, new MegaPromise()).always(function(res) {
+            M.createFolder(t, name).always(function(res) {
                 if (res.length !== 8) {
                     var err = 'Failed to create folder "%s" on target %s(%s)';
                     logger.warn(err, name, t, M.getNodeByHandle(t).name, res);
@@ -2736,6 +3285,40 @@ MegaData.prototype.leaveShare = function(h) {
 
     return promise;
 };
+
+MegaData.prototype.createPublicLink = promisify(function(resolve, reject, handle) {
+    'use strict';
+
+    dbfetch.get(handle).then(function() {
+        return M.getNodeShare(handle).h === handle || !M.d[handle].t || M.getNodes(handle, 1);
+    }).then(function(nodes) {
+        return Array.isArray(nodes) ? api_setshare(handle, [{u: 'EXP', r: 0}], nodes) : {r: [0]};
+    }).then(function(res) {
+        return M.d[handle].ph || res.r && res.r[0] === 0 && M.req({a: 'l', i: requesti, n: handle});
+    }).then(function(ph) {
+        if (!ph || typeof ph !== 'string') {
+            return reject(EFAILED);
+        }
+        var n = M.getNodeByHandle(handle);
+        if (n.ph !== ph) {
+            M.nodeShare(handle, {h: handle, r: 0, u: 'EXP', ts: unixtime(), ph: ph});
+            n.ph = ph;
+            M.nodeUpdated(n);
+        }
+        var res = {
+            n: n,
+            ph: ph,
+            key: n.t ? u_sharekeys[n.h][0] : n.k
+        };
+        if (mega.flags.nlfe) {
+            res.link = getBaseUrl() + '/' + (n.t ? 'folder' : 'file') + '/' + res.ph + '#' + a32_to_base64(res.key);
+        }
+        else {
+            res.link = getBaseUrl() + '/#' + (n.t ? 'F' : '') + '!' + res.ph + '!' + a32_to_base64(res.key);
+        }
+        resolve(res);
+    }).catch(reject);
+});
 
 /**
  * Retrieve node share.
@@ -2943,6 +3526,12 @@ MegaData.prototype.delNodeShare = function(h, u, okd) {
 
         var a;
         for (var i in this.d[h].shares) {
+
+            // If there is only public link in shares, and deletion is not target public link.
+            if (i === 'EXP' && Object.keys(this.d[h].shares).length === 1 && u !== 'EXP') {
+                updnode = true;
+            }
+
             if (this.d[h].shares[i]) {
                 a = true;
                 break;
@@ -3002,6 +3591,9 @@ MegaData.prototype.getUserByHandle = function(handle) {
     }
     else if (this.opc[handle]) {
         user = this.opc[handle];
+    }
+    else if (this.ipc[handle]) {
+        user = this.ipc[handle];
     }
 
     if (!user && handle === u_handle) {
@@ -3080,9 +3672,9 @@ MegaData.prototype.getNameByHandle = function(handle) {
     if (handle.length === 11) {
         var user = this.getUserByHandle(handle);
 
+        // If user exists locally, use Nickname or FirstName LastName or fallback to email
         if (user) {
-            // XXX: fallback to email
-            result = user.name && $.trim(user.name) || user.m;
+            result = nicknames.getNickname(handle) || user.m;
         }
         else if (window.megaChatIsReady && megaChat.chats[handle]) {
             var chat = megaChat.chats[handle];
@@ -3101,7 +3693,7 @@ MegaData.prototype.getNameByHandle = function(handle) {
         var node = this.getNodeByHandle(handle);
 
         if (node) {
-            result = node.name;
+            result = node.name || '';
         }
     }
 
@@ -3154,6 +3746,77 @@ MegaData.prototype.getNodeParent = function(node) {
 };
 
 /**
+ * Retrieve media properties for a file node.
+ * @param {MegaNode|String} node An ufs node or handle
+ * @return {Object} Media properties.
+ */
+MegaData.prototype.getMediaProperties = function(node) {
+    'use strict';
+    node = typeof node === 'string' ? this.getNodeByHandle(node) : node;
+
+    var isText = false;
+    var isImage = is_image2(node);
+    var mediaType = is_video(node);
+    var isVideo = mediaType > 0;
+    var isAudio = mediaType > 1;
+    var isPreviewable = isImage || isVideo;
+
+    if (!isPreviewable && is_text(node)) {
+        isText = isPreviewable = true;
+    }
+
+    return {
+        isText: isText,
+        isImage: isImage,
+        isVideo: isVideo,
+        isAudio: isAudio,
+        icon: fileIcon(node),
+        isPreviewable: isPreviewable,
+        showThumbnail: String(node.fa).indexOf(':1*') > 0
+    };
+};
+
+/**
+ * Preview a node in-browser.
+ * @param {MegaNode|String} node An ufs node or handle
+ * @return {Boolean} whether it was shown.
+ */
+MegaData.prototype.viewMediaFile = function(node) {
+    'use strict';
+    node = typeof node === 'string' ? this.getNodeByHandle(node) : node;
+    var prop = M.getMediaProperties(node);
+    var handle = node.ch || node.h;
+    var result = true;
+
+    console.assert(prop.isPreviewable, 'This is not viewable..');
+
+    if (prop.isText) {
+        loadingDialog.show();
+        mega.fileTextEditor.getFile(handle)
+            .then(function(data) {
+                loadingDialog.hide();
+                mega.textEditorUI.setupEditor(node.name, data, handle, true);
+            })
+            .catch(function(ex) {
+                console.warn(ex);
+                loadingDialog.hide();
+            });
+    }
+    else if (typeof slideshow === 'function') {
+        if (prop.isVideo) {
+            $.autoplay = node.h;
+        }
+        slideshow(handle, 0, true);
+    }
+    else {
+        console.assert(is_mobile, 'Where are we?...');
+        result = false;
+    }
+
+    return result;
+};
+
+/**
  * Retrieve dashboard statistics data
  */
 MegaData.prototype.getDashboardData = function() {
@@ -3170,7 +3833,7 @@ MegaData.prototype.getDashboardData = function() {
     res.rubbish = { cnt: s[this.RubbishID].files, size: s[this.RubbishID].bytes };
     res.ishares = { cnt: s.inshares.items, size: s.inshares.bytes, xfiles: s.inshares.files };
     res.oshares = { cnt: s.outshares.items, size: s.outshares.bytes };
-    res.links = { cnt: s.links.files, size: s.links.bytes };
+    res.links = { cnt: s.links.folders, size: s.links.bytes, xfiles: s.links.files };
     res.versions = { cnt: s[this.RootID].vfiles, size: s[this.RootID].vbytes };
 
     return res;
@@ -3203,6 +3866,12 @@ MegaData.prototype.deletePendingShare = function(nodeHandle, pendingContactId) {
 
         if (this.ps[nodeHandle] && this.ps[nodeHandle][pendingContactId]) {
             this.delPS(pendingContactId, nodeHandle);
+
+            if (this.ps[nodeHandle] === undefined &&
+                (this.d[nodeHandle].shares === undefined ||
+                ('EXP' in this.d[nodeHandle].shares && Object.keys(this.d[nodeHandle].shares).length === 1))) {
+                this.nodeUpdated(M.d[nodeHandle]);
+            }
         }
     }
 };
@@ -3253,6 +3922,11 @@ MegaData.prototype.disableCircularTargets = function disableCircularTargets(pref
             console.error('M.disableCircularTargets: Invalid node', handle, pref);
         }
 
+        // Disable moving to rubbish from rubbish
+        if (M.getNodeRoot(handle) === M.RubbishID) {
+            $(pref + M.RubbishID).addClass('disabled');
+        }
+
         // Disable all children folders
         this.disableDescendantFolders(handle, pref);
     }
@@ -3288,31 +3962,18 @@ MegaData.prototype.importWelcomePDF = function() {
     'use strict';
     var promise = new MegaPromise();
 
-    M.req('wpdf').done(function(res) {
+    M.req('wpdf').always(function(res) {
         if (typeof res === 'object') {
             var ph = res.ph;
             var key = res.k;
-            M.req({a: 'g', p: ph}).done(function(res) {
+            M.req({a: 'g', p: ph}).always(function(res) {
                 if (typeof res.at === 'string') {
-                    M.onFileManagerReady(function() {
-                        var doit = true;
-                        for (var i = M.v.length; i--;) {
-                            if (fileext(M.v[i].name) === 'pdf') {
-                                doit = false;
-                                break;
-                            }
-                        }
-
-                        if (doit) {
-                            if (d) {
-                                console.log('Importing Welcome PDF (%s)', ph, res.at);
-                            }
-                            promise.linkDoneAndFailTo(M.importFileLink(ph, key, res.at));
-                        }
-                        else {
-                            promise.reject(EEXIST);
-                        }
-                    });
+                    // No need to wait for FileManager to be ready, and no need to check anything
+                    // This method is ONLY called when the initial ephemral account is created
+                    if (d) {
+                        console.log('Importing Welcome PDF (%s)', ph, res.at);
+                    }
+                    promise.linkDoneAndFailTo(M.importFileLink(ph, key, res.at));
                 }
                 else {
                     promise.reject(res);
@@ -3367,6 +4028,12 @@ MegaData.prototype.importFileLink = function importFileLink(ph, key, attr, srcNo
             $.mcImport = true;
             $.saveToDialogPromise = reject;
 
+            // Remove original fav and lbl for new node.
+            delete srcNode.fav;
+            delete srcNode.lbl;
+
+            n.a = ab_to_base64(crypto_makeattr(srcNode));
+
             openSaveToDialog(srcNode, function(srcNode, target) {
                 dbfetch.get(target).always(function() {
                     var name = srcNode.name;
@@ -3404,7 +4071,7 @@ MegaData.prototype.importFileLink = function importFileLink(ph, key, attr, srcNo
             });
         }
         else {
-            _import(M.RootID);
+            _import(!folderlink && M.RootID ? M.RootID : undefined);
         }
     });
 };
@@ -3418,6 +4085,7 @@ MegaData.prototype.importFolderLinkNodes = function importFolderLinkNodes(nodes)
 
     var _import = function(data) {
         M.onFileManagerReady(function() {
+            loadingDialog.hide('import');
             openCopyDialog(function() {
                 $.mcImport = true;
                 $.selected = data[0];
@@ -3432,23 +4100,25 @@ MegaData.prototype.importFolderLinkNodes = function importFolderLinkNodes(nodes)
     };
 
     if (localStorage.folderLinkImport && !folderlink) {
-
+        loadingDialog.show('import');
         if ($.onImportCopyNodes) {
             _import($.onImportCopyNodes);
         }
         else {
-            var kv = StorageDB(u_handle);
+            var kv = MegaDexie.create(u_handle);
             var key = 'import.' + localStorage.folderLinkImport;
 
             kv.get(key)
-                .done(function(data) {
+                .then(function(data) {
                     _import(data);
-                    kv.rem(key);
+                    kv.remove(key, true).dump(key);
                 })
-                .fail(function(e) {
+                .catch(function(ex) {
                     if (d) {
-                        console.error(e);
+                        console.error(ex);
                     }
+                    loadingDialog.hide('import');
+                    kv.remove(key, true).dump(key);
                     msgDialog('warninga', l[135], l[47]);
                 });
         }
@@ -3457,12 +4127,16 @@ MegaData.prototype.importFolderLinkNodes = function importFolderLinkNodes(nodes)
     }
 
     var sel = [].concat(nodes || []);
+
     if (sel.length) {
         var FLRootID = M.RootID;
 
         mega.ui.showLoginRequiredDialog().done(function() {
             loadingDialog.show();
             localStorage.folderLinkImport = FLRootID;
+
+            // It is import so need to clear existing attribute for new node.
+            $.clearCopyNodeAttr = true;
 
             M.getCopyNodes(sel)
                 .done(function(nodes) {
@@ -3476,19 +4150,20 @@ MegaData.prototype.importFolderLinkNodes = function importFolderLinkNodes(nodes)
                         fallback();
                     }
                     else {
-                        StorageDB(u_handle)
+                        MegaDexie.create(u_handle)
                             .set('import.' + FLRootID, data)
-                            .done(function() {
-
+                            .then(function() {
                                 loadSubPage('fm');
                             })
-                            .fail(function(e) {
+                            .catch(function(ex) {
                                 if (d) {
-                                    console.warn('Cannot import using indexedDB...', e);
+                                    console.warn('Cannot import using indexedDB...', ex);
                                 }
                                 fallback();
                             });
                     }
+                }).always(function() {
+                    delete $.clearCopyNodeAttr;
                 });
         }).fail(function(aError) {
             // If no aError, it was canceled
@@ -3498,3 +4173,15 @@ MegaData.prototype.importFolderLinkNodes = function importFolderLinkNodes(nodes)
         });
     }
 };
+
+/**
+ * Utility functions to handle 'My chat files' folder.
+ * @name myChatFilesFolder
+ * @memberOf MegaData
+ * @type {Object}
+ */
+lazy(MegaData.prototype, 'myChatFilesFolder', function() {
+    'use strict';
+    return mega.attr.getFolderFactory("cf", false, true, 'h',
+        [l[20157], 'My chat files'], base64urlencode, base64urldecode);
+});

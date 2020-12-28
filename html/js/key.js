@@ -23,6 +23,7 @@ function ui_keycomplete() {
     }
     else {
         localStorage.keycomplete = true;
+        sessionStorage.signinorup = 2;
 
         // If mobile, log to see how many registrations are completed on mobile and load the cloud drive
         if (is_mobile) {
@@ -44,7 +45,23 @@ function ui_keycomplete() {
             api_req({ a: 'log', e: 99628, m: 'Completed registration on regular webclient' });
         }
 
-        // Load the Pro page to choose plan
-        loadSubPage('pro');
+        // if this is a sub-user in a business account.
+        // either This is the master  --> wont get the confirmation link until we receive successful payment
+        // or, this is a sub-user --> no need to ask them anything after this point
+        if (u_attr && u_attr.b) {
+            if (page === 'fm') {
+                loadSubPage('start');
+            }
+            else {
+                loadSubPage('fm');
+            }
+        }
+        else {
+            onIdle(function() {
+                authring.initAuthenticationSystem();
+            });
+            // Load the Pro page to choose plan, or the redeem page if a pending voucher is found.
+            loadSubPage(localStorage.voucher ? 'redeem' : 'pro');
+        }
     }
 }

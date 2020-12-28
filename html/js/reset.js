@@ -3,18 +3,13 @@ var recoveryemail;
 var recoverykey;
 
 function init_reset() {
-    if (u_type) {
-        msgDialog('warningb', l[135], l[1971], false, function(e) {
-            loadSubPage('help/account');
-        });
-        return false;
-    }
     $.tresizer();
     loadingDialog.show();
     recoverycode = page.replace('recover', '');
     api_req({
         a: 'erv',
-        c: recoverycode
+        c: recoverycode,
+        v: 2
     }, {
         callback: function(res) {
             loadingDialog.hide();
@@ -32,6 +27,15 @@ function init_reset() {
             }
             else {
                 if (res[0] === 9) {
+                    if (u_type || u_type === 0) {
+
+                        msgDialog("warninga", '', l[22817], '', function() {
+                            loadSubPage('fm');
+                        });
+
+                        return;
+                    }
+
                     recoveryemail = res[1];
                     $('.main-mid-pad.backup-recover.withkey').removeClass('hidden');
 
@@ -46,7 +50,6 @@ function init_reset() {
                     });
 
                     $('#key-upload-field').rebind('change', function(e) {
-                        $('.recover-block.error,.recover-block.success').addClass('hidden');
                         if (e && e.target && e.target.files) {
                             var f = e.target.files[0];
                             if (f && f.size > 100) {
@@ -62,31 +65,46 @@ function init_reset() {
                             }
                         }
                     });
+
+                    $('.park-account-link').rebind('click', function() {
+                        AccountRecoveryControl.showParkWarning();
+                    });
                 }
                 else if (res[0] === 10) {
+
+                    if (u_type || u_type === 0) {
+
+                        msgDialog("warninga", '', l[22818], '', function() {
+                            loadSubPage('fm');
+                        });
+
+                        return;
+                    }
+
                     recoveryemail = res[1];
-                    $('.main-mid-pad.backup-recover.withoutkey').removeClass('hidden');
+                    var $wKey = $('.main-mid-pad.backup-recover.withoutkey').removeClass('hidden');
                     $('.backup-notification-block').removeClass('hidden');
+                    if (res[6] && res[6].b) {
+                        $wKey.find('.step-main-question').text(l[23050]);
+                        $wKey.find('#step-p1').text(l[23051]);
+                        $wKey.find('#step-p2').safeHTML(l[23052]);
+                        $wKey.find('#lbl-reset-confirm-txt').text(l[23053]);
+                    }
+                    else {
+                        $wKey.find('.step-main-question').text(l[19841]);
+                        $wKey.find('#step-p1').text(l[19842]);
+                        $wKey.find('#step-p2').safeHTML(l[19843]);
+                        $wKey.find('#lbl-reset-confirm-txt').text(l[1950]);
+                    }
                 }
             }
         }
     });
 
-    if (typeof zxcvbn === 'undefined') {
-        $('.login-register-input.password').addClass('loading');
-
-        M.require('zxcvbn_js')
-            .done(function() {
-                $('.login-register-input.password').removeClass('loading');
-                reset_pwcheck();
-            });
-    }
-    else {
-        $('.login-register-input.password').removeClass('loading');
-        reset_pwcheck();
-    }
-
     $('.restore-verify-button').rebind('click', function(e) {
+        if (!$(this).hasClass('active')) {
+            return false;
+        }
         if ($(this).hasClass('reset-account')) {
             delete_reset_pw();
         }
@@ -106,27 +124,27 @@ function init_reset() {
         return false;
     });
 
-    $('.login-register-input').rebind('click', function(e) {
+    $('.login-register-input').rebind('click', function() {
         $(this).find('input').trigger("focus");
     });
 }
 
 function delete_reset_pw() {
 
-    var c = $('.register-check').attr('class');
     var password = $('#withoutkey-password').val();
+    var confirmPassword = $('#withoutkey-password2').val();
+    var passwordValidationResult = security.isValidPassword(password, confirmPassword);
 
-    if (password === l[909]) {
-        msgDialog('warninga', l[135], l[741]);
-        return;
-    }
-    else if ($('#withoutkey-password').val() !== $('#withoutkey-password2').val()) {
-        msgDialog('warninga', l[135], l[715]);
-        return;
-    }
-    else if ($('.login-register-input.password').hasClass('weak-password')) {
-        msgDialog('warninga', l[135], l[1129]);
-        return;
+    // If bad result
+    if (passwordValidationResult !== true) {
+        msgDialog('warninga', l[135], passwordValidationResult, '', function() {
+            // Clear the park account form after warning passwords aren't matching
+            $('#withoutkey-password').data('MegaInputs').setValue('');
+            $('#withoutkey-password2').data('MegaInputs').setValue('');
+            $('.new-registration-checkbox .register-check').removeClass('checkboxOn').addClass('checkboxOff');
+            init_reset_pw();
+        });
+        return false;
     }
     else if ($('.new-registration-checkbox .register-check').hasClass('checkboxOff')) {
         msgDialog('warninga', l[135], l[1974]);
@@ -165,26 +183,20 @@ function recovery_reset_pw() {
 
     'use strict';
 
-    var newPassword = $('#withkey-password').val();
-    var newPasswordConfirm = $('#withkey-password2').val();
+    var password = $('#withkey-password').val();
+    var confirmPassword = $('#withkey-password2').val();
+    var passwordValidationResult = security.isValidPassword(password, confirmPassword);
 
-    if (newPassword === l[909]) {
-        msgDialog('warninga', l[135], l[741]);
-        return;
-    }
-    else if (newPassword !== newPasswordConfirm) {
-        msgDialog('warninga', l[135], l[715]);
-        return;
-    }
-    else if ($('.login-register-input.password').hasClass('weak-password')) {
-        msgDialog('warninga', l[135], l[1129]);
-        return;
+    // If bad result
+    if (passwordValidationResult !== true) {
+        msgDialog('warninga', l[135], passwordValidationResult);
+        return false;
     }
 
     loadingDialog.show();
 
     // Perform the Master Key re-encryption with a new password
-    security.resetKey(recoverycode, base64_to_a32(recoverykey), recoveryemail, newPassword, function(responseCode) {
+    security.resetKey(recoverycode, base64_to_a32(recoverykey), recoveryemail, password, function(responseCode) {
 
         loadingDialog.hide();
 
@@ -223,13 +235,14 @@ function verify_key(key) {
     security.resetKey(recoverycode, base64_to_a32(recoverykey), recoveryemail, null, function(responseCode) {
 
         if (responseCode === 0) {
+            $('.recover-block').addClass('hidden');
             $('.recover-block.success').removeClass('hidden');
         }
 
         // If EKEY - invalid master key
         else if (responseCode === EKEY) {
             msgDialog('warningb', l[1977], l[1978]);
-            $('.recover-block.error').removeClass('hidden');
+            // $('.recover-block.error').removeClass('hidden');
         }
         else if (responseCode === EBLOCKED) {
             msgDialog('warningb', l[1979], l[1980]);
@@ -246,62 +259,48 @@ function verify_key(key) {
     });
 }
 
-
-function reset_pwcheck() {
-
-    $('.login-register-input.password').removeClass('weak-password strong-password');
-    $('.new-registration').removeClass('good1 good2 good3 good4 good5');
-
-    if (typeof zxcvbn === 'undefined') {
-        return false;
-    }
-
-    var trimmedWithKeyPassword = $.trim($('#withkey-password').val());
-    var trimmedWithoutKeyPassword = $.trim($('#withoutkey-password').val());
-
-    if (trimmedWithKeyPassword !== '') {
-        classifyPassword(trimmedWithKeyPassword);
-    }
-    else if (trimmedWithoutKeyPassword !== '') {
-        classifyPassword(trimmedWithoutKeyPassword);
-    }
-    else {
-        return false;
-    }
-}
-
-
 function init_reset_pw() {
 
-    var a = '';
+    'use strict';
 
-    $('#withkey-password,#withoutkey-password').rebind('focus.initresetpw', function() {
-        $('.login-register-input.password.first').removeClass('incorrect');
-        $('.login-register-input.password.confirm').removeClass('incorrect');
-        $(this).parent().addClass('focused');
-    });
+    var $passwords = $('#withkey-password, #withoutkey-password');
+    var $confirms = $('#withkey-password2, #withoutkey-password2');
 
-    $('#withkey-password,#withoutkey-password').rebind('blur.initresetpw', function() {
-        $('.login-register-input.password').removeClass('focused');
-        reset_pwcheck();
-    });
+    var passwordsMegaInput = new mega.ui.MegaInputs($passwords);
+    var confirmsMegaInput = new mega.ui.MegaInputs($confirms);
 
-    $('#withkey-password2,#withoutkey-password2').rebind('focus.initresetpw', function() {
-        $('.login-register-input.password.confirm').removeClass('incorrect');
-        $(this).parent().addClass('focused');
-    });
 
-    $('#withkey-password2,#withoutkey-password2').rebind('blur.initresetpw', function() {
-        $('.login-register-input.password2').removeClass('focused');
-    });
+    var _checkInput = function($input) {
 
-    $('#withkey-password,#withoutkey-password').rebind('keyup.initresetpw', function() {
-        reset_pwcheck();
-    });
+        var $contentWrapper = $input.parents('.content-wrapper');
+        var $firstInput = $contentWrapper.find('input.first');
+        var $confirmInput = $contentWrapper.find('input.confirm');
+        var $button = $contentWrapper.find('.restore-verify-button');
 
-    $('#withkey-password2').rebind('keyup.initresetpw', function(e) {
-        if (e.keyCode === 13) {
-            recovery_reset_pw();
+        if ($firstInput.val() && $confirmInput.val() && $firstInput.val().length >= security.minPasswordLength
+            && $firstInput.val().length === $confirmInput.val().length) {
+
+            $button.addClass('active').removeClass('disabled');
+
+            return true;
+        }
+        else {
+            $button.removeClass('active').addClass('disabled');
+
+            return false;
+        }
+    };
+
+    $passwords.add($confirms).rebind('keyup.initresetpw, input.initresetpw', function(e) {
+        var valid = _checkInput($(this));
+        if (e.keyCode === 13 && valid) {
+            var $button = $('.restore-verify-button', $(this).parents('.content-wrapper'));
+            if ($button.hasClass('reset-account')) {
+                delete_reset_pw();
+            }
+            else {
+                recovery_reset_pw();
+            }
         }
     });
 

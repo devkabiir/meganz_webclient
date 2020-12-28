@@ -38,8 +38,8 @@
  * ***************** END MEGA LIMITED CODE REVIEW LICENCE ***************** */
 
 var uldl_hold = false;
+var ul_queue = false;
 
-/* jshint -W003 */
 var ulmanager = {
     ulFaId: 0,
     ulSize: 0,
@@ -51,6 +51,7 @@ var ulmanager = {
     ulCompletingPhase: Object.create(null),
     ulOverStorageQuota: false,
     ulOverStorageQueue: [],
+    ulFinalizeQueue: [],
     ulBlockSize: 131072,
     ulBlockExtraSize: 1048576,
     ulMaxFastTrackSize: 1048576 * 3,
@@ -75,20 +76,29 @@ var ulmanager = {
         return keys[values.indexOf(code)] || code;
     },
 
+    ulHideOverStorageQuotaDialog: function() {
+        'use strict';
+
+        $(window).unbind('resize.overQuotaDialog');
+        $('.fm-dialog-overlay', 'body').unbind('click.closeOverQuotaDialog');
+        window.closeDialog();
+    },
+
     ulShowOverStorageQuotaDialog: function(aFileUpload) {
         'use strict';
 
         var $dialog = $('.fm-dialog.limited-bandwidth-dialog');
 
         ulQueue.pause();
-        mega.ui.tpp.hide();
         this.ulOverStorageQuota = true;
 
         // clear completed uploads and set over quota for the rest.
         if ($.removeTransferItems) {
             $.removeTransferItems();
         }
-        $("tr[id^='ul_']").addClass('transfer-error').find('.transfer-status').text(l[1010]);
+        for (var kk = 0; kk < ul_queue.length; kk++) {
+            onUploadError(ul_queue[kk], l[1010], l[1010], null, true);
+        }
 
         // Store the entry whose upload ticket failed to resume it later
         if (aFileUpload) {
@@ -100,23 +110,29 @@ var ulmanager = {
             mBroadcaster.sendMessage('MEGAdrop:overquota');
         }
 
-        // Load and fill membership plans.
-        pro.loadMembershipPlans(function() {
-            dlmanager.prepareLimitedBandwidthDialogPlans($dialog);
-        });
-
         M.safeShowDialog('upload-overquota', function() {
             $dialog.removeClass('registered achievements pro slider').addClass('uploads exceeded');
             $('.header-before-icon.exceeded', $dialog).text(l[19135]);
-            $('.p-after-icon.msg-overquota', $dialog).text(l[19136]);
-
-            $('.reg-st3-membership-bl', $dialog).rebind('click', function() {
+            $('.pricing-page.plan .plan-button', $dialog).rebind('click', function() {
                 eventlog(99700, true);
-                open(getAppBaseUrl() + '#propay_' + $(this).data('payment'));
+                open(getAppBaseUrl() + '#propay_' + $(this).closest('.plan').data('payment'));
                 return false;
             });
 
-            $('.fm-dialog-close', $dialog).rebind('click', closeDialog);
+            $('.fm-dialog-close', $dialog).add($('.fm-dialog-overlay'))
+                .rebind('click.closeOverQuotaDialog', function() {
+
+                    ulmanager.ulHideOverStorageQuotaDialog();
+                });
+
+            // Change overquotaa text
+            $('.p-after-icon.msg-overquota', $dialog).text(is_mobile ?
+                l[22673].replace('%1', bytesToSize(pro.maxPlan[2] * 1024 * 1024 * 1024, 0))
+                    .replace('%2', bytesToSize(pro.maxPlan[3] * 1024 * 1024 * 1024, 0))
+                : l[19136]);
+
+            // Load the membership plans
+            dlmanager.setPlanPrices($dialog);
 
             eventlog(99699, true);
             return $dialog;
@@ -127,7 +143,8 @@ var ulmanager = {
         'use strict';
 
         if ($('.fm-dialog.limited-bandwidth-dialog').is(':visible')) {
-            closeDialog();
+
+            ulmanager.ulHideOverStorageQuotaDialog();
         }
 
         ulQueue.resume();
@@ -183,7 +200,122 @@ var ulmanager = {
         return false;
     },
 
+    getUploadByID: function(id) {
+        'use strict';
+
+        var queue = ul_queue.filter(isQueueActive);
+        for (var i = queue.length; i--;) {
+            var q = queue[i];
+
+            if (q.id === id || this.getGID(q) === id) {
+                return q;
+            }
+        }
+
+        return false;
+    },
+
+    isUploadActive: function(id) {
+        'use strict';
+        var gid = typeof id === 'object' ? this.getGID(id) : id;
+        return document.getElementById(gid) || this.getUploadByID(gid).starttime > 0;
+    },
+
+    /**
+     * Wait for an upload to finish.
+     * @param {Number} aUploadID The unique upload identifier.
+     * @return {MegaPromise}
+     */
+    onUploadFinished: function(aUploadID) {
+        'use strict';
+
+        if (typeof aUploadID !== 'number' || aUploadID < 8001) {
+            return MegaPromise.reject(EARGS);
+        }
+
+        return new MegaPromise(function(resolve, reject) {
+            var _ev1;
+            var _ev2;
+            var _ev3;
+            var queue = ul_queue.filter(isQueueActive);
+            var i = queue.length;
+
+            while (i--) {
+                if (queue[i].id === aUploadID) {
+                    break;
+                }
+            }
+
+            if (i < 0) {
+                // there is no such upload in the queue
+                return reject(ENOENT);
+            }
+
+            var done = function(id, result) {
+                if (id === aUploadID) {
+                    mBroadcaster.removeListener(_ev1);
+                    mBroadcaster.removeListener(_ev2);
+                    mBroadcaster.removeListener(_ev3);
+
+                    // result will be either the node handle for the new uploaded file or an error
+                    resolve(result);
+                }
+            };
+
+            _ev1 = mBroadcaster.addListener('upload:error', done);
+            _ev2 = mBroadcaster.addListener('upload:abort', done);
+            _ev3 = mBroadcaster.addListener('upload:completion', done);
+        });
+    },
+
+    /**
+     * Hold up an upload until another have finished, i.e. because we have to upload it as a version
+     * @param {File} aFile The upload file instance
+     * @param {Number} aUploadID The upload ID to wait to finish.
+     * @param {Boolean} [aVersion] Whether we're actually creating a version.
+     */
+    holdUntilUploadFinished: function(aFile, aUploadID, aVersion) {
+        'use strict';
+        var promise = new MegaPromise();
+        var logger = d && new MegaLogger('ulhold[' + aUploadID + '>' + aFile.id + ']', null, this.logger);
+
+        if (d) {
+            logger.debug('Waiting for upload %d to finish...', aUploadID, [aFile]);
+        }
+
+        this.onUploadFinished(aUploadID).wait(function(h) {
+            if (d) {
+                logger.debug('Upload %s finished...', aUploadID, h);
+            }
+
+            if (aVersion) {
+                if (typeof h !== 'string' || !M.d[h]) {
+                    var n = fileconflict.getNodeByName(aFile.target, aFile.name);
+                    h = n && n.h;
+
+                    if (d) {
+                        logger.debug('Seek node gave %s', h, M.getNodeByHandle(h));
+                    }
+                }
+
+                if (h) {
+                    aFile._replaces = h;
+                }
+            }
+
+            if (d) {
+                logger.debug('Starting upload %s...', aFile.id, aFile._replaces, [aFile]);
+            }
+            ul_queue.push(aFile);
+            promise.resolve(aFile, h);
+        });
+
+        return promise;
+    },
+
     abort: function UM_abort(gid) {
+        'use strict';
+
         if (gid === null || Array.isArray(gid)) {
             this._multiAbort = 1;
 
@@ -191,6 +323,8 @@ var ulmanager = {
                 gid.forEach(this.abort.bind(this));
             }
             else {
+                this.ulSetupQueue = false;
+                M.tfsdomqueue = Object.create(null);
                 ul_queue.filter(isQueueActive).forEach(this.abort.bind(this));
             }
 
@@ -211,6 +345,12 @@ var ulmanager = {
                 var ul = ul_queue[l];
 
                 if (gid === this.getGID(ul)) {
+                    if (ulmanager.ulCompletingPhase[gid]) {
+                        if (d) {
+                            ulmanager.logger.debug('Not aborting %s, it is completing...', gid, ul);
+                        }
+                        continue;
+                    }
                     if (d) {
                         ulmanager.logger.info('Aborting ' + gid, ul.name);
                     }
@@ -241,7 +381,8 @@ var ulmanager = {
     },
 
     restart: function UM_restart(file, reason, xhr) {
-        onUploadError(file, "Upload failed - restarting...", reason, xhr);
+        // Upload failed - restarting...
+        onUploadError(file, l[20917], reason, xhr);
 
         // reschedule
         ulQueue.poke(file);
@@ -297,7 +438,9 @@ var ulmanager = {
                 else {
                     errorstr = reason.substr(0, 50) + '...';
                 }
-                $('.transfer-table #ul_' + file.id + ' .transfer-status').text(errorstr);
+                if (!file.isCreateFile) {
+                    $('#ul_' + file.id + ' .transfer-status').text(errorstr);
+                }
                 msgDialog('warninga', l[1309], l[1498] + ': ' + fileName, reason);
                 ulmanager.abort(file);
             }
@@ -307,7 +450,8 @@ var ulmanager = {
             }
         }, 950 + Math.floor(Math.random() * 2e3));
 
-        onUploadError(file, "Upload failed - retrying",
+        // "Upload failed - retrying"
+        onUploadError(file, l[20918],
             reason.substr(0, 2) === 'IO' ? 'IO Failed' : reason,
             xhr);
 
@@ -419,6 +563,11 @@ var ulmanager = {
             k: file.filekey
         };
 
+        if (d) {
+            // if it's set but undefined, the file-conflict dialog failed to properly locate a file/node...
+            console.assert(file._replaces || !("_replaces" in file), 'Unexpected file versioning state...');
+        }
+
         if (file._replaces) {
             if (M.d[file._replaces].fav) {
                 n.fav = M.d[file._replaces].fav;
@@ -495,19 +644,31 @@ var ulmanager = {
             req.n[0].fa = file.ddfa;
         }
 
-        if (target) {
-            var sn = M.getShareNodesSync(target);
-            if (sn.length) {
-                req.cr = crypto_makecr([n], sn, false);
-                req.cr[1][0] = file.response;
+        onIdle(function() {
+            for (var k in M.tfsdomqueue) {
+                if (k[0] === 'u') {
+                    addToTransferTable(k, M.tfsdomqueue[k], 1);
+                    delete M.tfsdomqueue[k];
+                    break;
+                }
             }
-        }
+        });
 
         if (d) {
             ulmanager.logger.info("Completing upload for %s, into %s", file.name, target, req);
+            console.assert(file.owner && file.owner.gid, 'No assoc owner..');
         }
 
-        api_req(req, ctx);
+        if (file.owner) {
+            this.ulCompletingPhase[file.owner.gid] = Date.now();
+        }
+
+        if (this.ulFinalizeQueue.push([n, req, ctx]) > 19 || window.ulQueue.isFinalising()) {
+            this.ulCompletePending();
+        }
+        else {
+            delay('ul.finalize:dsp', () => this.ulCompletePending(), 4e3);
+        }
     },
 
     ulGetPostURL: function UM_ul_get_posturl(File) {
@@ -717,10 +878,45 @@ var ulmanager = {
             }
         }
 
-        M.ulstart(file);
+        if (!file.isCreateFile) {
+            M.ulstart(file);
+        }
         if (file.done_starting) {
             file.done_starting();
         }
+    },
+
+    ulCompletePending: function() {
+        'use strict';
+        const self = this;
+        delay.cancel('ul.finalize:dsp');
+
+        // Ensure no -3s atm..
+        M.req('ping').always(function dsp() {
+            // @todo per target folder rather!
+            if ($.getExportLinkInProgress) {
+                if (d) {
+                    self.logger.debug('Holding upload(s) until link-export completed...');
+                }
+                mBroadcaster.once('export-link:completed', () => onIdle(dsp));
+                return;
+            }
+
+            const q = self.ulFinalizeQueue;
+            self.ulFinalizeQueue = [];
+
+            for (let i = q.length; i--;) {
+                const [n, req, ctx] = q[i];
+
+                let sn = M.getShareNodesSync(req.t);
+                if (sn.length) {
+                    req.cr = crypto_makecr([n], sn, false);
+                    req.cr[1][0] = req.n[0].h;
+                }
+
+                api_req(req, ctx);
+            }
+        });
     },
 
     ulCompletePending2: function UM_ul_completepending2(res, ctx) {
@@ -784,16 +980,8 @@ var ulmanager = {
                 newnodes = [];
                 process_f(res.f);
                 M.updFileManagerUI();
-
-                // If on mobile, show that the upload has completed and allow them to upload another
-                if (is_mobile) {
-                    mobile.uploadOverlay.showUploadComplete(n);
-                }
-
-                if (M.viewmode) {
-                    fm_thumbnails();
-                }
             }
+
             onSuccess(n.h);
         }
         else if (res === 0) {
@@ -804,6 +992,11 @@ var ulmanager = {
         }
         else {
             var ul = ul_queue[ctx.ul_queue_num];
+
+            if (!ul && res === EACCESS) {
+                ulmanager.logger.warn('This upload was already aborted, resorting to context...', ctx.file);
+                ul = ctx.file;
+            }
 
             M.ulerror(ul, ctx.inShareOQ ? ESHAREROVERQUOTA : res);
 
@@ -831,11 +1024,11 @@ var ulmanager = {
         if (identical && fmconfig.ul_skipIdentical) {
             n = identical;
         }
-        else if (!M.h[uq.hash] && !identical) {
+        else if ((!M.h[uq.hash] || !Object.keys(M.h[uq.hash]).length) && !identical) {
             return ulmanager.ulStart(File);
         }
         else if (M.h[uq.hash]) {
-            n = mNode || M.d[M.h[uq.hash].substr(0, 8)];
+            n = mNode || M.d[Object.keys(M.h[uq.hash])[0]];
             // identical = n;
         }
         if (!n) {
@@ -960,7 +1153,7 @@ var ulmanager = {
             var identical = ulmanager.ulIdentical(aFile);
             ulmanager.logger.info(aFile.name, "fingerprint", aFile.hash, M.h[aFile.hash], identical);
 
-            if (M.h[aFile.hash] || identical) {
+            if ((M.h[aFile.hash] && Object.keys(M.h[aFile.hash]).length) || identical) {
                 ulmanager.ulDeDuplicate(aFileUpload, identical, hashNode);
             }
             else {
@@ -974,7 +1167,19 @@ var ulmanager = {
             promises.push(dbfetch.get(aFile.target, new MegaPromise()));
         }
 
-        if ((!M.h[hash] || !M.d[M.h[hash].substr(0, 8)]) && !mega.megadrop.isInit()) {
+        var isHashFetchNeeded = false;
+
+        if (!M.h[aFile.hash]) {
+            isHashFetchNeeded = true;
+        }
+        else {
+            var hashesArray = Object.keys(M.h[aFile.hash]);
+            if (!hashesArray.length || !M.d[hashesArray[0]]) {
+                isHashFetchNeeded = true;
+            }
+        }
+
+        if (isHashFetchNeeded && !mega.megadrop.isInit()) {
             promises.push(
                 dbfetch.hash(aFile.hash)
                     .always(function(node) {
@@ -988,6 +1193,40 @@ var ulmanager = {
         }
         else {
             startUpload();
+        }
+    },
+
+    /**
+     * Abort and Clear items in upload list those are targeting a deleted folder.
+     * This is triggered by `d` action packet.
+     *
+     * @param {String|Array} handles  handle(s) of deleted node(s)
+     */
+    ulClearTargetDeleted: function(handles) {
+        'use strict';
+
+        if (!ul_queue.length) {
+            return false;
+        }
+        if (!Array.isArray(handles)) {
+            handles = [handles];
+        }
+
+        var toAbort = [];
+        for (var i = ul_queue.length; i--;) {
+            var ul = isQueueActive(ul_queue[i]) && ul_queue[i] || false;
+
+            if (ul && handles.indexOf(ul.target) !== -1) {
+                var gid = ulmanager.getGID(ul);
+                toAbort.push(gid);
+                $('.transfer-status', $('#' + gid).addClass('transfer-error')).text(l[20634]);
+                mega.tpw.errorDownloadUpload(mega.tpw.UPLOAD, ul, l[20634]);
+            }
+        }
+
+        if (toAbort.length) {
+            eventlog(99726);
+            ulmanager.abort(toAbort);
         }
     }
 };
@@ -1048,14 +1287,11 @@ ChunkUpload.prototype.updateprogress = function() {
         this.file.speedometer = Speedometer(tp);
     }
     this.file.progressevents = (this.file.progressevents || 0) + 1;
+    p = GlobalProgress[this.gid].speed = this.file.speedometer ? this.file.speedometer.progress(tp) : 0;
 
-    M.ulprogress(
-            this.file,
-            Math.floor(tp / this.file.size * 100),
-            tp,
-            this.file.size,
-            GlobalProgress[this.gid].speed = (this.file.speedometer ? this.file.speedometer.progress(tp) : 0) // speed
-        );
+    if (!this.file.isCreateFile) {
+        M.ulprogress(this.file, Math.floor(tp / this.file.size * 100), tp, this.file.size, p);
+    }
 
     if (tp === this.file.size) {
         this.file.complete = true;
@@ -1119,6 +1355,7 @@ ChunkUpload.prototype.onXHRready = function(xhrEvent) {
         }
         return Soon(this.done.bind(this));
     }
+    var self = this;
     var xhr = xhrEvent.target;
     var response = xhr.response;
     var isValidType = (response instanceof ArrayBuffer);
@@ -1157,7 +1394,6 @@ ChunkUpload.prototype.onXHRready = function(xhrEvent) {
                     var u8 = new Uint8Array(response);
 
                     this.file.filekey = filekey;
-                    ulmanager.ulCompletingPhase[this.gid] = Date.now();
                     this.file.response = (u8[35] === 1)
                         ? ab_to_base64(response)
                         : ab_to_str(response);
@@ -1202,7 +1438,6 @@ ChunkUpload.prototype.onXHRready = function(xhrEvent) {
         }
     }
 
-    var self = this;
     this.oet = setTimeout(function() {
         if (!oIsFrozen(self)) {
             self.onXHRerror(null, xhr, errstr);
@@ -1223,11 +1458,14 @@ ChunkUpload.prototype.onXHRready = function(xhrEvent) {
 }
 
 ChunkUpload.prototype.upload = function() {
+    'use strict';
+
     var url, xhr;
+    var self = this;
+    var logger = self.logger || ulmanager.logger;
 
     if (!this.file) {
         if (d) {
-            var logger = this.logger || ulmanager.logger;
             logger.error('This upload was cancelled while the Encrypter was working,'
                 + ' prevent this aborting it beforehand');
         }
@@ -1257,11 +1495,20 @@ ChunkUpload.prototype.upload = function() {
         this.logger.info("pushing", url);
     }
 
-    xhr.open('POST', url);
-    xhr.responseType = 'arraybuffer';
-    xhr.send(this.bytes.buffer);
-
-    this.xhr = xhr;
+    tryCatch(function() {
+        xhr.open('POST', url);
+        xhr.responseType = 'arraybuffer';
+        xhr.send(self.bytes.buffer);
+        self.xhr = xhr;
+    }, function(ex) {
+        if (self.file) {
+            logger.warn('fatal upload error, attempting to restart...', String(ex.message || ex), [self, ex]);
+            ulmanager.restart(self.file, ex.message || ex);
+        }
+        else {
+            logger.debug('fatal upload error, holding while restarting...', String(ex.message || ex), [self, ex]);
+        }
+    })();
 };
 
 ChunkUpload.prototype.io_ready = function(res) {
@@ -1279,7 +1526,7 @@ ChunkUpload.prototype.io_ready = function(res) {
             ulmanager.retry(this.file, this, "IO failed: " + res);
         }
         else {
-            if (d) {
+            if (d && this.logger) {
                 this.logger.error('The FileReader finished, but this upload was cancelled...');
             }
         }
@@ -1395,7 +1642,7 @@ FileUpload.prototype.run = function(done) {
     file.ul_lastreason = file.ul_lastreason || 0;
 
     var domNode = document.getElementById('ul_' + file.id);
-    if (ulmanager.ulStartingPhase || !domNode) {
+    if (ulmanager.ulStartingPhase || !(domNode || file.isCreateFile)) {
         done();
         ASSERT(0, "This shouldn't happen");
         return ulQueue.pushFirst(this);
@@ -1408,9 +1655,10 @@ FileUpload.prototype.run = function(done) {
     if (d) {
         ulmanager.logger.info(file.name, "starting upload", file.id);
     }
-
-    domNode.classList.add('transfer-initiliazing');
-    domNode.querySelector('.transfer-status').textContent = (l[1042]);
+    if (!file.isCreateFile) {
+        domNode.classList.add('transfer-initiliazing');
+        domNode.querySelector('.transfer-status').textContent = l[1042];
+    }
 
     ulmanager.ulSize += file.size;
     // ulmanager.ulStartingPhase = true;
@@ -1439,83 +1687,54 @@ FileUpload.prototype.run = function(done) {
             ulQueue.setSize((fmconfig.ul_maxSlots | 0) || 4);
         }
 
-        file = self = undefined;
+        file = self = false;
         done();
     };
 
-    var readError = function(code) {
-        var errorstr;
-
-        if (code === 0x8052000e) {
-            // File is locked
-            errorstr = l[7399] || l[1517];
+    getFingerprint(file).then(function(result) {
+        if (!(file && self.file)) {
+            ulmanager.logger.info('Fingerprint generation finished, but the upload was canceled meanwhile...');
         }
-        else if (code === 0x80520015) {
+        else if (file.hash === result.hash) {
+            // Retrying.
+            setTimeout(ulmanager.ulStart.bind(ulmanager, self), 950 + Math.floor(Math.random() * 4e3));
+        }
+        else {
+            file.ts = result.ts;
+            file.hash = result.hash;
+            ulmanager.ulSetup(self, file);
+        }
+    }).catch(function(ex) {
+        // TODO: Improve further what error message we do show to the user.
+        var error = ex.name !== 'Error' && ex.name || ex;
+
+        eventlog(99727, JSON.stringify([1, String(error)]));
+
+        if (error === 0x8052000e) {
+            // File is locked
+            error = l[7399];
+        }
+        else if (error === 'SecurityError') {
             // "Access denied"
-            errorstr = l[1667];
+            error = l[1667];
         }
         else {
             // "Read error"
-            errorstr = l[1677];
+            error = l[1677];
         }
 
-        $('.transfer-table #ul_' + file.id + ' .transfer-status').text(errorstr);
-
-        ulmanager.abort(file);
-        this.destroy();
-    }.bind(this);
-
-    try {
-        if (file.hash && file.ts) {
-            throw "The fingerprint exists already.";
-        }
-        if (!is_extension && file.gecko && !file.size
-                && ua.indexOf('windows') < 0 && parseInt(ua.details.version) < 55) {
-
-            throw new Error('!ZeroByte');
-        }
-
-        fingerprint(file, function(hash, ts) {
-            if (!(file && self.file)) {
-                if (d) {
-                    ulmanager.logger.info('fingerprint', hash, 'UPLOAD CANCELED');
-                }
-                return;
-            }
-            if (hash === 0xBADF) {
-                return readError(ts);
-            }
-            file.hash = hash;
-            file.ts = ts;
-
-            ulmanager.ulSetup(self, file);
-        });
-    }
-    catch (e) {
         if (d) {
-            ulmanager.logger.error('FINGERPRINT ERROR', file.name, file.size, e.message || e);
+            ulmanager.logger.error('FINGERPRINT ERROR ("%s")', error, file.name, file.size, ex.message, [ex]);
         }
 
-        if (!is_extension && e.result === 0x80520015 /* NS_ERROR_FILE_ACCESS_DENIED */ || e.message === '!ZeroByte') {
-            var msg =
-                "Sorry, upload failed. " +
-                "If you were trying to upload a folder, " +
-                "please note you will need to use our extension for this to work.";
+        if (file && self.file) {
+            onUploadError(file, error);
 
-            if (!window['!ZeroByte']) {
-                window['!ZeroByte'] = true;
-                msgDialog('warninga',
-                    str_mtrunc(file.name, 40), msg, l[1677] + ': ' + (e.message || e.name || e));
-            }
-            readError(e.result);
+            var that = self;
+            ulmanager.abort(file);
+            that.destroy();
         }
-        else if (e.result === 0x8052000e /* NS_ERROR_FILE_IS_LOCKED */) {
-            readError(e.result);
-        }
-        else {
-            ulmanager.ulStart(this);
-        }
-    }
+    });
 };
 
 function isQueueActive(q) {
@@ -1565,6 +1784,10 @@ ulQueue.poke = function(file, meth) {
     }
 
     if (meth !== 0xdead) {
+        if (!meth && file.isCreateFile && file.size === 0) {
+            meth = 'pushFirst';
+        }
+
         file.sent = 0;
         file.progress = Object.create(null);
         file.owner = new FileUpload(file);
@@ -1581,7 +1804,7 @@ ulQueue.validateTask = function(pzTask) {
 
     if (pzTask instanceof FileUpload
         && !ulmanager.ulStartingPhase
-        && document.getElementById('ul_' + pzTask.file.id)) {
+        && (document.getElementById('ul_' + pzTask.file.id) || pzTask.file.isCreateFile)) {
 
         return true;
     }

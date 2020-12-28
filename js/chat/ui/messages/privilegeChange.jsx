@@ -1,20 +1,23 @@
 var React = require("react");
-var ReactDOM = require("react-dom");
-var utils = require('./../../../ui/utils.jsx');
-var MegaRenderMixin = require('./../../../stores/mixins.js').MegaRenderMixin;
 var ContactsUI = require('./../contacts.jsx');
 var ConversationMessageMixin = require('./mixin.jsx').ConversationMessageMixin;
-var getMessageString = require('./utils.jsx').getMessageString;
 
-var PrivilegeChange = React.createClass({
-    mixins: [ConversationMessageMixin],
+class PrivilegeChange extends ConversationMessageMixin {
+    haveMoreContactListeners() {
+        if (!this.props.message.meta || !this.props.message.meta.targetUserId) {
+            return false;
+        }
 
-    render: function () {
+        var uid = this.props.message.meta.targetUserId;
+        if (uid && M.u[uid]) {
+            return uid;
+        }
+        return false;
+    }
+    render() {
         var self = this;
-        var cssClasses = "message body";
 
         var message = this.props.message;
-        var megaChat = this.props.message.chatRoom.megaChat;
         var chatRoom = this.props.message.chatRoom;
         var contact = self.getContact();
         var timestampInt = self.getTimestamp();
@@ -22,8 +25,8 @@ var PrivilegeChange = React.createClass({
 
 
 
-        var datetime = <div className="message date-time"
-                                       title={time2date(timestampInt)}>{timestamp}</div>;
+        var datetime = <div className="message date-time simpletip"
+            data-simpletip={time2date(timestampInt)}>{timestamp}</div>;
 
         var displayName;
         if (contact) {
@@ -44,7 +47,8 @@ var PrivilegeChange = React.createClass({
         };
 
         var avatar = <ContactsUI.Avatar contact={otherContact}
-                                        className="message avatar-wrapper small-rounded-avatar"/>;
+            className="message avatar-wrapper small-rounded-avatar"
+            chatRoom={chatRoom} />;
         var otherDisplayName = generateAvatarMeta(otherContact.u).fullName;
 
         var newPrivilegeText = "";
@@ -58,7 +62,7 @@ var PrivilegeChange = React.createClass({
             newPrivilegeText = l[8873];
         }
 
-        var text = __(l[8915])
+        var text = l[8915]
             .replace(
                 "%s1",
                 '<strong className="dark-grey-txt">' + htmlentities(newPrivilegeText) + '</strong>'
@@ -73,7 +77,8 @@ var PrivilegeChange = React.createClass({
                 {avatar}
 
                 <div className="message content-area small-info-txt">
-                    <ContactsUI.ContactButton contact={otherContact} className="message" label={otherDisplayName} />
+                    <ContactsUI.ContactButton contact={otherContact} className="message" label={otherDisplayName}
+                        chatRoom={self.props.chatRoom} />
                     {datetime}
 
                     <div className="message text-block" dangerouslySetInnerHTML={{__html:text}}></div>
@@ -84,8 +89,8 @@ var PrivilegeChange = React.createClass({
 
         return <div>{messages}</div>;
     }
-});
+};
 
-module.exports = {
+export {
     PrivilegeChange
 };

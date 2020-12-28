@@ -86,23 +86,38 @@ mega.megadrop = (function() {
             ? l[17626]
             : l[17403].replace('%1', escapeHTML(M.d[list[0]].name));
 
-        msgDialog(
-            'confirmation',
-            l[1003],
-            fldName,
-            false,
-            function(e) {
-                if (e) {
+        if (is_mobile) {
+
+            mobile.messageOverlay.show(fldName, l[18229], false, ['No', 'Yes'])
+                .then(function() {
                     closeDialog();
                     mega.megadrop.pufRemove(list).done(function() {
                         promise.resolve();
                     });
-                }
-                else {
+                })
+                .catch(function() {
                     promise.reject();
+                });
+        }
+        else {
+            msgDialog(
+                'confirmation',
+                l[1003],
+                fldName,
+                l[18229],
+                function(e) {
+                    if (e) {
+                        closeDialog();
+                        mega.megadrop.pufRemove(list).done(function() {
+                            promise.resolve();
+                        });
+                    }
+                    else {
+                        promise.reject();
+                    }
                 }
-            }
-        );
+            );
+        }
 
         return promise;
     };
@@ -158,9 +173,11 @@ mega.megadrop = (function() {
     };
 
     var updatePUPUserName = function updatePUPUserName(newName) {
-        $.each(mega.megadrop.pufs, function(index) {
-            mega.megadrop.pupUpdate(index, 'name', newName);
-        });
+        for (var h in mega.megadrop.pufs) {
+            if (mega.megadrop.pups[mega.megadrop.pufs[h].p]) {
+                mega.megadrop.pupUpdate(h, 'name', newName);
+            }
+        }
     };
     
     /**
@@ -177,7 +194,13 @@ mega.megadrop = (function() {
                     a: 'ul',
                     n: '',      // Folder handle
                     d: 0,       // Create public upload folder
-                    i: requesti
+                    i: requesti,
+                    s: 2,
+                    data: {
+                        name: '',
+                        email: '',
+                        msg: ''
+                    }
                 },
                 remove: {       // Remove PUF
                     a: 'ul',
@@ -328,21 +351,17 @@ mega.megadrop = (function() {
 
             for (var i = ap.length; i--;) {
                 var puh = Object.assign({}, ap[i]);
+
                 if (puh.d) {// 'puh' AP delete
                     if (requesti === puh.i) {
-                        if (puh.p) {
-                            pup.remove(puh.p);
-                        }
-                        else {// Make sure that PUF is synced
+                        if (!puh.p) { // Make sure that PUF is synced
                             _del(puh);
                         }
                     }
                 }
                 else {
                     add(puh).done(function () {
-                        if (requesti === puh.i) {
-                            pup.create(puh.h);
-                        }
+                        mBroadcaster.sendMessageAfterReady('MEGAdrop:puhProcessed_' + puh.ph);
                     });
                 }
             }
@@ -374,10 +393,10 @@ mega.megadrop = (function() {
         };
 
         /**
-         * Create public upload folder (PUF)
+         * Create public upload folder (PUF) and public upload page (PUP)
          * @param {String} handle Folder handle
          */
-        var create = function pufCreate(handle) {
+        var create = function pufCreateV2(handle) {
             if (d) {
                 console.log('puf.create');
             }
@@ -387,11 +406,22 @@ mega.megadrop = (function() {
 
                 // PUF handle is available and PUP is enabled/active
                 if (puf.items[handle] && puf.items[handle].p && puf.items[handle].s !== 1) {
-                    ui.widgetDialog(puf.items[handle].p);
+
+                    if (is_mobile) {
+                        ui.mobileWidgetDialog(puf.items[handle].p);
+                    }
+                    else {
+                        ui.widgetDialog(puf.items[handle].p);
+                    }
                 }
                 else {// Create new PUF
                     loadingDialog.show();// .hide() is called in ui.widgetDialog() or on res != 0
+
+                    req.data.name = u_attr.name;
+                    req.data.email = u_attr.email;
+                    req.data.msg = M.getNameByHandle(handle) || 'unknown'; // Folder name instead of custom msg
                     req.n = handle;
+
                     api_req(req, {
                         callback: function (res) {
                             if (res < 0) {
@@ -621,10 +651,6 @@ mega.megadrop = (function() {
                             h: nodeId
                         }
                     });
-                }
-
-                if (!pupOpts.items[pupId]) {
-                    pupOpts.items[pupId] = {};
                 }
 
                 pupOpts.items[pupId] = {};
@@ -956,33 +982,62 @@ mega.megadrop = (function() {
             if (d) {
                 console.log('pup.processPUP');
             }
-            var item = {};
+
             var state = 0;
             var folderId = '';
             var pupId = '';
             var delayHide = false;
 
+            var pupAddAndUpdate = function _pupAddAndUpdate(item) {
+                add(item);
+                folderId = pupOpts.items[pupId].h;
+
+                // In case that pup data is updated remotely
+                if (item.u) {
+                    onRename(folderId, M.d[folderId].name);
+                }
+                settings.add(pupId, folderId);
+            };
+
+            var onPuhProcessed = function _onPuhProcessed(item) {
+                pupAddAndUpdate(item);
+
+                // Show dialog if this is local packet and not update action
+                if (is_mobile) {
+                    ui.mobileWidgetDialog(pupId);
+                }
+                else {
+                    ui.widgetDialog(pupId);
+                }
+            };
+
+            var afterPuh =  function(item) {
+
+                if (requesti === item.i && !item.u) {
+                    onPuhProcessed(item);
+                }
+                else {
+                    pupAddAndUpdate(item);
+                }
+            };
+
             for (var i = ap.length; i--;) {
-                item = Object.assign({}, ap[i]);
+                var item = Object.assign({}, ap[i]);
                 pupId = item.p;
                 pufHandle = item.ph;
                 state = item.s ? item.s : 0;
-                if (state === 2) {// Active PUP
-                    add(item);
-                    folderId = pupOpts.items[pupId].h;
-                    if (item.u) {// In case that pup data is updated
-                        onRename(folderId, M.d[folderId].name);
-                    }
-                    settings.add(pupId, folderId);
-                    settings.drawPupCard(pupId);// Add to DOM widget->settings
-                    $('.fm-account-button.megadrop').removeClass('hidden');
 
-                    // Don't show dialog if PUP data is updated
-                    if (requesti === item.i && !item.u) {
-                        ui.widgetDialog(pupId);
+                if (state === 2) { // Active PUP
+
+                    if (item.u) {
+                        pupAddAndUpdate(item);
+                    }
+                    else {
+                        // If this is create or delete, waiting for puh to be processed
+                        mBroadcaster.onceAfterReady('MEGAdrop:puhProcessed_' + pufHandle, afterPuh.bind(this, item));
                     }
                 }
-                else {
+                else { // Inactive PUP
                     if (pupOpts.items[pupId]) {
                         folderId = pupOpts.items[pupId].h;
                         _del(pupId);
@@ -1048,6 +1103,7 @@ mega.megadrop = (function() {
         };
 
         return {
+            pageReq: pupOpts.req,
             add: add,
             get: get,
             list: list,
@@ -1069,9 +1125,7 @@ mega.megadrop = (function() {
         var settingsOpts = {
             initialized: false,
             card: {
-                wrapperClass: '.fm-account-widget .widget-container',
-                cardClass: '.widget-card',
-                expandedClass: '.expanded-widget',
+                wrapperClass: '.grid-table.megadrop tbody',
                 code: '',
                 url: '',
                 expanded: []// Handle of expanded card
@@ -1086,76 +1140,47 @@ mega.megadrop = (function() {
             settingsOpts.initialized = value;
         };
 
-        var setExpanded = function settingsSetExpanded(handle) {
-            settingsOpts.card.expanded.push(handle);
-        };
-
-        var delExpanded = function settingsDelExpanded(handle) {
-            var index = settingsOpts.card.expanded.indexOf(handle);
-
-            if (index !== -1) {
-                settingsOpts.card.expanded.splice(index, 1);
-            }
-        };
-
         var _getPath = function _settingsGetPath(nodeHandle) {
-            var path = M.getPath(nodeHandle).map(function(h) {
-                    return M.d[h].name || '';
-                }).reverse().join('/');
+            var path = M.getPath(nodeHandle).map(function(h, k) {
+                var title = h === M.RootID ? l[1687] : M.d[h].name;
+
+                var html = title ? '<a class="fm-breadcrumbs folder ' + (k !== 0 ? 'has-next-button' : '') +
+                    '" data-node="' + escapeHTML(h) + '">' +
+                    '<span class="right-arrow-bg simpletip" data-simpletip="' +  escapeHTML(title) + '" ><span>' +
+                    escapeHTML(title) + '</span></span></a>' : '';
+
+                return html;
+
+            }).reverse().join('') + '<div class="clear"></div>';
 
             return path;
         };
 
         var drawPupCard = function settingsDrawPupCard(pupHandle) {
-            var item = {};
-            var name = '';
-            var nodeHandle = '';
-            var handle = '';
-            var pupPath = l[1687];
-            var $domElem = $('#stngs_pup_tmpl').clone();
 
-            if (pupHandle && !$('#pup_' + pupHandle).length) {
-                item = pup.items[pupHandle];
-                name = item.fn;
-                nodeHandle = item.h;
-                handle = item.p;
-                pupPath += _getPath(nodeHandle);
-
-                $domElem.attr('id', 'pup_' + handle);
-                $domElem.removeClass('hidden');
-                $domElem.find('.widget-location-url').attr('data-node', nodeHandle);
-                $domElem.find('.widget-location-url span').text(pupPath);
-                $domElem.find('.widget-card-left span').text(name);
-
-                $(settingsOpts.card.wrapperClass).append($domElem);
+            if (M.currentdirid !== 'account/transfers' || !pupHandle || $('#pup_' + pupHandle).length) {
+                return false;
             }
-        };
 
-        /**
-         *
-         * @param {String} handle PUP handle
-         * @param {Object} elem After this DOM element .expanded-widget will be inserted
-         */
-        var drawExpandedCard = function settingsDrawExpandedCard(handle, elem) {
-            var nodeHandle = pup.items[handle].h;
-            var name = pup.items[handle].fn;
-            var path = l[1687];
-            path += _getPath(nodeHandle);
+            var item = pup.items[pupHandle];
+            var name = item.fn;
+            var nodeHandle = item.h;
+            var handle = item.p;
+            var pupPath = _getPath(nodeHandle);
+            var $domElem = $('#megadrop-row-template').clone();
             var url = ui.generateUrl(handle);
             var code = ui.generateCode(handle);
             settingsOpts.card.code = code;
             settingsOpts.card.url = url;
-            var $domElem = $('#stngs_pupexp_tmpl').clone();
 
-            $domElem.attr('id', 'ew_' + handle);
+            $domElem.attr('id', 'pup_' + handle);
             $domElem.removeClass('hidden');
-            $domElem.find('.widget-location-url').attr('data-node', nodeHandle);
-            $domElem.find('.widget-card-left span').text(name);
-            $domElem.find('.widget-location-url span').text(path);
+            $domElem.find('.fm-picker-breadcrumbs').safeHTML(pupPath);
+            $domElem.find('.megafolder-name').text(name);
             $domElem.find('.widget-code-wrapper.widget-url').text(url);
+            $domElem.find('.embed-link .widget-code-wrapper').text(code);
 
-            $(elem).after($domElem);
-            $('#ew_' + handle).find('.embed-link .widget-code-wrapper').text(code);
+            $(settingsOpts.card.wrapperClass).append($domElem);
         };
 
         /**
@@ -1163,58 +1188,69 @@ mega.megadrop = (function() {
          */
         var _eventListeners = function _settingsEventListeners() {
 
-            // Click on PUP basic info, show full PUP informations .expanded-widget
-            $('.widget-container').on('click.WS_clickcard', '.widget-card', function() {
-                if (!$(this).hasClass("expanded-widget")) {
-                    var $this = $(this).closest('div[id^=pup_]');
-                    var pupHandle = $this.attr('id').replace('pup_', '');
-                    var expHandle = $('div[id^=ew_]').attr('id');
+            var $wrapper = $(settingsOpts.card.wrapperClass);
 
-                    // Close expanded PUP
-                    if (expHandle) {
-                        $('#' + expHandle).addClass('hidden').remove();
-                        $('#pup_' + expHandle.replace('ew_', '')).removeClass('hidden');
-                        delExpanded(expHandle);
-                    }
+            // Click on PUP basic info, show full PUP informations
+            $('.megadrop-row', $wrapper).rebind('click', function() {
 
-                    drawExpandedCard(pupHandle, $this);
-                    $this.addClass('hidden');
-                    $('#ew_' + pupHandle).removeClass('hidden');
-                    setExpanded(pupHandle);
+                var $this = $(this);
+
+                $this.removeClass('closed');
+                $this.find('.close-icon > .tooltips').text(l[148]);
+
+                // Waiting for css animation to be finished
+                setTimeout(function() {
                     initAccountScroll();
-                    $(window).trigger('resize');
-                }
+                }, 301);
             });
 
             // Click on minimise of PUP expanded informations, replace it  with basic info .widget-card
-            $('.widget-container').on('click.WS_minimise', 'div.widget-minimise', function() {
+            $('.close-icon', $wrapper).rebind('click', function(e) {
 
-                // Find first parent with id attrbute starting with ew_
-                var id = $(this).closest('div[id^=ew_]').attr('id');
-                var pupHandle = id.replace('ew_', '');
+                e.stopPropagation();
 
-                // un-bind all events related to .expanded-widget
-                $('.widget-container .expanded-widget').off();
+                var $this = $(this).parents('.megadrop-row');
 
-                $('#' + id).addClass('hidden').remove();
-                $('#pup_' + pupHandle).removeClass('hidden');
-                delExpanded(pupHandle);
+                if (!$this.hasClass('closed')) {
+                    $this.addClass('closed');
+                    $(this).find('.tooltips').text(l[20172]);
+                    var $jspPane = $this.parents('.jspPane');
+
+                    // Waiting for css animation to be finished
+                    $jspPane.removeClass('shrink');
+                    setTimeout(function() {
+                        initAccountScroll();
+                        setTimeout(function() {
+                            $jspPane.removeClass('shrink');
+                        }, 301);
+                    }, 301);
+                }
+                else {
+                    $this.removeClass('closed');
+                    $(this).find('.tooltips').text(l[148]);
+                }
+
+                // Waiting for css animation to be finished
+                setTimeout(function() {
+                    initAccountScroll(1);
+                }, 301);
             });
 
             // Remove PUP
-            $('.widget-container').on('click.WS_remove', '.delete-widget-dialog.button', function() {
+            $('.delete-megadrop', $wrapper).rebind('click', function(e) {
 
-                // Find first parent with id attrbute starting with ew_
-                var id = $(this).closest('div[id^=ew_]').attr('id');
-                var pupHandle = id.replace('ew_', '');
+                e.stopPropagation();
+
+                var id = $(this).parents('.megadrop-row').attr('id');
+                var pupHandle = id.replace('pup_', '');
                 var nodeHandle = pup.items[pupHandle].h;
 
                 puf.remove([nodeHandle]);
             });
 
             // Widget expanded go to folder
-            $('.widget-container').on('click.WS_folder', '.widget-location-url span', function () {
-                var nodeId = $(this).parent().data('node');
+            $('.fm-breadcrumbs', $wrapper).rebind('click', function () {
+                var nodeId = $(this).data('node');
 
                 M.openFolder(nodeId, true);
 
@@ -1222,45 +1258,51 @@ mega.megadrop = (function() {
             });
 
             // Widget expanded embed link tab
-            $('.widget-container').on('click.WS_embedTab', 'div.tab-embed-link', function () {
+            $('.tab-embed-link', $wrapper).rebind('click', function () {
 
                 // Find first parent with id attrbute starting with ew_
-                var id = $(this).closest('div[id^=ew_]').attr('id');
-                var $tmp = $('#' + id);
+                var $parent = $(this).parents('.megadrop-row');
 
-                $tmp.find('.tab-embed-link').addClass('active');
-                $tmp.find('.tab-url-link').removeClass('active');
-                $tmp.find('.embed-link').removeClass('hidden');
-                $tmp.find('.url-link').addClass('hidden');
-                $(window).trigger('resize');
+                $parent.find('.fm-tab').removeClass('active');
+                $(this).addClass('active');
+                $parent.find('.embed-link').removeClass('hidden');
+                $parent.find('.url-link').addClass('hidden');
             });
 
             // Widget expanded url tab
-            $('.widget-container').on('click.WS_urlTab', 'div.tab-url-link', function () {
+            $('.tab-url-link', $wrapper).rebind('click', function () {
 
                 // Find first parent with id attrbute starting with ew_
-                var id = $(this).closest('div[id^=ew_]').attr('id');
-                var $tmp = $('#' + id);
+                var $parent = $(this).parents('.megadrop-row');
 
-                $tmp.find('.tab-embed-link').removeClass('active');
-                $tmp.find('.tab-url-link').addClass('active');
-                $tmp.find('.embed-link').addClass('hidden');
-                $tmp.find('.url-link').removeClass('hidden');
+                $parent.find('.fm-tab').removeClass('active');
+                $(this).addClass('active');
+                $parent.find('.embed-link').addClass('hidden');
+                $parent.find('.url-link').removeClass('hidden');
             });
 
             // Widget expanded copy link
-            $('.widget-container').on('click.WS_copyUrl', '.url-link .copy-widget-dialog.button', function() {
-                copyToClipboard(settingsOpts.card.url, l[17619]);
+            $('.copy-url', $wrapper).rebind('click', function() {
+
+                var url = $('.url-link .widget-url', $(this).parents('.url-link')).text();
+
+                copyToClipboard(url, l[17619]);
             });
 
             // Widget expanded copy source code
-            $('.widget-container').on('click.WS_copyCode', '.embed-link .copy-widget-dialog.button', function() {
-                copyToClipboard(settingsOpts.card.code, l[17620]);
+            $('.copy-code', $wrapper).rebind('click', function() {
+
+                var code = $('.embed-code .widget-code-wrapper', $(this).parents('.embed-link')).text();
+
+                copyToClipboard(code, l[17620]);
             });
 
             // Widget expanded  Preview upload page
-            $('.widget-container').on('click.WS_preview', '.expanded-widget .preview-widget.button', function () {
-                window.open(settingsOpts.card.url, '_blank', wopts.widgetParams[0].slice(1, -1), true);
+            $('.preview-widget', $wrapper).rebind('click', function () {
+
+                var url = $('.url-link .widget-url', $(this).parents('.widget-card.expanded-widget')).text();
+
+                window.open(url, '_blank', wopts.widgetParams[0].slice(1, -1), true);
             });
         };
 
@@ -1268,67 +1310,86 @@ mega.megadrop = (function() {
          * Draw all public upload pages, show path and PUP name
          * @param {Function} cb Callback
          */
-        var drawPups = function settingsDrawPups(cb) {
+        var drawPups = function settingsDrawPups() {
             if (d) {
                 console.log('settings.drawPups');
             }
-            var list = pup.items;
+            var list = Object.values(pup.items);
+            var handleList = list.map(function(pup) {
+                return pup.h;
+            });
             var item = {};
 
-            if (cb) {
-                for (var key in list) {
-                    if (list.hasOwnProperty(key)) {
-                        item = list[key];
-                        if (item.p && item.s === 2) {
-                            cb(item.p);
-                        }
-                        else {
-                            if (d) {
-                                console.warn('settings.drawPups: non-active PUP: ', item.fn);
-                            }
+            $(settingsOpts.card.wrapperClass).empty();
+
+            if (!$(settingsOpts.card.wrapperClass).find('.megadrop-header').length) {
+                var $headElem = $('#megadrop-header-template').clone().removeAttr('id');
+                $(settingsOpts.card.wrapperClass).append($headElem);
+                if (Object.keys(list).length === 0) {
+                    $(settingsOpts.card.wrapperClass)
+                        .append('<tr><td colspan="3" class="grid-table-empty">' + l[20139] + '</td></tr>');
+                }
+            }
+
+            var promise = new MegaPromise();
+
+            dbfetch.geta(handleList).always(function() {
+
+                // Sort the MEGADrop folders by name alphabetically before rendering
+                list.sort(function (a, b) {
+                    return a.fn.localeCompare(b.fn);
+                });
+
+                for (var g = 0; g < list.length; g++) {
+                    item = list[g];
+                    if (item.p && item.s === 2) {
+                        drawPupCard(item.p);
+                    }
+                    else {
+                        if (d) {
+                            console.warn('settings.drawPups: non-active PUP: ', item.fn);
                         }
                     }
                 }
-            }
+                promise.resolve();
+            });
+
+            return promise;
         };
 
         /**
          * Handles settings->widget elements
          */
         var widget = function settingsWidget() {
+            loadingDialog.show();
 
-            if (!isInit()) {
-                loadingDialog.show();
+            drawPups().always(_eventListeners.bind(null));
+            initAccountScroll();
+            setInitialized(true);
 
-                drawPups(drawPupCard);
-                initAccountScroll();
-                _eventListeners();
-                setInitialized(true);
-
-                loadingDialog.hide();
-            }
+            loadingDialog.hide();
         };
 
         /**
          * Remove upload page card and expanded card on PUF/PUP removal
          * @param {String} pupHandle Public upload page handle
          * @param {String} nodeHandle Folder id
-         *          */
+         */
         var remove = function settingsRemove(pupHandle, nodeHandle) {
             if (d) {
                 console.log('settings.remove');
             }
-            // un-bind all events related to .expanded-widget
-            $('.widget-container .expanded-widget').off();
 
-            $('#ew_' + pupHandle).remove();// Remove expanded-card
-            $('#pup_' + pupHandle).remove();// Remove widget-card
-            delExpanded(pupHandle);
-            ui.nodeIcon(nodeHandle);
-            if ((Object.keys(puf.items).length === 0 || Object.keys(pup.items).length === 0)
-                && M.currentdirid === 'account/megadrop') {
-                M.openFolder(M.RootID);
+            if (M.currentdirid === "account/transfers") {
+                $('#pup_' + pupHandle).remove();// Remove widget-card
+
+                // Display "No MEGAdrop folders" if the list is empty
+                if ($.isEmptyObject(pup.items)) {
+                    $(settingsOpts.card.wrapperClass)
+                        .append('<tr><td colspan="3" class="grid-table-empty">' + l[20139] + '</td></tr>');
+                }
             }
+            ui.nodeIcon(nodeHandle);
         };
 
         /**
@@ -1337,11 +1398,20 @@ mega.megadrop = (function() {
          * @param {String} nodeHandle Folder id
          */
         var add = function settingsAdd(pupHandle, nodeHandle) {
+            if (d) {
+                console.log('settings.add');
+            }
 
-            // Draw only enabled PUP, disregard disabled
             if (pupHandle && !$('#pup_' + pupHandle).length) {
-                drawPupCard(pupHandle);
                 ui.nodeIcon(nodeHandle, true);
+                drawPupCard(pupHandle);
+                _eventListeners();
+
+                var $emptyGrid = $('.grid-table-empty', settingsOpts.card.wrapperClass);
+
+                if ($emptyGrid.length) {
+                    $emptyGrid.parent('tr').remove();
+                }
             }
         };
 
@@ -1475,6 +1545,7 @@ mega.megadrop = (function() {
                     localStorage.skipPUFCreationInfo = true;
                 }
                 closeDialog();
+
                 puf.create($.selected[0]);
             });
             /*** END '.create-info-widget-dialog */
@@ -1498,7 +1569,7 @@ mega.megadrop = (function() {
                     .find('span').safeHTML(l[17408]);
                 uiOpts.dlg.widget.$.embedForm.removeClass('hidden');
                 uiOpts.dlg.widget.$.urlForm.addClass('hidden');
-                $('.widget-dialog').addClass('centre');
+                dialogPositioning('.widget-dialog');
             });
 
             // Widget dialog url tab
@@ -1511,7 +1582,7 @@ mega.megadrop = (function() {
                     .find('span').safeHTML(l[17835]);
                 uiOpts.dlg.widget.$.embedForm.addClass('hidden');
                 uiOpts.dlg.widget.$.urlForm.removeClass('hidden');
-                $('.widget-dialog').removeClass('centre');
+                dialogPositioning('.widget-dialog');
             });
 
             // Widget dialog light theme
@@ -1600,6 +1671,36 @@ mega.megadrop = (function() {
             M.safeShowDialog('megadrop.info-dialog', uiOpts.dlg.create.$[0]);
         };
 
+        var mobileInfoDialog = function uiMobileInfoDialog(handle, creation) {
+
+            var name = M.d[handle].name;
+            var $overlay = $('#mobile-ui-megadrop-info');
+
+            $('.wu-folder-name-text', $overlay).text(name);
+
+            if (creation) {
+                $('.wu-title-text', $overlay).text(l[17412]);
+                $('.default-green-button.wu-btn span', $overlay).text(l[158]);
+            }
+            else {
+                $('.wu-title-text', $overlay).text(l[17399]);
+                $('.default-green-button.wu-btn span', $overlay).text(l[17490]);
+            }
+
+            $overlay.removeClass('hidden');
+
+            mobile.initOverlayPopstateHandler($overlay);
+
+            $('.wu-btn').rebind('tap', function() {
+                puf.create(handle);
+                $overlay.addClass('hidden');
+            });
+
+            $('.cancel.text-button').rebind('tap', function() {
+                $overlay.addClass('hidden');
+            });
+        };
+
         var generateUrl = function uiGenerateUrl(pupHandle) {
             return getAppBaseUrl() + (is_extension ? '#' : '/') + 'megadrop/' + pupHandle;
         };
@@ -1614,6 +1715,7 @@ mega.megadrop = (function() {
                 uiOpts.dlg.widget.$.url.text(uiOpts.dlg.widget.url2);
                 uiOpts.dlg.widget.$.code.text(uiOpts.dlg.widget.code);
             }
+
         };
 
         var widgetDialog = function uiWidgetDialog(pupHandle) {
@@ -1622,9 +1724,88 @@ mega.megadrop = (function() {
             // Is there a related public upload page handle
             if (puf.items[handle] && puf.items[handle].p) {
                 _widgetDlgContent(handle);
+
+                // Reset active tab
+                uiOpts.dlg.widget.$.find('.tab-url-link').click();
                 M.safeShowDialog('megadrop-dialog', uiOpts.dlg.widget.$[0]);
             }
             loadingDialog.hide();
+        };
+
+        var mobileWidgetDialog = function uiMobileWidgetDialog(pupHandle) {
+
+            var nodeHandle = pup.items[pupHandle].h;
+
+            // Is there a related public upload page handle
+            if (puf.items[nodeHandle] && puf.items[nodeHandle].p) {
+
+                // Lets borrow link from public link ui as it is using same structure
+                var $overlay = mobile.linkOverlay.$overlay = $('#mobile-ui-copy-link').addClass('megadrop');
+
+                // Get initial overlay details
+                var node = M.d[nodeHandle];
+                var fileName = node.name;
+                var fileIconName = fileIcon(node);
+                var fileIconPath = mobile.imagePath + fileIconName + '.png';
+
+                // Set file name, size and image
+                $('.filename', $overlay).text(fileName);
+                $('.filesize', $overlay).text(l[17410]);
+                $('.filetype-img', $overlay).attr('src', fileIconPath);
+
+                mobile.initOverlayPopstateHandler($overlay);
+
+                var $linkField = $('#mobile-public-link', $overlay);
+
+                $linkField.val(getBaseUrl() + '/megadrop/' + pupHandle);
+                $linkField.css('height', '48px');
+
+                // Initialise the buttons
+                mobile.linkOverlay.initCloseButton();
+
+                $('.copy', $overlay).rebind('tap', function() {
+
+                    mobile.linkOverlay.copyPublicLink(nodeHandle);
+
+                    return false;
+                });
+
+                $('.copy', $overlay).removeClass('disabled');
+
+                var removeMDClass = function() {
+
+                    $overlay.removeClass('megadrop');
+                    $linkField.val('');
+                    $('.fm-dialog-close', $overlay).off('tap.removeMDClass');
+                    $('.text-button', $overlay).off('tap.removeMDClass');
+                };
+
+                // Some extra binding for Megadrop
+                $('.fm-dialog-close', $overlay).rebind('tap.removeMDClass', removeMDClass);
+                $('.text-button', $overlay).rebind('tap.removeMDClass', removeMDClass);
+
+                // Disable scrolling of the file manager in the background to fix a bug on iOS Safari
+                $('.mobile.file-manager-block').addClass('disable-scroll');
+
+                // Show the overlay
+                $overlay.removeClass('hidden').addClass('overlay');
+            }
+
+            loadingDialog.hide();
+        };
+
+        var nodeIconMobile = function uiNodeIconMobile(nodeHandle, render) {
+
+            var $node = $('.mobile.file-manager-block #' + nodeHandle);
+
+            $('.fm-item-img img', $node).addClass('hidden');
+
+            if (render) {
+                $('.megadrop-folder', $node).removeClass('hidden');
+            }
+            else {
+                $('.regular-folder', $node).removeClass('hidden');
+            }
         };
 
         /**
@@ -1633,6 +1814,13 @@ mega.megadrop = (function() {
          * @param {Boolean} render To draw or to delete
          */
         var nodeIcon = function uiNodeIcon(nodeHandle, render) {
+
+            if (is_mobile) {
+
+                nodeIconMobile(nodeHandle, render);
+                return false;
+            }
+
             var icon = 'puf-folder';
 
             if (render) {
@@ -1676,8 +1864,8 @@ mega.megadrop = (function() {
         };
 
         /**
-         *
-         * @param {Stringf} id Upload queue item id e.g. '#ul_8001'
+         * Caching dom item
+         * @param {Stringf} id Upload queue item id e.g. '#md_ul_8001'
          */
         var _cacheUploadItem = function _uiCacheUploadItem(id) {
             var item = uiOpts.window.queueItems[id];
@@ -1707,14 +1895,14 @@ mega.megadrop = (function() {
         var addItem = function uiAddItem(id, name, status, size) {
             var sData = numOfBytes(size, 1);
             var itemsNum = uiOpts.window.queueItems.number += 1;
-
-            var $tmpl = $('#md_ultmpl').clone().removeClass('hidden').attr('id', 'ul_' + id);
+            var prefix = is_mobile ? 'md_ul_' : 'ul_';
+            var $tmpl = $('#md_ultmpl').clone().removeClass('hidden').attr('id', prefix + id);
             $tmpl.find('.wu-queue-item-name').text(str_mtrunc(name, 37));
             $tmpl.find('.wu-queue-item-size').text(' | ' + sData.size + ' ' + sData.unit);
             $tmpl.find('.wu-queue-item-status').text(status);
 
             // When scroll is added add items inside it
-            if (itemsNum > 6) {
+            if (itemsNum > 6 && !is_mobile) {
                 $(uiOpts.window.queueClass + ' .jspPane').prepend($tmpl);
             }
             else {
@@ -1724,16 +1912,20 @@ mega.megadrop = (function() {
             $('.widget-upload .wu-upload-form').removeClass('hidden');
             $('.widget-upload .wu-empty-upload').addClass('hidden');
 
-            _cacheUploadItem('#ul_' + id);
-            _addToTotalStat(size);
-            _queueScroll(itemsNum);
+            _cacheUploadItem('#' + prefix + id);
+
+            if (!is_mobile) {
+                _addToTotalStat(size);
+                _queueScroll(itemsNum);
+            }
         };
 
         var updateItem = function uiUpdateItem(id, bps, time, perc, bl) {
             var retime = secondsToTimeShort(time);
-            var speed = numOfBytes(bps, 1);
-            var ulSize = uiOpts.window.queueItems['#ul_' + id].ulSize;
-            var $item = _cacheUploadItem('#ul_' + id);
+            var speed = numOfBytes(bps, 1, true);
+            var prefix = is_mobile ? 'md_ul_' : 'ul_';
+            var ulSize = uiOpts.window.queueItems['#' + prefix + id].ulSize;
+            var $item = _cacheUploadItem('#' + prefix + id);
 
             // Update specific upload item
             if (retime) {
@@ -1749,7 +1941,7 @@ mega.megadrop = (function() {
             $item.$.size.removeClass('hidden');
 
             if (parseFloat(speed.size)) {
-                uiOpts.window.$.totalSpeed.text(speed.size + ' ' + speed.unit + '/s');
+                uiOpts.window.$.totalSpeed.text(speed.size + ' ' + speed.unit);
             }
         };
 
@@ -1769,23 +1961,39 @@ mega.megadrop = (function() {
 
         // Widget upload window event listeners
         var _winEventListeners = function _uiWinEventListeners() {
-            $('.widget-upload .wu-items,.widget-upload .wu-btn').rebind('click.widget_upload', function() {
-                $('#fileselect5').click();
-            });
 
-            $('.wu-lang').rebind('click.widget_change_lang', function() {
-                langDialog.show();
-            });
+            if (is_mobile) {
 
-            $('.fm-dialog-overlay').rebind('click.widget_window', function(e) {
-                closeDialog(e);
-            });
+                var $mobiledrop = $('.megadrop-upload');
 
-            $(window).rebind('keyup.widget_esc', function(e) {
-                if (e.keyCode === 27) {// ESC key pressed
+                $('.widget-upload .wu-items, .widget-upload .wu-btn', $mobiledrop)
+                    .rebind('tap.widget_upload', function() {
+                    $('#fileselect5').click();
+                });
+
+                $('.fm-dialog-overlay', $mobiledrop).rebind('tap.widget_window', function(e) {
                     closeDialog(e);
-                }
-            });
+                });
+            }
+            else {
+                $('.widget-upload .wu-items,.widget-upload .wu-btn').rebind('click.widget_upload', function() {
+                    $('#fileselect5').click();
+                });
+
+                $('.wu-lang').rebind('click.widget_change_lang', function() {
+                    langDialog.show();
+                });
+
+                $('.fm-dialog-overlay').rebind('click.widget_window', function(e) {
+                    closeDialog(e);
+                });
+
+                $(window).rebind('keyup.widget_esc', function(e) {
+                    if (e.keyCode === 27) {// ESC key pressed
+                        closeDialog(e);
+                    }
+                });
+            }
         };
 
         var cacheWindowDOM = function uiCacheWindowDOM() {
@@ -1857,18 +2065,24 @@ mega.megadrop = (function() {
             updateData: updateData,
             updateItem: updateItem,
             infoDialog: infoDialog,
+            mobileInfoDialog: mobileInfoDialog,
             generateUrl: generateUrl,
             initDialogs: initDialogs,
             generateCode: generateCode,
             onCompletion: onCompletion,
             widgetDialog: widgetDialog,
+            mobileWidgetDialog: mobileWidgetDialog,
             cacheWindowDOM: cacheWindowDOM,
             onItemCompletion: onItemCompletion,
-            updateTotalProgress: updateTotalProgress
+            updateTotalProgress: updateTotalProgress,
         };
     }(widgetOpts));// END mega.megadrop.ui
 
     mBroadcaster.addListener('fm:initialized', function () {
+
+        if (is_mobile) {
+            return false;
+        }
 
         // Prevent multiple initializations
         if (!ui.isDlgInit()) {
@@ -1878,6 +2092,10 @@ mega.megadrop = (function() {
 
         // Context menu create widget
         $('.dropdown.body.context .dropdown-item.createwidget-item').rebind('click.create_widget', function () {
+
+            if (M.isInvalidUserStatus()) {
+                return;
+            }
 
             // Go to widget creation directly don't display PUF info dialog
             if (ui.skipInfoDlg()) {
@@ -1889,7 +2107,11 @@ mega.megadrop = (function() {
         });
 
         // Context menu manage widget
-        $('.dropdown.body.context .dropdown-item.managewidget-item').rebind('click.manage_widget', function () {
+        $('.dropdown.body.context .dropdown-item.managewidget-item').rebind('click.manage_widget', function() {
+
+            if (M.isInvalidUserStatus()) {
+                return;
+            }
 
             // Go to widget creation directly don't display PUF info dialog
             if (ui.skipInfoDlg()) {
@@ -1901,19 +2123,24 @@ mega.megadrop = (function() {
         });
 
         // Context menu Remove upload page
-        $('.dropdown.body.context .dropdown-item.removewidget-item').rebind('click.remove_widget', function () {
+        $('.dropdown.body.context .dropdown-item.removewidget-item').rebind('click.remove_widget', function() {
+
+            if (M.isInvalidUserStatus()) {
+                return;
+            }
+
             puf.remove($.selected);
         });
     });
 
     mBroadcaster.addListener('MEGAdrop:checked', function() {
-        parsepage(pages['megadrop']);
+        parsepage(pages[is_mobile ? 'mobile-megadrop' : 'megadrop']);
         pup.pubk(widgetOpts.ownerHandle);
         ui.updateData();
     });
 
     mBroadcaster.addListener('MEGAdrop:disabled', function() {
-        parsepage(pages['nomegadrop']);
+        parsepage(pages[is_mobile ? 'mobile-nomegadrop' : 'nomegadrop']);
         mega.megadrop.disableDragDrop();
         $('.wu-change-lang').text(lang);
         $('.wu-lang').rebind('click.widget_change_lang', function() {
@@ -1922,7 +2149,7 @@ mega.megadrop = (function() {
     });
 
     mBroadcaster.addListener('MEGAdrop:overquota', function() {
-        parsepage(pages['nomegadrop']);
+        parsepage(pages[is_mobile ? 'mobile-nomegadrop' : 'nomegadrop']);
         $('.wu-name-text').text(widgetOpts.pageData.name);
         $('.widget-upload .wu-folder-name-text')
             .text(l[16302]);
@@ -1951,6 +2178,13 @@ mega.megadrop = (function() {
 
         InitFileDrag();
         ui.cacheWindowDOM();
+
+        if (is_mobile) {
+
+            // initialise upload overlay
+            mobile.uploadOverlay.init();
+            $('.fm-header .fm-icon.mega').off('tap');
+        }
     };
 
     mBroadcaster.addListener('MEGAdrop:initialized', function() {
@@ -1991,63 +2225,12 @@ mega.megadrop = (function() {
             }
         }
 
-        /**
-         * Check user trying to upload folder.
-         */
-        if (d) {
-            console.log('Checking user uploading folder.');
-        }
-        if (event.dataTransfer
-                && event.dataTransfer.items
-                && event.dataTransfer.items.length > 0 && event.dataTransfer.items[0].webkitGetAsEntry) {
-            var items = event.dataTransfer.items;
-            for (var i = 0; i < items.length; i++) {
-                if (items[i].webkitGetAsEntry) {
-                    var item = items[i].webkitGetAsEntry();
-                    if (item && item.isDirectory) {
-                        // Hide Drop to Upload dialog and show warning notification
-                        $('.drag-n-drop.overlay').addClass('hidden');
-                        $('body').removeClass('overlayed');
-                        msgDialog('warninga', l[135], l[19179], false, false, false);
-                        return false;
-                    }
-                }
-            }
-        }
-        else if (is_chrome_firefox && event.dataTransfer) {
-            try {
-                var m = event.dataTransfer.mozItemCount;
-                for (var j = 0; j < m; ++j) {
-                    file = event.dataTransfer.mozGetDataAt("application/x-moz-file", j);
-                    if (file instanceof Ci.nsIFile) {
-                        filedrag_u = [];
-                        if (j === m - 1) {
-                            $.dostart = true;
-                        }
-                        var mozitem = new mozDirtyGetAsEntry(file); /*,e.dataTransfer*/
-                        if (mozitem.isDirectory) {
-                            // Hide Drop to Upload dialog and show warning notification
-                            $('.drag-n-drop.overlay').addClass('hidden');
-                            $('body').removeClass('overlayed');
-                            msgDialog('warninga', l[135], l[19179], false, false, false);
-                            return false;
-                        }
-                    }
-                    else {
-                        if (d) {
-                            console.log('FileSelectHandler: Not a nsIFile', file);
-                        }
-                    }
-                }
-            }
-            catch (e) {
-                alert(e);
-                Cu.reportError(e);
-            }
-        }
-        else {
-            // ie does not support DataTransfer.items property.
-            // Therefore cannot recognise what user upload is folder or not.
+        if (M.checkFolderDrop(event)) {
+            // Hide Drop to Upload dialog and show warning notification
+            $('.drag-n-drop.overlay').addClass('hidden');
+            $('body').removeClass('overlayed');
+            msgDialog('warninga', l[135], l[19179], false, false, false);
+            return false;
         }
 
         for (var i = 0; files[i]; i++) {
@@ -2073,6 +2256,10 @@ mega.megadrop = (function() {
                     ul_queue.push(file);
                     var status = l[7227];
                     ui.addItem(file.id, file.name, status, filesize);
+
+                    if (is_mobile) {
+                        M.addToTransferTable('ul_' + file.id, file);
+                    }
                 }
                 catch (ex) {
                     if (d) {
@@ -2244,6 +2431,7 @@ mega.megadrop = (function() {
         // PUF
         pufs: puf.items,
         pufCallbacks: puf.callbacks,
+        pufCreate: puf.create,
         pufRemove: puf.remove,
         pufHandle: puf.getHandle,
         pufProcessDb: puf.processDb,
@@ -2263,9 +2451,10 @@ mega.megadrop = (function() {
         onCompletion: ui.onCompletion,
         onItemCompletion: ui.onItemCompletion,
         uiUpdateTotalProgress: ui.updateTotalProgress,
+        uiMobileInfoDialog: ui.mobileInfoDialog,
+        uiSkipDialog: ui.skipInfoDlg,
 
         // Settings
-        stngsAdd: settings.add,
         stngsDraw: settings.widget
     };
 

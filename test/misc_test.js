@@ -1,32 +1,3 @@
-/**
- *  If progress was called right away when the SpeedMeter object
- *  was created (only reproducible if you have a very fast
- *  internet connection) it ended up dividing the speed by 0 (which is Infinity).
- */
-describe("test speedmeter bug with fast connections", function() {
-    'use strict';
-
-    it("doesn't show Infinity", function(next) {
-        var sp = new SpeedMeter(function() {});
-        var mb5 = 5 * 1024 * 1024;
-        sp.progress(0, mb5 * 5);
-        assert(sp.getData().speed.match(/infin/i) === null);
-        for (i = 0; i < 500; ++i) {
-            sp.progress(i * 2, mb5 * 5);
-            assert(sp.getData().speed.match(/infin/i) === null);
-        }
-        var i = 0;
-        var tick = setInterval(function() {
-            sp.progress(mb5*(++i));
-            assert(sp.getData().speed.match(/infin/i) === null);
-            if (i == 5) {
-                clearInterval(tick);
-                next();
-            }
-        }, 100);
-    });
-});
-
 describe("Test array.* methods", function() {
     'use strict';
     var assert = chai.assert;
@@ -65,5 +36,66 @@ describe("Test array.* methods", function() {
 
         assert.strictEqual(p, '*2,1>2*2,4*3,0>*2,6');
         assert.strictEqual(JSON.stringify(a), JSON.stringify(u));
+    });
+});
+
+describe('Test promisify and mutex', function() {
+    'use strict';
+    var assert = chai.assert;
+
+    it('can lock and unlock', function(done) {
+        var result = [];
+        var tag = 'begin';
+        var push = function(resolve) {
+            result.push(tag);
+            onIdle(resolve);
+        };
+        var fail = function(ex) {
+            onIdle(function() {
+                throw ex;
+            });
+        };
+        var mName = 'mutex-test';
+        var mMethod = mutex(mName, push);
+
+        expect(Object.isFrozen(mMethod)).to.eq(true);
+        expect(Object.isExtensible(mMethod)).to.eq(false);
+
+        assert.strictEqual(mMethod.__name__, mName);
+        assert.strictEqual(push.__method__, mMethod);
+        assert.strictEqual(mMethod.__function__, push);
+        assert.strictEqual(mutex.lock.__function__.__method__, mutex.lock);
+        assert.strictEqual(mutex.unlock.__function__.__method__, mutex.unlock);
+
+        push(mutex.unlock);
+        mutex.lock('foo').then(function(unlock) {
+            tag = 'x1';
+            mutex.lock(mName)
+                .then(function(a0) {
+                    tag = 'meth';
+                    return push(a0);
+                });
+            tag = 'x2';
+            mMethod().then(function(a0) {
+                tag = 'm2';
+                return unlock(a0);
+            });
+            assert.strictEqual(JSON.stringify(mutex.queue), '{"foo":[null],"' + mName + '":[null]}');
+        }).catch(fail);
+
+        tag = 'x3';
+        mutex.lock('foo').then(function(unlock) {
+            assert.strictEqual(JSON.stringify(mutex.queue), '{"foo":[]}');
+            tag = 'stack';
+            push(unlock);
+            tag = 'x4';
+            return unlock();
+        }).then(function() {
+            tag = 'end';
+            push(mMethod);
+            assert.strictEqual(JSON.stringify(mutex.queue), '{}');
+            assert.strictEqual(result.join('.'), 'begin.meth.meth.stack.end');
+            done();
+        }).catch(fail);
     });
 });

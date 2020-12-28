@@ -23,7 +23,7 @@ mobile.downloadOverlay = {
         // Get initial overlay details
         var node = M.d[nodeHandle];
         var fileName = node.name;
-        var fileSizeBytes = node.s;
+        var fileSizeBytes = node.t === 1 ? node.tb : node.s;
         var fileSize = numOfBytes(fileSizeBytes);
         var fileSizeFormatted = fileSize.size + ' ' + fileSize.unit;
         var fileIconName = fileIcon(node);
@@ -33,6 +33,13 @@ mobile.downloadOverlay = {
         this.$overlay.find('.filename').text(fileName);
         this.$overlay.find('.filesize').text(fileSizeFormatted);
         this.$overlay.find('.filetype-img').attr('src', fileIconPath);
+
+        // Reset state from past downloads
+        this.$overlay.find('.download-progress').removeClass('complete');
+        this.$overlay.find('.download-percents').text('');
+        this.$overlay.find('.download-speed').text('');
+        this.$overlay.find('.download-progress span').text('');
+        this.$overlay.find('.download-progress .bar').width('0%');
 
         // Initialise the download buttons
         this.initBrowserFileDownloadButton(nodeHandle);
@@ -48,6 +55,8 @@ mobile.downloadOverlay = {
 
         // Show the overlay
         this.$overlay.removeClass('hidden').addClass('overlay');
+
+        mobile.initOverlayPopstateHandler(this.$overlay);
     },
 
     /**
@@ -63,7 +72,7 @@ mobile.downloadOverlay = {
         var $label = $button.find('span');
 
         if (dlMethod !== MemoryIO || !dlmanager.openInBrowser(n)) {
-            $label.text(String(l[58]).toUpperCase()); // DOWNLOAD
+            $label.text((n.t === 1 ? String(l[864]) : String(l[58])).toUpperCase()); // DOWNLOAD
         }
         else {
             $label.text(String(l[8947]).toUpperCase()); // OPEN IN BROWSER
@@ -71,13 +80,17 @@ mobile.downloadOverlay = {
 
         // On Open in Browser button click/tap
         this.$overlay.find('.second.dl-browser').off('tap').on('tap', function() {
-       
+
+            if (!validateUserAction()) {
+                return false;
+            }
+
             // Start the download
-            mobile.downloadOverlay.startFileDownload(nodeHandle);
+            mobile.downloadOverlay.startDownload(nodeHandle);
 
             // Prevent default anchor link behaviour
             return false;
-            
+
         });
     },
 
@@ -243,41 +256,78 @@ mobile.downloadOverlay = {
      * Initialises the close button on the overlay with download button options and also the download progress overlay
      */
     initOverlayCloseButton: function() {
-
         'use strict';
 
+        var self = this;
         var $closeButton = this.$overlay.find('.fm-dialog-close, .text-button');
-        var $body = $('body');
 
         // Show close button for folder links
         $closeButton.removeClass('hidden');
 
         // Add tap handler
-        $closeButton.off('tap').on('tap', function() {
-
-            // Destroy any streaming instance if running
-            $(window).trigger('video-destroy');
-
-            // Hide overlay with download button options
-            mobile.downloadOverlay.$overlay.addClass('hidden');
-            $body.removeClass('wrong-file');
-
-            // Hide downloading progress overlay
-            $('body').removeClass('downloading');
-
-            // Re-show the file manager and re-enable scrolling
-            $('.mobile.file-manager-block').removeClass('hidden disable-scroll');
-
+        $closeButton.rebind('tap.close-download', function(e) {
+            // If the tap originates from a direct human input, then instead pop the history which will re-trigger this
+            // In the event that this is triggered from a generated event, just close the dialog ignoring the state.
+            if (e.originalEvent !== undefined) {
+                history.back();
+            }
+            onIdle(self.close.bind(self));
             return false;
         });
     },
 
     /**
-     * Start the file download
-     * @param {String} nodeHandle The node handle for this file
+     * Close the dialog.
      */
-    startFileDownload: function(nodeHandle) {
+    close: function() {
+        'use strict';
 
+        var $body = $('body');
+
+        // Destroy any streaming instance if running
+        $(window).trigger('video-destroy');
+
+        // Abort the running download.
+        dlmanager.abort(null);
+
+        // Hide overlay with download button options
+        mobile.downloadOverlay.$overlay.addClass('hidden');
+        $body.removeClass('wrong-file');
+
+        // Hide downloading progress overlay
+        $body.removeClass('downloading');
+
+        // Re-show the file manager and re-enable scrolling
+        $('.mobile.file-manager-block').removeClass('hidden disable-scroll');
+    },
+
+    /**
+     * Download a node by its handle.
+     * If:
+     *    - File   -> Start File Download
+     *    - Folder -> Start Download as ZIP
+     */
+    startDownload: function(nodeHandle) {
+        'use strict';
+
+        var n = M.d[nodeHandle] || false;
+
+        if (!n) {
+            this.close();
+            return mobile.messageOverlay.show(l[16872]);
+        }
+
+        if (n.t) {
+            return this.startDownloadAsZip(nodeHandle);
+        }
+
+        this.startFileDownload(nodeHandle);
+    },
+
+    /**
+     * Trigger when download started to reset the UI for the download and show downloading dialog.
+     */
+    downloadStartedUI: function() {
         'use strict';
 
         // Show downloading overlay
@@ -289,10 +339,17 @@ mobile.downloadOverlay = {
         this.$overlay.find('.download-speed').text('');
         this.$overlay.find('.download-progress span').text(l[1624] + '...');  // Downloading...
         this.$overlay.find('.download-progress .bar').width('0%');
+    },
 
-        // Change message to 'Did you know that you can download the entire folder at once...'
-        this.$overlay.find('.file-manager-download-message').removeClass('hidden');
+    /**
+     * Start the file download
+     * @param {String} nodeHandle The node handle for this file
+     */
+    startFileDownload: function(nodeHandle) {
 
+        'use strict';
+
+        this.downloadStartedUI();
         var self = this;
         var n = M.d[nodeHandle] || false;
 
@@ -304,52 +361,233 @@ mobile.downloadOverlay = {
             n: n.name,
             nauth: n_h,
             t: n.mtime || n.ts,
-            onDownloadProgress: function(h, p, b) {
-                self.showDownloadProgress(p, b);
-            },
-            onDownloadComplete: function(dl) {
-                // Show the download completed so they can open the file
-                self.showDownloadComplete(dl);
+            onDownloadProgress: self.onDownloadProgress.bind(self),
+            onDownloadComplete: self.onDownloadComplete.bind(self),
+            onBeforeDownloadComplete: self.onBeforeDownloadComplete.bind(self),
+            onDownloadError: self.onDownloadError.bind(self),
+            onDownloadStart: self.onDownloadStart.bind(self)
+        });
+    },
 
-                if (dl.hasResumeSupport) {
-                    dlmanager.remResumeInfo(dl).dump();
-                }
-                Soon(M.resetUploadDownload);
-                $.tresizer();
-            },
-            onBeforeDownloadComplete: function(dl) {
-                if (dl.io instanceof MemoryIO) {
-                    // pretend to be a preview to omit the download attempt
-                    dl.preview = true;
-                }
-            },
-            onDownloadError: function(dl, error) {
+    /**
+     * Download files as zip.
+     * Fetches nodes from db first.
+     * @param nodeHandles
+     * @param zipname
+     */
+    startDownloadAsZip: function(nodeHandles, zipname) {
+        'use strict';
+        var self = this;
+        if (!Array.isArray(nodeHandles)) {
+            nodeHandles = [nodeHandles];
+        }
 
-                if (d) {
-                    dlmanager.logger.error(error, dl);
-                }
+        // Collect all the nodes that are to be downloaded & all children of these nodes.
+        dbfetch.coll(nodeHandles).always(function() {
+            self.startDownloadAsZipSync(nodeHandles, zipname);
+        });
+    },
 
-                // If over bandwidth quota
-                if (error === EOVERQUOTA) {
-                    dlmanager.showOverQuotaDialog();
+    /**
+     * Fetch list of all nodes to include in zip.
+     * @param nodeHandles
+     * @returns {{nodes: Array, paths}}
+     */
+    fetchNodesForZip: function(nodeHandles) {
+        'use strict';
+        var nodes = [];
+        var paths = {};
+        for (var i in nodeHandles) {
+            if (M.d[nodeHandles[i]]) {
+                if (M.d[nodeHandles[i]].t) {
+                    M.getDownloadFolderNodes(nodeHandles[i], true, nodes, paths);
                 }
                 else {
-                    // Show message 'An error occurred, please try again.'
-                    mobile.messageOverlay.show(l[8982]);
+                    nodes.push(nodeHandles[i]);
                 }
-            },
-            onDownloadStart: function() {
-                self.startTime = Date.now();
             }
-        });
+            else if (M.isFileNode(nodeHandles[i])) {
+                nodes.push(nodeHandles[i]);
+            }
+        }
+
+        return {
+            nodes: nodes,
+            paths: paths
+        };
+    },
+
+    /**
+     * Generate a list of downloads for zip.
+     * @param nodeDetails
+     * @param zipname
+     * @returns {Array}
+     */
+    fetchDownloadQueueForZip: function(nodeDetails, zipname) {
+        'use strict';
+
+        var nodes = nodeDetails.nodes || [];
+        var paths = nodeDetails.paths || {};
+        var zip = ++dlmanager.dlZipID;
+        var entries = [];
+        for (var k = 0 ; k < nodes.length; k++) {
+            var n = M.d[nodes[k]];
+            if (!M.isFileNode(n)) {
+                dlmanager.logger.error('** CHECK THIS **', 'Invalid node', k, nodes[k]);
+                continue;
+            }
+
+            var path = paths[nodes[k]] || '';
+            $.totalDL += n.s;
+
+            var entry = {
+                size: n.s,
+                nauth: n_h,
+                id: n.h,
+                key: n.k,
+                n: n.name,
+                t: n.mtime || n.ts,
+                zipid: zip,
+                zipname: zipname,
+                p: path,
+                onDownloadProgress: this.onDownloadProgress.bind(this),
+                onDownloadComplete: this.onDownloadComplete.bind(this),
+                onBeforeDownloadComplete: this.onBeforeDownloadComplete.bind(this),
+                onDownloadError: this.onDownloadError.bind(this),
+                onDownloadStart: this.onDownloadStart.bind(this)
+            };
+            entries.push({node: n, entry: entry});
+        }
+        return entries;
+    },
+
+    /**
+     * Download nodes as zip.
+     * Warning: Ensure that the nodes are fetched before executing. See this.startDownloadAsZip();
+     * @param {Array} nodeHandles
+     * @param {String} zipname
+     */
+    startDownloadAsZipSync: function (nodeHandles, zipname) {
+        'use strict';
+        this.downloadStartedUI();
+
+        if (M.d[nodeHandles[0]] && M.d[nodeHandles[0]].t && M.d[nodeHandles[0]].name) {
+            zipname = M.getSafeName(M.d[nodeHandles[0]].name) + '.zip';
+        }
+        else {
+            zipname = (zipname || ('Archive-' + Math.random().toString(16).slice(-4))) + '.zip';
+        }
+
+        var details = this.fetchNodesForZip(nodeHandles);
+        var entries = this.fetchDownloadQueueForZip(details, zipname);
+
+        if ($.totalDL > dlmanager.maxDownloadSize) {
+            if (d) {
+                console.log('Downloads exceed max size', entries.length, entries);
+            }
+            msgDialog('confirmation', 'File Size is too big', l[18213]);
+            return false;
+        }
+
+        if (!entries.length) {
+            if (d) {
+                dlmanager.logger.warn('Nothing to download.');
+            }
+            if (dlmanager.isOverQuota) {
+                dlmanager.showOverQuotaDialog();
+            }
+            return;
+        }
+
+        for (var e = 0; e < entries.length; e++) {
+            dl_queue.push(entries[e].entry);
+        }
+
+        api_req({a: 'log', e: 99802, m: 'ZipIO Download started on mobile'});
+    },
+
+    /**
+     * Helper: On download progression
+     * @param h
+     * @param p
+     * @param b
+     * @param t
+     * @param s
+     */
+    onDownloadProgress: function(h, p, b, t, s) {
+        'use strict';
+        this.showDownloadProgress(p, b, s * 1e3);
+    },
+
+    /**
+     * Helper: When a download has finished.
+     * @param dl
+     */
+    onDownloadComplete: function(dl) {
+        'use strict';
+        // Show the download completed so they can open the file
+        this.showDownloadComplete(dl);
+
+        if (dl.zipid) {
+            api_req({a: 'log', e: 99803, m: 'ZipIO Download completed on mobile.'});
+        }
+
+        if (dl.hasResumeSupport) {
+            dlmanager.remResumeInfo(dl).dump();
+        }
+        Soon(M.resetUploadDownload);
+        $.tresizer();
+    },
+
+    /**
+     * Helper: Just before a download finished.
+     * @param dl
+     */
+    onBeforeDownloadComplete: function(dl) {
+        'use strict';
+        if (dl.io instanceof MemoryIO) {
+            // pretend to be a preview to omit the download attempt
+            dl.preview = true;
+        }
+    },
+
+    /**
+     * Helper: When download fails.
+     * @param dl
+     * @param error
+     */
+    onDownloadError: function(dl, error) {
+        'use strict';
+
+        if (d) {
+            dlmanager.logger.error(error, dl);
+        }
+
+        // If over bandwidth quota
+        if (error === EOVERQUOTA) {
+            dlmanager.showOverQuotaDialog();
+        }
+        else if (error !== EAGAIN) {
+            // Show message 'An error occurred, please try again.'
+            mobile.messageOverlay.show(l[8982]);
+        }
+    },
+
+    /**
+     * Helper: When download starts.
+     */
+    onDownloadStart: function() {
+        'use strict';
+        this.startTime = Date.now();
     },
 
     /**
      * Download progress handler
      * @param {Number} percentComplete The number representing the percentage complete e.g. 49.23, 51.5 etc
      * @param {Number} bytesLoaded The number of bytes loaded so far
+     * @param {Number} bytesPerSecond Speed
      */
-    showDownloadProgress: function(percentComplete, bytesLoaded) {
+    showDownloadProgress: function(percentComplete, bytesLoaded, bytesPerSecond) {
 
         'use strict';
 
@@ -361,16 +599,13 @@ mobile.downloadOverlay = {
 
         // Calculate the download speed
         var percentCompleteRounded = Math.round(percentComplete);
-        var currentTime = new Date().getTime();
-        var secondsElapsed = (currentTime - this.startTime) / 1000;
-        var bytesPerSecond = secondsElapsed ? bytesLoaded / secondsElapsed : 0;
-        var speed = numOfBytes(bytesPerSecond);
+        var speed = numOfBytes(bytesPerSecond, 2, true);
         var speedSizeRounded = Math.round(speed.size);
-        var speedText = speedSizeRounded + ' ' + speed.unit + '/s';
+        var speedText = speedSizeRounded + ' ' + speed.unit;
 
         // Display the download progress and speed
         $downloadPercent.text(percentCompleteRounded + '%');
-        $downloadProgressBar.width(percentComplete + '%');
+        $downloadProgressBar.css('width', percentComplete + '%');
         $downloadSpeed.text(speedText);
 
         // If the download is complete e.g. 99/100%, change button text to Decrypting... which can take some time
@@ -390,6 +625,7 @@ mobile.downloadOverlay = {
         var $downloadButtonText = this.$overlay.find('.download-progress span');
         var $downloadPercent = this.$overlay.find('.download-percents');
         var $downloadSpeed = this.$overlay.find('.download-speed');
+        $('.download-progress .bar', this.$overlay).css('width', 100 + '%');
 
         // Change button text to full white and hide the download percentage and speed
         $downloadButton.addClass('complete').off('tap');
@@ -447,9 +683,41 @@ mobile.downloadOverlay = {
         $fileSizeUnsupportedMessage.addClass('hidden');
         $body.removeClass('wrong-file');
 
+        // If UC Browser, show an error message, remove the tap/click handler and show as greyed out
+        if (is_uc_browser) {
+            $body.addClass('wrong-file');
+            $openInBrowserButton.off('tap').addClass('disabled');
+            $fileTypeUnsupportedMessage.removeClass('hidden');
+            return false;
+        }
+
+        var inBrowserError = function(fileSizeError) {
+            // Show an error overlay, remove the tap/click handler and show as greyed out
+            $body.addClass('wrong-file');
+            $openInBrowserButton.off('tap').addClass('disabled');
+
+            if (fileSizeError) {
+                $fileSizeUnsupportedMessage.removeClass('hidden');
+            }
+            else {
+                $fileTypeUnsupportedMessage.removeClass('hidden');
+            }
+        };
+
+        if (node.type === 1 && is_ios) {
+            inBrowserError(true);
+            return false;
+        }
+
+        // Edge ios is not supporting both download and open blob uri. - Nov 2019
+        if (ua.details.brand === 'Edgios') {
+            inBrowserError(false);
+            return false;
+        }
+
         // Check if the download is supported
         dlmanager.getMaximumDownloadSize().done(function(maxFileSize) {
-            dlmanager.getResumeInfo({id: node.h}, function(aResumeInfo) {
+            dlmanager.getResumeInfo({id: node.h, hasResumeSupport: true}, function(aResumeInfo) {
                 var supported = dlmanager.canSaveToDisk(node);
 
                 if (aResumeInfo) {
@@ -457,17 +725,8 @@ mobile.downloadOverlay = {
                     $openInBrowserButton.find('span').text(String(l[9118]).toUpperCase());
                 }
 
-                if (node.s > maxFileSize || !supported) {
-                    // Show an error overlay, remove the tap/click handler and show as greyed out
-                    $body.addClass('wrong-file');
-                    $openInBrowserButton.off('tap').addClass('disabled');
-
-                    if (!supported) {
-                        $fileTypeUnsupportedMessage.removeClass('hidden');
-                    }
-                    else {
-                        $fileSizeUnsupportedMessage.removeClass('hidden');
-                    }
+                if ((node.t === 1 ? node.tb : node.s) > maxFileSize || !supported) {
+                    inBrowserError(supported);
                 }
             });
         });
@@ -525,5 +784,15 @@ mobile.downloadOverlay = {
                 $appInfoBlock.addClass('android');
                 break;
         }
+    },
+
+    /**
+     * Resume a download
+     * @param nodeHandle
+     */
+    resumeDownload: function(nodeHandle) {
+        'use strict';
+        this.showOverlay(nodeHandle);
+        this.startDownload(nodeHandle);
     }
 };

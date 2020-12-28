@@ -181,19 +181,19 @@
             p.t7 = '';
 
             if (filecnt) {
-                p.t3 = l[87] + ':';
+                p.t3 = l[5605];
                 p.t5 = ' second';
 
                 if (n.mtime) {
-                    p.t6 = l[94] + ':';
+                    p.t6 = l[22129];
                     p.t7 = htmlentities(time2date(n.mtime));
                 }
             }
             else {
-                p.t3 = l[894] + ':';
+                p.t3 = l[22130];
                 p.t5 = '';
             }
-            p.t1 = l[86] + ':';
+            p.t1 = l[1764];
 
             // Hide context menu button
             if (n.h === M.RootID || slideshowid || n.h === M.RubbishID) {
@@ -222,20 +222,20 @@
 
             p.t4 = versioningFlag ? bytesToSize(size + vsize) : bytesToSize(size);
             p.t9 = n.ts && htmlentities(time2date(n.ts)) || '';
-            p.t8 = p.t9 ? (l[896] + ':') : '';
+            p.t8 = p.t9 ? l[22143] : '';
             p.t12 = ' second';
-            p.t13 = l[17150] + ':';
+            p.t13 = l[22144];
             p.t14 = (svfilecnt === 1) ? l[17152] : l[17151].replace("[X]", svfilecnt);
-            p.t15 = l[17149] + ':';
+            p.t15 = l[22145];
             p.t16 = bytesToSize(size);
             p.t17 = ' second';
-            p.t18 = l[16474] + ':';
+            p.t18 = l[22146];
             p.t19 = bytesToSize(vsize);
 
             if (foldercnt) {
-                p.t6 = l[897] + ':';
-                p.t7 = fm_contains(sfilecnt, sfoldercnt);
-                p.t15 = l[17148] + ':';
+                p.t6 = l[22147];
+                p.t7 = fm_contains(sfilecnt, sfoldercnt, true);
+                p.t15 = l[22148];
                 if ($dialog.hasClass('shared')) {
                     users = M.getSharingUsers($.selected, true);
 
@@ -245,17 +245,17 @@
                         p.hideContacts = true;
                     }
                     else {
-                        p.t8 = l[1036] + ':';
+                        p.t8 = l[5611];
                         p.t9 = users.length === 1 ? l[990] : l[989].replace("[X]", users.length);
                         p.t11 = n.ts ? htmlentities(time2date(n.ts)) : '';
-                        p.t10 = p.t11 ? l[896] : '';
+                        p.t10 = p.t11 ? l[6084] : '';
                         $('.properties-elements-counter span').text(typeof n.r === "number" ? '' : users.length);
 
                         fillPropertiesContactList($dialog, users);
                     }
                 }
                 if ($dialog.hasClass('shared-with-me')) {
-                    p.t3 = l[64];
+                    p.t3 = l[5612];
                     var rights = l[55];
                     if (n.r === 1) {
                         rights = l[56];
@@ -264,34 +264,40 @@
                         rights = l[57];
                     }
                     p.t4 = rights;
-                    p.t6 = l[5905];
+                    p.t6 = l[22157];
                     p.t7 = htmlentities(M.getNameByHandle(user.h));
-                    p.t8 = l[894] + ':';
+                    p.t8 = l[22130];
                     p.t9 = versioningFlag ? bytesToSize(size + vsize) : bytesToSize(size);
-                    p.t10 = l[897] + ':';
-                    p.t11 = fm_contains(sfilecnt, sfoldercnt);
+                    p.t10 = l[22147];
+                    p.t11 = fm_contains(sfilecnt, sfoldercnt, true);
                 }
             }
             if (filecnt && versioningFlag) {
-                p.t14 = '<a href ="#" id = "previousversions" class="red" >' + p.t14 + '</a>';
+                p.t14 = '<a id = "previousversions" class="red" >' + p.t14 + '</a>';
             }
         }
         else {
             $dialog.addClass('multiple folders-only');
             p.t1 = '';
             p.t2 = '<b>' + fm_contains(filecnt, foldercnt) + '</b>';
-            p.t3 = l[894] + ':';
+            p.t3 = l[22130];
             p.t4 = versioningFlag ? bytesToSize(size + vsize) : bytesToSize(size);
-            p.t5 = ' second';
-            p.t8 = l[93] + ':';
+            if (foldercnt) {
+                p.t5 = '';
+                p.t6 = l[22147];
+                p.t7 = fm_contains(sfilecnt + filecnt, sfoldercnt + foldercnt, true);
+            } else {
+                p.t5 = ' second';
+            }
+            p.t8 = l[22149];
             p.t9 = l[1025];
             p.t12 = '';
-            p.t13 = l[17150] + ':';
+            p.t13 = l[22144];
             p.t14 = (svfilecnt === 1) ? l[17152] : l[17151].replace("[X]", svfilecnt);
-            p.t15 = l[17148] + ':';
+            p.t15 = l[22148];
             p.t16 = bytesToSize(size);
             p.t17 = '';
-            p.t18 = l[16474] + ':';
+            p.t18 = l[22146];
             p.t19 = bytesToSize(vsize);
         }
 
@@ -304,11 +310,11 @@
             + '<div class="properties-float-bl' + p.t17 + '"><span class="properties-small-gray">' + p.t18 + '</span>'
             + '<span class="propreties-dark-txt">' + p.t19 + '</span></div>'
             : '';
-        var singlenodeinfohtml  = (((filecnt + foldercnt) === 1) || (versioningFlag === false))
-            ?
-            '<div class="properties-float-bl' + p.t5 + '"><span class="properties-small-gray">' + p.t6 + '</span>'
-            + '<span class="propreties-dark-txt">' + p.t7 + '</span></div>'
-            : '';
+
+        var singlenodeinfohtml  = '<div class="properties-float-bl' + p.t5 + '">'
+            + '<span class="properties-small-gray">' + p.t6 + '</span>'
+            + '<span class="propreties-dark-txt t7">' + p.t7 + '</span></div>';
+
         var shareinfohtml = (typeof p.t10 === 'undefined' && typeof p.t11 === 'undefined')
             ? ''
             : '<div class="properties-float-bl"><div class="properties-small-gray t10">' + p.t10 + '</div>'
@@ -329,7 +335,11 @@
             + '</div></div>'
             + shareinfohtml;
 
-        $('.properties-txt-pad').html(html);
+        $('.properties-txt-pad').safeHTML(html);
+
+        if ($dialog.hasClass('shared-with-me')) {
+            $('.properties-txt-pad').find('.contact-list-icon').remove();
+        }
 
         $('.properties-body', $dialog).rebind('click', function() {
 
@@ -407,7 +417,7 @@
 
             $('.properties-dialog').rebind('click', function() {
                 var $list = $('.contact-list-icon');
-                if ($list.attr('class').indexOf('active') !== -1) {
+                if ($list.hasClass('active')) {
                     $list.removeClass('active');
                     $('.properties-context-menu').fadeOut(200);
                 }

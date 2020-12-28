@@ -1,81 +1,99 @@
-// libs
-var React = require("react");
-var ReactDOM = require("react-dom");
-var utils = require('./../../ui/utils.jsx');
-var RenderDebugger = require('./../../stores/mixins.js').RenderDebugger;
-var MegaRenderMixin = require('./../../stores/mixins.js').MegaRenderMixin;
-var ButtonsUI = require('./../../ui/buttons.jsx');
-var ModalDialogsUI = require('./../../ui/modalDialogs.jsx');
-var CloudBrowserModalDialog = require('./../../ui/cloudBrowserModalDialog.jsx');
-var DropdownsUI = require('./../../ui/dropdowns.jsx');
-var ContactsUI = require('./../ui/contacts.jsx');
-var ConversationsUI = require('./../ui/conversations.jsx');
-var TypingAreaUI = require('./../ui/typingArea.jsx');
-var WhosTyping = require('./whosTyping.jsx').WhosTyping;
-var getMessageString = require('./messages/utils.jsx').getMessageString;
-var PerfectScrollbar = require('./../../ui/perfectScrollbar.jsx').PerfectScrollbar;
-var ParticipantsList = require('./participantsList.jsx').ParticipantsList;
+import React from 'react';
+import ReactDOM from 'react-dom';
+import utils from './../../ui/utils.jsx';
+import {MegaRenderMixin, timing, SoonFcWrap} from './../../stores/mixins.js';
+import {Button} from './../../ui/buttons.jsx';
+import ModalDialogsUI from './../../ui/modalDialogs.jsx';
+import CloudBrowserModalDialog from './../../ui/cloudBrowserModalDialog.jsx';
+import { Dropdown, DropdownItem, DropdownContactsSelector } from './../../ui/dropdowns.jsx';
+import { ContactCard, MembersAmount } from './../ui/contacts.jsx';
+import { TypingArea } from './../ui/typingArea.jsx';
+import { WhosTyping } from './whosTyping.jsx';
+import { PerfectScrollbar } from './../../ui/perfectScrollbar.jsx';
+import { Accordion } from './../../ui/accordion.jsx';
+import { AccordionPanel } from './../../ui/accordion.jsx';
+import { ParticipantsList } from './participantsList.jsx';
+import GenericConversationMessage  from './messages/generic.jsx';
+import { AltPartsConvMessage }  from './messages/alterParticipants.jsx';
+import { TruncatedMessage } from './messages/truncated.jsx';
+import { PrivilegeChange } from './messages/privilegeChange.jsx';
+import { TopicChange } from './messages/topicChange.jsx';
+import { SharedFilesAccordionPanel } from './sharedFilesAccordionPanel.jsx';
+import { IncSharesAccordionPanel } from './incomingSharesAccordionPanel.jsx';
+import { CloseOpenModeMessage } from './messages/closeOpenMode.jsx';
+import { ChatHandleMessage } from './messages/chatHandle.jsx';
+import { ChatlinkDialog } from './../ui/chatlinkDialog.jsx';
+import { ConversationAVPanel } from './conversationaudiovideopanel.jsx';
+import PushSettingsDialog from './pushSettingsDialog.jsx';
 
-var GenericConversationMessage = require('./messages/generic.jsx').GenericConversationMessage;
-var AlterParticipantsConversationMessage =
-    require('./messages/alterParticipants.jsx').AlterParticipantsConversationMessage;
-var TruncatedMessage = require('./messages/truncated.jsx').TruncatedMessage;
-var PrivilegeChange = require('./messages/privilegeChange.jsx').PrivilegeChange;
-var TopicChange = require('./messages/topicChange.jsx').TopicChange;
+var ENABLE_GROUP_CALLING_FLAG = true;
 
+// eslint-disable-next-line id-length
+var MAX_USERS_CHAT_PRIVATE = 100;
 
-
-
-var ConversationRightArea = React.createClass({
-    mixins: [MegaRenderMixin],
-    getDefaultProps: function() {
-        return {
-            'requiresUpdateOnResize': true
+export class JoinCallNotification extends MegaRenderMixin {
+    componentDidUpdate() {
+        var $node = $(this.findDOMNode());
+        var room = this.props.chatRoom;
+        $('a.joinActiveCall', $node)
+            .rebind('click.joinCall', function(e) {
+                room.joinCall();
+                e.preventDefault();
+                return false;
+            });
+    }
+    render() {
+        var room = this.props.chatRoom;
+        if (room.getCallParticipants().length >= RtcModule.kMaxCallReceivers) {
+            return <div className="in-call-notif yellow join">
+                <i className="small-icon audio-call colorized"/>
+                {l[20200]}
+            </div>;
         }
-    },
-    allContactsInChat: function(participants) {
+        else {
+            var translatedCode = escapeHTML(l[20460] || "There is an active group call. [A]Join[/A]");
+            translatedCode = translatedCode
+                .replace("[A]", '<a class="joinActiveCall">')
+                .replace('[/A]', '</a>');
+
+            return <div className="in-call-notif neutral join">
+                <i className="small-icon audio-call colorized"/>
+                <span dangerouslySetInnerHTML={{__html: translatedCode}}></span>
+            </div>;
+        }
+    }
+};
+
+export class ConversationRightArea extends MegaRenderMixin {
+    static defaultProps = {
+        'requiresUpdateOnResize': true
+    }
+    customIsEventuallyVisible() {
+        return this.props.chatRoom.isCurrentlyActive;
+    }
+    allContactsInChat(participants) {
         var self = this;
         if (participants.length === 0) {
             return false;
         }
 
-        var currentContacts = self.props.contacts;
-        var foundNonMembers = 0;
-        currentContacts.forEach(function(u, k) {
-            if (u.c === 1) {
-                if (participants.indexOf(k) === -1) {
-                    foundNonMembers++;
-                }
+        var currentContacts = M.u.keys();
+        for (var i = 0; i < currentContacts.length; i++) {
+            var k = currentContacts[i];
+            if (M.u[k].c === 1 && participants.indexOf(k) === -1) {
+                return false;
             }
-        });
-
-        if (foundNonMembers > 0) {
-            return false;
         }
-        else {
-            return true;
-        }
-    },
-    render: function() {
-        var self = this;
-        var room = this.props.chatRoom;
+        return true;
+    }
+    render() {
+        const self = this;
+        const { chatRoom: room } = self.props;
 
         if (!room || !room.roomId) {
             // destroyed
             return null;
         }
-        var contactHandle;
-        var contact;
-        var contacts = room.getParticipantsExceptMe();
-        if (contacts && contacts.length > 0) {
-            contactHandle = contacts[0];
-            contact = M.u[contactHandle];
-        }
-        else {
-            contact = {};
-        }
-
-
 
         // room is not active, don't waste DOM nodes, CPU and Memory (and save some avatar loading calls...)
         if (!room.isCurrentlyActive && !self._wasAppendedEvenOnce) {
@@ -83,61 +101,68 @@ var ConversationRightArea = React.createClass({
         }
         self._wasAppendedEvenOnce = true;
 
-        var disabledCalls = room.isReadOnly() || !room.chatId || room.callManagerCall;
+        var startCallDisabled = isStartCallDisabled(room);
+        var startCallButtonClass = startCallDisabled ? " disabled" : "";
+        var startAudioCallButton;
+        var startVideoCallButton;
+        var endCallButton;
 
-
-        var startAudioCallButtonClass = "";
-        var startVideoCallButtonClass = "";
-
-        if (disabledCalls) {
-            startAudioCallButtonClass = startVideoCallButtonClass = "disabled";
-        }
-
-        var startAudioCallButton =
-            <div className={"link-button" + " " + startVideoCallButtonClass} onClick={() => {
-                if (!disabledCalls) {
-                    room.startAudioCall();
-                }
-            }}>
-                <i className="small-icon audio-call"></i>
-                {__(l[5896])}
-            </div>;
-
-        var startVideoCallButton =
-            <div className={"link-button" + " " + startVideoCallButtonClass} onClick={() => {
-                if (!disabledCalls) {
-                    room.startVideoCall();
-                }
-            }}>
-                <i className="small-icon video-call"></i>
-                {__(l[5897])}
-            </div>;
-        var AVseperator = <div className="chat-button-seperator"></div>;
-        var endCallButton =
-                    <div className={"link-button red"} onClick={() => {
-                        if (room.callManagerCall) {
-                            room.callManagerCall.endCall();
-                        }
-                    }}>
-            <i className="small-icon horizontal-red-handset"></i>
-            {__(l[5884])}
-        </div>;
-
-
-        if (room.callManagerCall && room.callManagerCall.isActive() === true) {
+        var isInCall = !!room.callManagerCall && room.callManagerCall.isActive();
+        if (isInCall) {
             startAudioCallButton = startVideoCallButton = null;
         } else {
             endCallButton = null;
         }
 
+        if (room.type === "group" || room.type === "public") {
+            if (!ENABLE_GROUP_CALLING_FLAG ||
+                ((room.getCallParticipants().length > 0) && !isInCall)
+            ){
+                // call is active, but I'm not in
+                startAudioCallButton = startVideoCallButton = null;
+            }
+        }
 
-
+        if (startAudioCallButton !== null) {
+            startAudioCallButton =
+                <div className={"link-button light" + startCallButtonClass} onClick={() => {
+                    if (!startCallDisabled) {
+                        room.startAudioCall();
+                    }
+                }}>
+                <i className="small-icon colorized audio-call"></i>
+                <span>{l[5896]}</span>
+            </div>;
+        }
+        if (startVideoCallButton !== null) {
+            startVideoCallButton =
+                <div className={"link-button light" + startCallButtonClass} onClick={() => {
+                    if (!startCallDisabled) {
+                        room.startVideoCall();
+                    }
+                }}>
+                <i className="small-icon colorized video-call"></i>
+                <span>{l[5897]}</span>
+            </div>;
+        }
+        var AVseperator = <div className="chat-button-seperator"></div>;
+        if (endCallButton !== null) {
+            endCallButton =
+                <div className={"link-button light red"} onClick={() => {
+                    if (room.callManagerCall) {
+                        room.callManagerCall.endCall();
+                    }
+                }}>
+                <i className="small-icon colorized horizontal-red-handset"></i>
+                <span>{room.type === "group" || room.type === "public" ? "Leave call" : l[5884]}</span>
+            </div>;
+        }
         var isReadOnlyElement = null;
 
         if (room.isReadOnly()) {
-            // isReadOnlyElement = <span className="center">(read only chat)</span>;
+            isReadOnlyElement = <center className="center" style={{margin: "6px"}}>(read only chat)</center>;
         }
-        var excludedParticipants = room.type === "group" ?
+        var excludedParticipants = room.type === "group" || room.type === "public" ?
             (
                 room.members && Object.keys(room.members).length > 0 ? Object.keys(room.members) :
                     room.getParticipants()
@@ -160,657 +185,378 @@ var ConversationRightArea = React.createClass({
             dontShowTruncateButton = true;
         }
 
-        var membersHeader = null;
-
-        if (room.type === "group") {
-            membersHeader = <div className="chat-right-head">
-                <div className="chat-grey-counter">
-                    {Object.keys(room.members).length}
-                </div>
-                <div className="chat-right-head-txt">
-                    {__(l[8876])}
-                </div>
-            </div>
-        }
-
-        // console.error(
-        //     self.findDOMNode(),
-        //     excludedParticipants,
-        //         self.allContactsInChat(excludedParticipants),
-        //         room.isReadOnly(),
-        //         room.iAmOperator(),
-        //     myPresence === 'offline'
-        // );
-
-        var renameButtonClass = "link-button " + (
+        var renameButtonClass = "link-button light " + (
             room.isReadOnly() || !room.iAmOperator() ?
                 "disabled" : ""
             );
 
-        return <div className="chat-right-area">
-            <div className="chat-right-area conversation-details-scroll">
-                <div className="chat-right-pad">
-
+        let participantsList = null;
+        if (room.type === "group" || room.type === "public") {
+            participantsList = (
+                <div>
                     {isReadOnlyElement}
-                    {membersHeader}
                     <ParticipantsList
+                        ref={function(r) {
+                            self.participantsListRef = r;
+                        }}
                         chatRoom={room}
                         members={room.members}
                         isCurrentlyActive={room.isCurrentlyActive}
                     />
-                    <ButtonsUI.Button
-                        className="add-chat-contact"
-                        label={__(l[8007])}
+                </div>
+            );
+        }
+
+        const addParticipantBtn = (
+                <Button
+                    className="link-button green light"
+                    icon="rounded-plus colorized"
+                    label={l[8007]}
+                    disabled={
+                        /* Disable in case I don't have any more contacts to add ... */
+                        !(
+                            !room.isReadOnly() &&
+                            room.iAmOperator() &&
+                            !self.allContactsInChat(excludedParticipants)
+                        )
+                    }
+                >
+                    <DropdownContactsSelector
                         contacts={this.props.contacts}
-                        disabled={
-                            /* Disable in case I don't have any more contacts to add ... */
-                            !(
-                                !self.allContactsInChat(excludedParticipants) &&
-                                !room.isReadOnly() &&
-                                room.iAmOperator()
-                            )
+                        chatRoom={room}
+                        exclude={
+                            excludedParticipants
                         }
-                        >
-                        <DropdownsUI.DropdownContactsSelector
-                            contacts={this.props.contacts}
-                            megaChat={this.props.megaChat}
-                            chatRoom={room}
-                            exclude={
-                                excludedParticipants
+                        multiple={true}
+                        className="popup add-participant-selector"
+                        singleSelectedButtonLabel={l[8869]}
+                        multipleSelectedButtonLabel={l[8869]}
+                        nothingSelectedButtonLabel={l[8870]}
+                        onSelectDone={this.props.onAddParticipantSelected.bind(this)}
+                        positionMy="center top"
+                        positionAt="left bottom"
+                        arrowHeight={-32}
+                        selectFooter={true}
+                    />
+                </Button>
+        );
+
+        //
+        // Push notification settings
+        // ----------------------------------------------------------------------
+
+        const { pushSettingsValue, onPushSettingsToggled, onPushSettingsClicked } = this.props;
+        const pushSettingsBtn = room.membersSetFromApi.members.hasOwnProperty(u_handle) && !anonymouschat && (
+            <div className="push-settings">
+                <Button
+                    className="link-button light push-settings-button"
+                    icon={"small-icon colorized " + (
+                        pushSettingsValue || pushSettingsValue === 0 ?
+                            "muted" :
+                            "mute"
+                    )}
+                    label={l[16709] /* `Mute chat` */}
+                    secondLabel={(() => {
+                        if (pushSettingsValue !== null && pushSettingsValue !== undefined) {
+                            return pushSettingsValue === 0 ?
+                                // `Until I Turn It On Again``
+                                PushSettingsDialog.options[Infinity] :
+                                // `Muted until %s`
+                                l[23539].replace(
+                                    '%s',
+                                    `<strong>
+                                        ${escapeHTML(unixtimeToTimeString(pushSettingsValue))}
+                                    </strong>`
+                                );
+                        }
+                    })()}
+                    secondLabelClass="label--green"
+                    toggle={{
+                        enabled: !pushSettingsValue && pushSettingsValue !== 0,
+                        onClick: () =>
+                            !pushSettingsValue && pushSettingsValue !== 0 ?
+                                onPushSettingsClicked() :
+                                onPushSettingsToggled()
+                    }}
+                    onClick={() => onPushSettingsClicked()}>
+                </Button>
+            </div>
+        );
+
+        var expandedPanel = {};
+        if (room.type === "group" || room.type === "public") {
+            expandedPanel['participants'] = true;
+        }
+        else {
+            expandedPanel['options'] = true;
+        }
+
+        return <div className="chat-right-area">
+            <PerfectScrollbar
+                className="chat-right-area conversation-details-scroll"
+                options={{
+                    'suppressScrollX': true
+                }}
+                ref={function(ref) {
+                    self.rightScroll = ref;
+                }}
+                triggerGlobalResize={true}
+                isVisible={self.props.chatRoom.isCurrentlyActive}
+                chatRoom={self.props.chatRoom}>
+                <div className="chat-right-pad">
+                    <Accordion
+                        chatRoom={room}
+                        onToggle={SoonFc(20, function() {
+                            // wait for animations.
+                            if (self.rightScroll) {
+                                self.rightScroll.reinitialise();
                             }
-                            multiple={true}
-                            className="popup add-participant-selector"
-                            singleSelectedButtonLabel={__(l[8869])}
-                            multipleSelectedButtonLabel={__(l[8869])}
-                            nothingSelectedButtonLabel={__(l[8870])}
-                            onSelectDone={this.props.onAddParticipantSelected}
-                            positionMy="center top"
-                            positionAt="left bottom"
-                            />
-                    </ButtonsUI.Button>
-                    <div className="buttons-block">
-                        <div className="chat-right-head-txt">
-                            Options
-                        </div>
-                        {room.type !== "group" ? startAudioCallButton : null}
-                        {room.type !== "group" ? startVideoCallButton : null}
-                        {room.type !== "group" ? AVseperator : null}
-                        {
-                            room.type == "group" ?
-                            (
-                                <div className={renameButtonClass}
-                                     onClick={(e) => {
-                                         if ($(e.target).closest('.disabled').length > 0) {
-                                             return false;
-                                         }
-                                         if (self.props.onRenameClicked) {
-                                            self.props.onRenameClicked();
-                                         }
-                                }}>
-                                    <i className="small-icon writing-pen"></i>
-                                    {__(l[9080])}
-                                </div>
-                            ) : null
-                        }
+                            if (self.participantsListRef) {
+                                self.participantsListRef.safeForceUpdate();
+                            }
+                        })}
+                        expandedPanel={expandedPanel}
+                    >
+                        {participantsList ? <AccordionPanel className="small-pad" title={l[8876]}
+                            chatRoom={room} key="participants">
+                            {participantsList}
+                        </AccordionPanel> : null}
+                        {room.type === "public" && room.observers > 0 ? <div className="accordion-text observers">
+                            {l[20466]}
+                            <span className="observers-count">
+                                <i className="tiny-icon eye"></i>
+                                {room.observers}
+                            </span>
+                        </div> : <div></div>}
 
-                        <ButtonsUI.Button
-                            className="link-button dropdown-element"
-                            icon="rounded-grey-up-arrow"
-                            label={__(l[6834] + "...")}
-                            disabled={room.isReadOnly()}
-                            >
-                            <DropdownsUI.Dropdown
-                                contacts={this.props.contacts}
-                                megaChat={this.props.megaChat}
-                                className="wide-dropdown send-files-selector"
-                                onClick={() => {}}
-                            >
-                                <DropdownsUI.DropdownItem icon="grey-cloud" label={__(l[8013])} onClick={() => {
-                                    self.props.onAttachFromCloudClicked();
-                                }} />
-                                <DropdownsUI.DropdownItem icon="grey-computer" label={__(l[8014])} onClick={() => {
-                                    self.props.onAttachFromComputerClicked();
-                                }} />
-                            </DropdownsUI.Dropdown>
-                        </ButtonsUI.Button>
+                        <AccordionPanel className="have-animation buttons" title={l[7537]} key="options"
+                            chatRoom={room}>
+                            <div>
+                            {addParticipantBtn}
+                            {startAudioCallButton}
+                            {startVideoCallButton}
+                            {AVseperator}
+                            {
+                                room.type == "group" || room.type == "public" ?
+                                (
+                                    <div className={renameButtonClass}
+                                         onClick={(e) => {
+                                             if ($(e.target).closest('.disabled').length > 0) {
+                                                 return false;
+                                             }
+                                             if (self.props.onRenameClicked) {
+                                                self.props.onRenameClicked();
+                                             }
+                                    }}>
+                                        <i className="small-icon colorized writing-pen"></i>
+                                        <span>{l[9080]}</span>
+                                    </div>
+                                ) : null
+                            }
+                            {
+                                (!room.isReadOnly() && (room.type === "public")) ?
+                                    (
+                                        <div className="link-button light"
+                                             onClick={(e) => {
+                                                 if ($(e.target).closest('.disabled').length > 0) {
+                                                     return false;
+                                                 }
 
-                        {endCallButton}
+                                                 self.props.onGetManageChatLinkClicked();
+                                             }}>
+                                            <i className="small-icon blue-chain colorized"></i>
+                                            <span>{l[20481]}</span>
+                                        </div>
+                                    ) : null
+                            }
+                            {
+                                !room.membersSetFromApi.members.hasOwnProperty(u_handle) &&
+                                room.type === "public" && !anonymouschat &&
+                                room.publicChatHandle && room.publicChatKey ?
+                                    (
+                                        <div className="link-button light"
+                                             onClick={(e) => {
+                                                 if ($(e.target).closest('.disabled').length > 0) {
+                                                     return false;
+                                                 }
 
-                        {
-                            <div className={"link-button " + (dontShowTruncateButton ? "disabled" : "")}
+                                                 self.props.onJoinViaPublicLinkClicked();
+                                             }}>
+                                            <i className="small-icon writing-pen"></i>
+                                            <span>{l[20597]}</span>
+                                        </div>
+                                    ) : null
+                            }
+
+                            <Button
+                                className="link-button light dropdown-element"
+                                icon="rounded-grey-up-arrow colorized"
+                                label={l[23753]}
+                                disabled={room.isReadOnly()}
+                                >
+                                <Dropdown
+                                    className="wide-dropdown send-files-selector light"
+                                    noArrow="true"
+                                    vertOffset={4}
+                                    onClick={() => {}}
+                                >
+                                    <div className="dropdown info-txt">
+                                        {l[23753] ? l[23753] : "Send..."}
+                                    </div>
+                                    <DropdownItem
+                                        className="link-button light"
+                                        icon="grey-cloud colorized"
+                                        label={l[19794] ? l[19794] : "My Cloud Drive"}
+                                        onClick={() => {
+                                            self.props.onAttachFromCloudClicked();
+                                        }} />
+                                    <DropdownItem
+                                        className="link-button light"
+                                        icon="grey-computer colorized"
+                                        label={l[19795] ? l[19795] : "My computer"}
+                                        onClick={() => {
+                                            self.props.onAttachFromComputerClicked();
+                                        }} />
+                                </Dropdown>
+                            </Button>
+
+                            {AVseperator}
+                            {pushSettingsBtn}
+                            {pushSettingsBtn && AVseperator}
+
+                            {endCallButton}
+
+                            <div className={"link-button light " + (
+                                dontShowTruncateButton || !room.members.hasOwnProperty(u_handle) ? "disabled" : "")
+                            }
                                  onClick={(e) => {
                                      if ($(e.target).closest('.disabled').length > 0) {
                                          return false;
                                      }
                                      if (self.props.onTruncateClicked) {
-                                        self.props.onTruncateClicked();
+                                         self.props.onTruncateClicked();
                                      }
-                            }}>
-                                <i className="small-icon clear-arrow"></i>
-                                {__(l[8871])}
+                                 }}>
+                                <i className="small-icon colorized clear-arrow"></i>
+                                <span>{l[8871]}</span>
                             </div>
-                        }
-                        {<div className="chat-button-seperator"></div>}
-                        {
-                            <div className={"link-button"}
-                                 onClick={(e) => {
-                                    if ($(e.target).closest('.disabled').length > 0) {
-                                        return false;
-                                    }
-                                    if (room.isArchived()) {
-                                        if (self.props.onUnarchiveClicked) {
-                                           self.props.onUnarchiveClicked();
-                                        }
-                                    } else {
-                                        if (self.props.onArchiveClicked) {
-                                           self.props.onArchiveClicked();
-                                        }
-                                    }
-                            }}>
-                                <i className={"small-icon " +  ((room.isArchived()) ? "unarchive" : "archive")}></i>
-                                {room.isArchived() ? __(l[19065]) : __(l[16689])}
-                            </div>
-                        }
-                        { room.type === "group" ? (
-                            <div className={"link-button red " + (
-                                    room.stateIsLeftOrLeaving() ? "disabled" : ""
+
+                            {
+                                (room.iAmOperator() && (room.type === "public")) ?
+                                    (
+                                        <div className="chat-enable-key-rotation-paragraph">
+                                            <div className="chat-button-seperator"></div>
+                                            <div className={
+                                                "link-button light " +
+                                                (Object.keys(room.members).length > MAX_USERS_CHAT_PRIVATE ?
+                                                    " disabled" : "")
+                                            }
+                                            onClick={(e) => {
+                                                if (
+                                                    Object.keys(room.members).length >
+                                                    MAX_USERS_CHAT_PRIVATE ||
+                                                    $(e.target).closest('.disabled').length > 0
+                                                ) {
+                                                    return false;
+                                                }
+                                                self.props.onMakePrivateClicked();
+                                            }}>
+                                                <i className="small-icon yellow-key colorized"></i>
+                                                <span>{l[20623]}</span>
+                                            </div>
+                                            <p>
+                                                <span>{l[20454]}</span>
+                                            </p>
+                                        </div>
+                                    ) : null
+                            }
+
+                            <div className="chat-button-seperator"></div>
+                            {
+                                <div className={"link-button light" + (
+                                    !(
+                                        (
+                                            room.members.hasOwnProperty(u_handle) ||
+                                            room.state === ChatRoom.STATE.LEFT
+                                        ) &&
+                                        !anonymouschat
+                                    ) ? " disabled" : ""
                                 )}
-                                 onClick={(e) => {
-                                     if ($(e.target).closest('.disabled').length > 0) {
-                                         return false;
-                                     }
-                                     if (self.props.onLeaveClicked) {
-                                        self.props.onLeaveClicked();
-                                     }
-                            }}>
-                                <i className="small-icon rounded-stop"></i>
-                                {l[8633]}
-                            </div>
-                        ) : null
-                        }
-                        { room._closing !== true && room.type === "group" && room.stateIsLeftOrLeaving() ? (
-                            <div className="link-button red" onClick={() => {
-                                if (self.props.onCloseClicked) {
-                                    self.props.onCloseClicked();
+                                     onClick={(e) => {
+                                         if ($(e.target).closest('.disabled').length > 0) {
+                                             return false;
+                                         }
+                                         if (room.isArchived()) {
+                                             if (self.props.onUnarchiveClicked) {
+                                                 self.props.onUnarchiveClicked();
+                                             }
+                                         } else {
+                                             if (self.props.onArchiveClicked) {
+                                                 self.props.onArchiveClicked();
+                                             }
+                                         }
+                                     }}>
+                                    <i className={"small-icon colorized " +  ((room.isArchived()) ?
+                                        "unarchive" : "archive")}></i>
+                                    <span>{room.isArchived() ? l[19065] : l[16689]}</span>
+                                </div>
+                            }
+                            {
+                                room.type !== "private" ? (
+                                <div className={"link-button light red " + (
+                                        (
+                                            room.type !== "private" && !anonymouschat &&
+                                            room.membersSetFromApi.members.hasOwnProperty(u_handle) &&
+                                            room.membersSetFromApi.members[u_handle] !== -1
+                                        ) ? "" : "disabled"
+                                    )}
+                                    onClick={(e) => {
+                                         if ($(e.target).closest('.disabled').length > 0) {
+                                             return false;
+                                         }
+                                         if (self.props.onLeaveClicked) {
+                                             self.props.onLeaveClicked();
+                                         }
+                                     }}>
+                                    <i className="small-icon rounded-stop colorized"></i>
+                                    <span>{l[8633]}</span>
+                                </div>) : null
+                            }
+                            {
+                                room._closing !== true && room.type === "public" &&
+                                !anonymouschat && (
+                                    !room.membersSetFromApi.members.hasOwnProperty(u_handle) ||
+                                    room.membersSetFromApi.members[u_handle] === -1
+                                ) ? (
+                                    <div className="link-button light red" onClick={() => {
+                                        if (self.props.onCloseClicked) {
+                                            self.props.onCloseClicked();
+                                        }
+                                    }}>
+                                        <i className="small-icon rounded-stop colorized"></i>
+                                        <span>{l[148]}</span>
+                                    </div>
+                                ) : null
                                 }
-                            }}>
-                                <i className="small-icon rounded-stop"></i>
-                                {l[148]}
                             </div>
-                        ) : null
+                        </AccordionPanel>
+                        <SharedFilesAccordionPanel key="sharedFiles" title={l[19796] ? l[19796] : "Shared Files"} chatRoom={room}
+                                                   sharedFiles={room.messagesBuff.sharedFiles} />
+                        {room.type === "private" ?
+                            <IncSharesAccordionPanel key="incomingShares" title={l[5542]} chatRoom={room} /> :
+                            null
                         }
-                    </div>
+                    </Accordion>
                 </div>
-            </div>
-        </div>
-    }
-});
-
-
-
-var ConversationAudioVideoPanel = React.createClass({
-    mixins: [MegaRenderMixin],
-    getInitialState: function() {
-        return {
-            'messagesBlockEnabled': false,
-            'fullScreenModeEnabled': false,
-            'localMediaDisplay': true
-        }
-    },
-    _hideBottomPanel: function() {
-        var self = this;
-        var room = self.props.chatRoom;
-        if (!room.callManagerCall || !room.callManagerCall.isActive()) {
-            return;
-        }
-
-        var $container = $(ReactDOM.findDOMNode(self));
-
-        self.visiblePanel = false;
-        $('.call.bottom-panel, .call.local-video, .call.local-audio', $container).removeClass('visible-panel');
-    },
-    componentDidUpdate: function() {
-        var self = this;
-        var room = self.props.chatRoom;
-        if (!room.callManagerCall || !room.callManagerCall.isActive()) {
-            return;
-        }
-
-        var $container = $(ReactDOM.findDOMNode(self));
-
-
-        var mouseoutThrottling = null;
-        $container.rebind('mouseover.chatUI' + self.props.chatRoom.roomId, function() {
-            var $this = $(this);
-            clearTimeout(mouseoutThrottling);
-            self.visiblePanel = true;
-            $('.call.bottom-panel, .call.local-video, .call.local-audio', $container).addClass('visible-panel');
-            if ($this.hasClass('full-sized-block')) {
-                $('.call.top-panel', $container).addClass('visible-panel');
-            }
-        });
-
-        $container.rebind('mouseout.chatUI' + self.props.chatRoom.roomId, function() {
-            var $this = $(this);
-            clearTimeout(mouseoutThrottling);
-            mouseoutThrottling = setTimeout(function() {
-                self.visiblePanel = false;
-                self._hideBottomPanel();
-                $('.call.top-panel', $container).removeClass('visible-panel');
-            }, 500);
-        });
-
-
-        // Hidding Control panel if cursor is idle
-        var idleMouseTimer;
-        var forceMouseHide = false;
-        $container.rebind('mousemove.chatUI' + self.props.chatRoom.roomId,function(ev) {
-            var $this = $(this);
-            if (self._bottomPanelMouseOver) {
-                return;
-            }
-            clearTimeout(idleMouseTimer);
-            if (!forceMouseHide) {
-                self.visiblePanel = true;
-                $('.call.bottom-panel, .call.local-video, .call.local-audio', $container).addClass('visible-panel');
-                $container.removeClass('no-cursor');
-                if ($this.hasClass('full-sized-block')) {
-                    $('.call.top-panel', $container).addClass('visible-panel');
-                }
-                idleMouseTimer = setTimeout(function() {
-                    self.visiblePanel = false;
-
-                    self._hideBottomPanel();
-
-                    $container.addClass('no-cursor');
-                    $('.call.top-panel', $container).removeClass('visible-panel');
-
-                    forceMouseHide = true;
-                    setTimeout(function() {
-                        forceMouseHide = false;
-                    }, 400);
-                }, 2000);
-            }
-        });
-
-        $('.call.bottom-panel', $container).rebind('mouseenter.chatUI' + self.props.chatRoom.roomId,function(ev) {
-            self._bottomPanelMouseOver = true;
-            clearTimeout(idleMouseTimer);
-        });
-        $('.call.bottom-panel', $container).rebind('mouseleave.chatUI' + self.props.chatRoom.roomId,function(ev) {
-            self._bottomPanelMouseOver = false;
-
-            idleMouseTimer = setTimeout(function() {
-                self.visiblePanel = false;
-
-                self._hideBottomPanel();
-
-                $container.addClass('no-cursor');
-                $('.call.top-panel', $container).removeClass('visible-panel');
-
-                forceMouseHide = true;
-                setTimeout(function() {
-                    forceMouseHide = false;
-                }, 400);
-            }, 2000);
-        });
-
-
-        $(document)
-            .rebind("fullscreenchange.megaChat_" + room.roomId, function() {
-                if (!$(document).fullScreen() && room.isCurrentlyActive) {
-                    self.setState({fullScreenModeEnabled: false});
-                }
-                else if (!!$(document).fullScreen() && room.isCurrentlyActive) {
-                    self.setState({fullScreenModeEnabled: true});
-                }
-                self.forceUpdate();
-            });
-
-        var $localMediaDisplay = $('.call.local-video, .call.local-audio', $container);
-        $localMediaDisplay.draggable({
-            'refreshPositions': true,
-            'containment': $container,
-            'scroll': false,
-            drag: function(event, ui){
-                if ($(this).is(".minimized")) {
-                    return false;
-                }
-
-                var right = Math.max(0, $container.outerWidth() - ui.position.left);
-                var bottom = Math.max(0, $container.outerHeight() - ui.position.top);
-
-
-                // contain in the $container
-                right = Math.min(right, $container.outerWidth() - 8);
-                bottom = Math.min(bottom, $container.outerHeight() - 8);
-
-                right = right - ui.helper.outerWidth();
-                bottom = bottom - ui.helper.outerHeight();
-
-                var minBottom = $(this).is(".minimized") ? 48 : 8;
-
-                if (bottom < minBottom) {
-                    bottom = minBottom;
-                    $(this).addClass('bottom-aligned');
-                }
-                else {
-                    $(this).removeClass('bottom-aligned');
-                }
-
-                if (right < 8) {
-                    right = 8;
-                    $(this).addClass('right-aligned');
-                }
-                else {
-                    $(this).removeClass('right-aligned');
-                }
-
-                ui.offset = {
-                    left: 'auto',
-                    top: 'auto',
-                    right: right,
-                    bottom: bottom,
-                    height: "",
-                    width: ""
-                };
-                ui.position.left = 'auto';
-                ui.position.top = 'auto';
-
-                ui.helper.css(ui.offset);
-                $(this).css(ui.offset);
-            }
-        });
-
-        // REposition the $localMediaDisplay if its OUT of the viewport (in case of dragging -> going back to normal
-        // size mode from full screen...)
-        $(window).rebind('resize.chatUI_' + room.roomId, function(e) {
-            if ($container.is(":visible")) {
-                if (!elementInViewport($localMediaDisplay[0])) {
-                    $localMediaDisplay
-                        .addClass('right-aligned')
-                        .addClass('bottom-aligned')
-                        .css({
-                            'right': 8,
-                            'bottom': 8,
-                        });
-                }
-            }
-        });
-
-
-        if (
-            self.refs.remoteVideo &&
-            self.refs.remoteVideo.src === "" &&
-            self.refs.remoteVideo.currentTime === 0 &&
-            !self.refs.remoteVideo.srcObject
-        ) {
-            var participants = room.getParticipantsExceptMe();
-            var stream = room.callManagerCall._streams[participants[0]];
-            RTC.attachMediaStream(self.refs.remoteVideo, stream);
-            // attachMediaStream would do the .play call
-        }
-
-        if (
-            room.megaChat.rtc &&
-            room.megaChat.rtc.gLocalStream &&
-            self.refs.localViewport &&
-            self.refs.localViewport.src === "" &&
-            self.refs.localViewport.currentTime === 0 &&
-            !self.refs.localViewport.srcObject
-        ) {
-            RTC.attachMediaStream(self.refs.localViewport, room.megaChat.rtc.gLocalStream);
-            // attachMediaStream would do the .play call
-        }
-
-        $(room).rebind('toggleMessages.av', function() {
-            self.toggleMessages();
-        });
-
-        room.messagesBlockEnabled = self.state.messagesBlockEnabled;
-    },
-    componentWillUnmount: function() {
-        var self = this;
-        var room = self.props.chatRoom;
-
-        var $container = $(ReactDOM.findDOMNode(self));
-        if ($container) {
-            $container.off('mouseover.chatUI' + self.props.chatRoom.roomId);
-            $container.off('mouseout.chatUI' + self.props.chatRoom.roomId);
-            $container.off('mousemove.chatUI' + self.props.chatRoom.roomId);
-        }
-
-        $(document).off("fullscreenchange.megaChat_" + room.roomId);
-        $(window).off('resize.chatUI_' + room.roomId);
-        $(room).off('toggleMessages.av');
-    },
-    toggleMessages: function(e) {
-        if (e) {
-            e.preventDefault();
-            e.stopPropagation();
-        }
-
-
-        if (this.props.onMessagesToggle) {
-            this.props.onMessagesToggle(
-                !this.state.messagesBlockEnabled
-            );
-        }
-
-        this.setState({
-            'messagesBlockEnabled': !this.state.messagesBlockEnabled
-        });
-    },
-    fullScreenModeToggle: function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-
-        var newVal = !this.state.fullScreenModeEnabled;
-        $(document).fullScreen(newVal);
-
-        this.setState({
-            'fullScreenModeEnabled': newVal,
-            'messagesBlockEnabled': newVal === true ? false : this.state.messagesBlockEnabled
-        });
-    },
-    toggleLocalVideoDisplay: function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-
-        var $container = $(ReactDOM.findDOMNode(this));
-        var $localMediaDisplay = $('.call.local-video, .call.local-audio', $container);
-
-        $localMediaDisplay
-            .addClass('right-aligned')
-            .addClass('bottom-aligned')
-            .css({
-                'width': '',
-                'height': '',
-                'right': 8,
-                'bottom': !this.state.localMediaDisplay === true ? 8 : 8
-            });
-
-        this.setState({localMediaDisplay: !this.state.localMediaDisplay});
-    },
-    render: function() {
-        var chatRoom = this.props.chatRoom;
-
-        if (!chatRoom.callManagerCall || !chatRoom.callManagerCall.isStarted()) {
-            return null;
-        }
-
-        var participants = chatRoom.getParticipantsExceptMe();
-
-        var displayNames = [];
-
-        participants.forEach(function(v) {
-            displayNames.push(
-                htmlentities(M.getNameByHandle(v))
-            );
-        });
-
-
-        var callManagerCall = chatRoom.callManagerCall;
-
-        var remoteCamEnabled = null;
-
-
-        if (callManagerCall.getRemoteMediaOptions().video) {
-            remoteCamEnabled = <i className="small-icon blue-videocam" />;
-        }
-
-
-        var localPlayerElement = null;
-        var remotePlayerElement = null;
-
-        var visiblePanelClass = "";
-        var localPlayerStream;
-        if (callManagerCall && chatRoom.megaChat.rtc && chatRoom.megaChat.rtc.gLocalStream) {
-            localPlayerStream = chatRoom.megaChat.rtc.gLocalStream;
-        }
-
-        if (this.visiblePanel === true) {
-            visiblePanelClass += " visible-panel";
-        }
-        if (!localPlayerStream || callManagerCall.getMediaOptions().video === false) {
-            localPlayerElement = <div className={
-                "call local-audio right-aligned bottom-aligned" +
-                (this.state.localMediaDisplay ? "" : " minimized ") +
-                visiblePanelClass
-            }>
-                <div className="default-white-button tiny-button call" onClick={this.toggleLocalVideoDisplay}>
-                    <i className="tiny-icon grey-minus-icon" />
-                </div>
-                <ContactsUI.Avatar
-                    contact={M.u[u_handle]} className="call avatar-wrapper semi-big-avatar"
-                    style={{display: !this.state.localMediaDisplay ? "none" : ""}}
-                />
-            </div>;
-        }
-        else {
-            localPlayerElement = <div
-                className={
-                    "call local-video right-aligned bottom-aligned" +
-                    (this.state.localMediaDisplay ? "" : " minimized ") +
-                    visiblePanelClass
-                }>
-                <div className="default-white-button tiny-button call" onClick={this.toggleLocalVideoDisplay}>
-                    <i className="tiny-icon grey-minus-icon"/>
-                </div>
-                <video
-                    ref="localViewport"
-                    className="localViewport"
-                    defaultMuted={true}
-                    muted={true}
-                    volume={0}
-                    id={"localvideo_" + callManagerCall.id}
-                    style={{display: !this.state.localMediaDisplay ? "none" : ""}}
-
-                />
-            </div>;
-        }
-
-        var remotePlayerStream = callManagerCall._streams[participants[0]];
-
-        if (
-            !remotePlayerStream ||
-            callManagerCall.getRemoteMediaOptions().video === false
-        ) {
-            // TODO: When rtc is ready
-            var contact = M.u[participants[0]];
-            remotePlayerElement = <div className="call user-audio">
-                <ContactsUI.Avatar contact={contact}  className="avatar-wrapper big-avatar" hideVerifiedBadge={true} />
-            </div>;
-        }
-        else {
-            remotePlayerElement = <div className="call user-video">
-                <video
-                    autoPlay={true}
-                    className="rmtViewport rmtVideo"
-                    id={"remotevideo_" + callManagerCall.id}
-                    ref="remoteVideo"
-                />
-            </div>;
-        }
-
-
-        var unreadDiv = null;
-        var unreadCount = chatRoom.messagesBuff.getUnreadCount();
-        if (unreadCount > 0) {
-            unreadDiv = <div className="unread-messages">{unreadCount > 9 ? "9+" : unreadCount}</div>
-        }
-
-        var additionalClass = "";
-        additionalClass = (this.state.fullScreenModeEnabled === true ? " full-sized-block" : "");
-        if (additionalClass.length === 0) {
-            additionalClass = (this.state.messagesBlockEnabled === true ? " small-block" : "");
-        }
-        return <div className={"call-block" + additionalClass} id="call-block">
-            {remotePlayerElement}
-            {localPlayerElement}
-
-
-            <div className="call top-panel">
-                <div className="call top-user-info">
-                    <span className="user-card-name white">{displayNames.join(", ")}</span>{remoteCamEnabled}
-                </div>
-                <div
-                    className="call-duration medium blue call-counter"
-                    data-room-id={chatRoom.chatId}>{
-                    secondsToTimeShort(chatRoom._currentCallCounter)
-                    }
-                </div>
-            </div>
-
-
-            <div className="call bottom-panel">
-                <div className={"button call left" + (unreadDiv ? " unread" : "")} onClick={this.toggleMessages}>
-                    {unreadDiv}
-                    <i className="big-icon conversations"></i>
-                </div>
-                <div className="button call" onClick={function(e) {
-                    if (callManagerCall.getMediaOptions().audio === true) {
-                        callManagerCall.muteAudio();
-                    }
-                    else {
-                        callManagerCall.unmuteAudio();
-                    }
-                }}>
-                    <i className={
-                        "big-icon " + (callManagerCall.getMediaOptions().audio ? " microphone" : " crossed-microphone")
-                    }></i>
-                </div>
-                <div className="button call" onClick={function(e) {
-                    if (callManagerCall.getMediaOptions().video === true) {
-                        callManagerCall.muteVideo();
-                    }
-                    else {
-                        callManagerCall.unmuteVideo();
-                    }
-                }}>
-                    <i className={
-                        "big-icon " + (callManagerCall.getMediaOptions().video ? " videocam" : " crossed-videocam")
-                    }></i>
-                </div>
-                <div className="button call" onClick={function(e) {
-                        if (chatRoom.callManagerCall) {
-                            chatRoom.callManagerCall.endCall();
-                        }
-                    }}>
-                    <i className="big-icon horizontal-red-handset"></i>
-                </div>
-                <div className="button call right" onClick={this.fullScreenModeToggle}>
-                    <i className="big-icon nwse-resize"></i>
-                </div>
-            </div>
+            </PerfectScrollbar>
         </div>;
     }
-});
-var ConversationPanel = React.createClass({
-    mixins: [MegaRenderMixin, RenderDebugger],
-    lastScrollPositionPerc: 1,
-    getInitialState: function() {
-        return {
+}
+
+export class ConversationPanel extends MegaRenderMixin {
+    constructor(props) {
+        super(props);
+        this.state = {
             startCallPopupIsActive: false,
             localVideoIsMinimized: false,
             isFullscreenModeEnabled: false,
@@ -820,47 +566,75 @@ var ConversationPanel = React.createClass({
             sendContactDialog: false,
             confirmDeleteDialog: false,
             pasteImageConfirmDialog: false,
+            nonLoggedInJoinChatDialog: false,
+            pushSettingsDialog: false,
+            pushSettingsValue: null,
             messageToBeDeleted: null,
-            editing: false
+            editing: false,
         };
-    },
 
-    uploadFromComputer: function() {
+        this.handleKeyDown = SoonFc(120, (ev) => this._handleKeyDown(ev));
+        this.handleWindowResize = SoonFc(80, (ev) => this._handleWindowResize(ev));
+    }
+    customIsEventuallyVisible() {
+        return this.props.chatRoom.isCurrentlyActive;
+    }
+    uploadFromComputer() {
         this.props.chatRoom.scrolledToBottom = true;
 
         this.props.chatRoom.uploadFromComputer();
-    },
-    refreshUI: function() {
-        var self = this;
-        var room = self.props.chatRoom;
+    }
+    refreshUI() {
+        if (this.isComponentEventuallyVisible()) {
+            const room = this.props.chatRoom;
 
-        if (!self.props.chatRoom.isCurrentlyActive) {
-            return;
+            room.renderContactTree();
+            room.megaChat.refreshConversations();
+            room.trigger('RefreshUI');
         }
+    }
 
-        room.renderContactTree();
-
-        room.megaChat.refreshConversations();
-
-        room.trigger('RefreshUI');
-    },
-
-    onMouseMove: SoonFc(function(e) {
-        var self = this;
-        var chatRoom = self.props.chatRoom;
-        if (self.isMounted()) {
-            chatRoom.trigger("onChatIsFocused");
+    @utils.SoonFcWrap(360)
+    onMouseMove() {
+        if (this.isComponentEventuallyVisible()) {
+            this.props.chatRoom.trigger("onChatIsFocused");
         }
-    }, 150),
+    }
 
-    handleKeyDown: SoonFc(function(e) {
-        var self = this;
-        var chatRoom = self.props.chatRoom;
-        if (self.isMounted() && chatRoom.isActive() && !chatRoom.isReadOnly()) {
-            chatRoom.trigger("onChatIsFocused");
+    _handleKeyDown() {
+        if (this.__isMounted) {
+            const chatRoom = this.props.chatRoom;
+            if (chatRoom.isActive() && !chatRoom.isReadOnly()) {
+                chatRoom.trigger("onChatIsFocused");
+            }
         }
-    }, 150),
-    componentDidMount: function() {
+    }
+
+    onKeyboardScroll = ({ keyCode }) => {
+        const scrollbar = this.messagesListScrollable;
+        const domNode = scrollbar?.domNode;
+
+        if (domNode && this.isComponentEventuallyVisible() && !this.state.attachCloudDialog) {
+            const scrollPositionY = scrollbar.getScrollPositionY();
+            const offset = parseInt(domNode.style.height);
+            const PAGE = { UP: 33, DOWN: 34 };
+
+            switch (keyCode) {
+                case PAGE.UP:
+                    scrollbar.scrollToY(scrollPositionY - offset, true);
+                    this.onMessagesScrollUserScroll(scrollbar, 100);
+                    break;
+                case PAGE.DOWN:
+                    if (!scrollbar.isAtBottom()) {
+                        scrollbar.scrollToY(scrollPositionY + offset, true);
+                    }
+                    break;
+            }
+        }
+    }
+
+    componentDidMount() {
+        super.componentDidMount();
         var self = this;
         window.addEventListener('resize', self.handleWindowResize);
         window.addEventListener('keydown', self.handleKeyDown);
@@ -878,10 +652,48 @@ var ConversationPanel = React.createClass({
         self.props.chatRoom.rebind('openSendFilesDialog.cpanel', function(e) {
             self.setState({'attachCloudDialog': true});
         });
+        self.props.chatRoom.rebind('showGetChatLinkDialog.ui', function (e, eventData) {
+            createTimeoutPromise(function() {
+                return self.props.chatRoom.topic && self.props.chatRoom.state === ChatRoom.STATE.READY;
+            }, 350, 15000)
+                .always(function() {
+                    if (self.props.chatRoom.isCurrentlyActive) {
+                        self.setState({
+                            'chatLinkDialog': true
+                        });
+                    }
+                    else {
+                        // not visible anymore, proceed w/ generating a link silently.
+                        self.props.chatRoom.updatePublicHandle();
+                    }
+                });
+        });
+
+        if (self.props.chatRoom.type === "private") {
+            var otherContactHash = self.props.chatRoom.getParticipantsExceptMe()[0];
+            if (M.u[otherContactHash]) {
+                self._privateChangeListener = M.u[otherContactHash].addChangeListener(function() {
+                    if (!self.isMounted()) {
+                        // theoretical chance of leaking - M.u[...] removed before the listener is removed
+                        return 0xDEAD;
+                    }
+                    self.safeForceUpdate();
+                });
+            }
+        }
 
         self.eventuallyInit();
-    },
-    eventuallyInit: function(doResize) {
+        if (anonymouschat) {
+            setTimeout(function() {
+                self.setState({'nonLoggedInJoinChatDialog': true});
+            }, rand_range(5, 10) * 1000);
+        }
+        self.props.chatRoom._uiIsMounted = true;
+        self.props.chatRoom.$rConversationPanel = self;
+
+        self.props.chatRoom.trigger("onComponentDidMount");
+    }
+    eventuallyInit(doResize) {
         var self = this;
 
         // because..JSP would hijack some DOM elements, we need to wait with this...
@@ -893,6 +705,13 @@ var ConversationPanel = React.createClass({
         if ($container.length > 0) {
             self.initialised = true;
         }
+        else {
+            return;
+        }
+
+        $(self.findDOMNode()).rebind('resized.convpanel', function() {
+            self.handleWindowResize();
+        });
 
         self.$messages = $('.messages.scroll-area > .perfectScrollbarContainer', $container);
 
@@ -925,38 +744,62 @@ var ConversationPanel = React.createClass({
         // collapse on ESC pressed (exited fullscreen)
         $(document)
             .rebind("fullscreenchange.megaChat_" + room.roomId, function() {
-                if (!$(document).fullScreen() && room.isCurrentlyActive) {
-                    self.setState({isFullscreenModeEnabled: false});
+                if (self.isComponentEventuallyVisible()) {
+                    self.setState({isFullscreenModeEnabled: !!$(document).fullScreen()});
+                    self.forceUpdate();
                 }
-                else if (!!$(document).fullScreen() && room.isCurrentlyActive) {
-                    self.setState({isFullscreenModeEnabled: true});
-                }
-                self.forceUpdate();
             });
 
         if (doResize !== false) {
             self.handleWindowResize();
         }
-    },
-    componentWillMount: function() {
+
+        // var ns = ".convPanel";
+        // $container
+        //     .rebind('animationend' + ns +' webkitAnimationEnd' + ns + ' oAnimationEnd' + ns, function(e) {
+        //         self.safeForceUpdate(true);
+        //         $.tresizer();
+        //     });
+    }
+    componentWillMount() {
         var self = this;
         var chatRoom = self.props.chatRoom;
-        var megaChat = self.props.chatRoom.megaChat;
 
-        $(chatRoom).rebind('onHistoryDecrypted.cp', function() {
+        chatRoom.rebind('onHistoryDecrypted.cp', function() {
             self.eventuallyUpdate();
         });
-    },
-    componentWillUnmount: function() {
+
+        this._messagesBuffChangeHandler = chatRoom.messagesBuff.addChangeListener(SoonFc(function() {
+            // wait for scrolling (if such is happening at the moment) to finish
+            if (self.isComponentEventuallyVisible()) {
+                $('.js-messages-scroll-area', self.findDOMNode()).trigger('forceResize', [true]);
+            }
+        }));
+    }
+    componentWillUnmount() {
+        super.componentWillUnmount();
         var self = this;
         var chatRoom = self.props.chatRoom;
-        var megaChat = chatRoom.megaChat;
+
+        chatRoom._uiIsMounted = true;
+        if (this._messagesBuffChangeHandler) {
+            chatRoom.messagesBuff.removeChangeListener(this._messagesBuffChangeHandler);
+            delete this._messagesBuffChangeHandler;
+        }
+        if (this._privateChangeListener) {
+            var otherContactHash = self.props.chatRoom.getParticipantsExceptMe()[0];
+            if (M.u[otherContactHash]) {
+                M.u[otherContactHash].removeChangeListener(this._privateChangeListener);
+                delete this._privateChangeListener;
+            }
+        }
 
         window.removeEventListener('resize', self.handleWindowResize);
         window.removeEventListener('keydown', self.handleKeyDown);
         $(document).off("fullscreenchange.megaChat_" + chatRoom.roomId);
-    },
-    componentDidUpdate: function(prevProps, prevState) {
+        $(document).off('keydown.keyboardScroll_' + chatRoom.roomId);
+    }
+    componentDidUpdate(prevProps, prevState) {
         var self = this;
         var room = this.props.chatRoom;
 
@@ -964,13 +807,16 @@ var ConversationPanel = React.createClass({
 
         room.megaChat.updateSectionUnreadCount();
 
-        var $node = $(self.findDOMNode());
+        var domNode = self.findDOMNode();
+        var jml = domNode && domNode.querySelector('.js-messages-loading');
 
-        if (self.loadingShown) {
-            $('.js-messages-loading', $node).removeClass('hidden');
-        }
-        else {
-            $('.js-messages-loading', $node).addClass('hidden');
+        if (jml) {
+            if (self.loadingShown) {
+                jml.classList.remove('hidden');
+            }
+            else {
+                jml.classList.add('hidden');
+            }
         }
         self.handleWindowResize();
 
@@ -988,17 +834,21 @@ var ConversationPanel = React.createClass({
         }
 
         if (prevProps.isActive === false && self.props.isActive === true) {
-            var $typeArea = $('.messages-textarea:visible:first', $node);
+            var $typeArea = $('.messages-textarea:visible:first', domNode);
             if ($typeArea.length === 1) {
                 $typeArea.trigger("focus");
                 moveCursortoToEnd($typeArea[0]);
             }
         }
         if (!prevState.renameDialog && self.state.renameDialog === true) {
-            var $input = $('.chat-rename-dialog input');
-            $input.trigger("focus");
-            $input[0].selectionStart = 0;
-            $input[0].selectionEnd = $input.val().length;
+            Soon(function() {
+                var $input = $('.chat-rename-dialog input');
+                if ($input && $input[0] && !$($input[0]).is(":focus")) {
+                    $input.trigger("focus");
+                    $input[0].selectionStart = 0;
+                    $input[0].selectionEnd = $input.val().length;
+                }
+            });
         }
 
         if (prevState.editing === false && self.state.editing !== false) {
@@ -1013,47 +863,81 @@ var ConversationPanel = React.createClass({
             }
         }
 
-        if (self.isMounted() && self.$messages && self.isComponentEventuallyVisible()) {
-            $(window).rebind('pastedimage.chatRoom', function (e, blob, fileName) {
-                if (self.isMounted() && self.$messages && self.isComponentEventuallyVisible()) {
+        if (self.$messages && self.isComponentEventuallyVisible()) {
+            $(window).rebind('pastedimage.chatRoom', function(e, blob, fileName) {
+                if (self.$messages && self.isComponentEventuallyVisible()) {
                     self.setState({'pasteImageConfirmDialog': [blob, fileName, URL.createObjectURL(blob)]});
                     e.preventDefault();
                 }
             });
+            self.props.chatRoom.trigger("onComponentDidUpdate");
         }
-    },
-    handleWindowResize: function(e, scrollToBottom) {
+
+        if (self._reposOnUpdate !== undefined) {
+            var ps = self.messagesListScrollable;
+            ps.__prevPosY = ps.getScrollHeight() - self._reposOnUpdate + self.lastScrollPosition;
+            ps.scrollToY(ps.__prevPosY, true);
+        }
+    }
+
+    _handleWindowResize(e, scrollToBottom) {
+        if (!M.chat) {
+            return;
+        }
+        if (!this.isMounted()) {
+            // not mounted? remove.
+            this.componentWillUnmount();
+            return;
+        }
+
+        if (!this.isComponentEventuallyVisible()) {
+            return;
+        }
+
         var $container = $(ReactDOM.findDOMNode(this));
         var self = this;
 
         self.eventuallyInit(false);
 
-        if (!self.isMounted() || !self.$messages || !self.isComponentEventuallyVisible()) {
+        if (!self.$messages) {
             return;
         }
 
-        // Important. Please insure we have correct height detection for Chat messages block.
+        // Important. Please ensure we have correct height detection for Chat messages block.
         // We need to check ".fm-chat-input-scroll" instead of ".fm-chat-line-block" height
         var scrollBlockHeight = (
             $('.chat-content-block', $container).outerHeight() -
             ($('.chat-topic-block', $container).outerHeight() || 0) -
             ($('.call-block', $container).outerHeight() || 0) -
-            $('.chat-textarea-block', $container).outerHeight()
+            (
+                (anonymouschat) ? $('.join-chat-block', $container).outerHeight() :
+                $('.chat-textarea-block', $container).outerHeight()
+            )
         );
 
         if (scrollBlockHeight != self.$messages.outerHeight()) {
             self.$messages.css('height', scrollBlockHeight);
             $('.messages.main-pad', self.$messages).css('min-height', scrollBlockHeight);
             self.refreshUI(true);
+            if (self.props.chatRoom.callManagerCall) {
+                $('.messages-block', $container).height(
+                    scrollBlockHeight + $('.chat-textarea-block', $container).outerHeight()
+                );
+            }
+            else {
+                $('.messages-block', $container).height('');
+            }
         }
         else {
             self.refreshUI(scrollToBottom);
         }
-    },
-    isActive: function() {
+    }
+    isActive() {
         return document.hasFocus() && this.$messages && this.$messages.is(":visible");
-    },
-    onMessagesScrollReinitialise: function(
+    }
+
+    @utils.SoonFcWrap(50)
+    onMessagesScrollReinitialise(
                             ps,
                             $elem,
                             forced,
@@ -1065,13 +949,14 @@ var ConversationPanel = React.createClass({
         var mb = chatRoom.messagesBuff;
 
         // don't do anything if history is being retrieved at the moment.
-        if (self.isRetrievingHistoryViaScrollPull || mb.isRetrievingHistory) {
+        if (self.scrollPullHistoryRetrieval || mb.isRetrievingHistory) {
             return;
         }
 
         if (forced) {
             if (!scrollPositionYPerc && !scrollToElement) {
                 if (self.props.chatRoom.scrolledToBottom && !self.editDomElement) {
+                    // wait for the DOM update, if such.
                     ps.scrollToBottom(true);
                     return true;
                 }
@@ -1082,28 +967,26 @@ var ConversationPanel = React.createClass({
             }
         }
 
-        if (self.isComponentEventuallyVisible()) {
-            if (self.props.chatRoom.scrolledToBottom && !self.editDomElement) {
+        if (self.isComponentEventuallyVisible()
+            && !self.editDomElement && !self.props.chatRoom.isScrollingToMessageId) {
+
+            if (self.props.chatRoom.scrolledToBottom) {
                 ps.scrollToBottom(true);
                 return true;
             }
-            if (self.lastScrollPosition !== ps.getScrollPositionY() && !self.editDomElement) {
+
+            if (self.lastScrollPosition && self.lastScrollPosition !== ps.getScrollPositionY()) {
                 ps.scrollToY(self.lastScrollPosition, true);
                 return true;
             }
-
         }
-    },
-    onMessagesScrollUserScroll: function(
-                        ps,
-                        $elem,
-                        e
-    ) {
+    }
+
+    onMessagesScrollUserScroll(ps, offset = 5) {
         var self = this;
 
         var scrollPositionY = ps.getScrollPositionY();
         var isAtTop = ps.isAtTop();
-        var isAtBottom = ps.isAtBottom();
         var chatRoom = self.props.chatRoom;
         var mb = chatRoom.messagesBuff;
 
@@ -1111,8 +994,6 @@ var ConversationPanel = React.createClass({
             self.props.chatRoom.scrolledToBottom = true;
             return;
         }
-
-        // console.error(self.getUniqueId(), "is user scroll!");
 
         // turn on/off auto scroll to bottom.
         if (ps.isCloseToBottom(30) === true) {
@@ -1125,116 +1006,66 @@ var ConversationPanel = React.createClass({
             self.props.chatRoom.scrolledToBottom = false;
         }
 
-        if (isAtTop || (ps.getScrollPositionY() < 5 && ps.getScrollHeight() > 500)) {
-            if (mb.haveMoreHistory() && !self.isRetrievingHistoryViaScrollPull && !mb.isRetrievingHistory) {
-                ps.disable();
+        if (!self.scrollPullHistoryRetrieval && !mb.isRetrievingHistory
+            && (isAtTop || scrollPositionY < offset && ps.getScrollHeight() > 500)
+            && mb.haveMoreHistory()) {
 
+            ps.disable();
+            self.scrollPullHistoryRetrieval = true;
+            self.lastScrollPosition = scrollPositionY;
 
+            let msgAppended = 0;
+            const scrYOffset = ps.getScrollHeight();
 
-                self.isRetrievingHistoryViaScrollPull = true;
-                self.lastScrollPosition = scrollPositionY;
+            chatRoom.one('onMessagesBuffAppend.pull', function() {
+                msgAppended++;
+            });
 
-                self.lastContentHeightBeforeHist = ps.getScrollHeight();
-                // console.error('start:', self.lastContentHeightBeforeHist, self.lastScrolledToBottom);
+            // wait for all msgs to be rendered.
+            chatRoom.off('onHistoryDecrypted.pull');
+            chatRoom.one('onHistoryDecrypted.pull', function() {
+                chatRoom.off('onMessagesBuffAppend.pull');
 
+                if (msgAppended > 0) {
+                    self._reposOnUpdate = scrYOffset;
+                }
 
-                var msgsAppended = 0;
-                $(chatRoom).rebind('onMessagesBuffAppend.pull', function() {
-                    msgsAppended++;
+                self.scrollPullHistoryRetrieval = -1;
+                // self.eventuallyUpdate();
+            });
 
-                    // var prevPosY = (
-                    //     ps.getScrollHeight() - self.lastContentHeightBeforeHist
-                    // ) + self.lastScrollPosition;
-                    //
-                    //
-                    // ps.scrollToY(
-                    //     prevPosY,
-                    //     true
-                    // );
-                    //
-                    // self.lastContentHeightBeforeHist = ps.getScrollHeight();
-                    // self.lastScrollPosition = prevPosY;
-                });
-
-                $(chatRoom).off('onHistoryDecrypted.pull');
-                $(chatRoom).one('onHistoryDecrypted.pull', function(e) {
-                    $(chatRoom).off('onMessagesBuffAppend.pull');
-                    var prevPosY = (
-                        ps.getScrollHeight() - self.lastContentHeightBeforeHist
-                    ) + self.lastScrollPosition;
-
-                    ps.scrollToY(
-                        prevPosY,
-                        true
-                    );
-
-                    // wait for all msgs to be rendered.
-                    chatRoom.messagesBuff.addChangeListener(function() {
-                        if (msgsAppended > 0) {
-                            var prevPosY = (
-                                ps.getScrollHeight() - self.lastContentHeightBeforeHist
-                            ) + self.lastScrollPosition;
-
-                            ps.scrollToY(
-                                prevPosY,
-                                true
-                            );
-
-                            self.lastScrollPosition = prevPosY;
-                        }
-
-                        delete self.lastContentHeightBeforeHist;
-
-                        setTimeout(function() {
-                            self.isRetrievingHistoryViaScrollPull = false;
-                            // because of mousewheel animation, we would delay the re-enabling of the "pull to load
-                            // history", so that it won't re-trigger another hist retrieval request
-
-                            ps.enable();
-                            self.forceUpdate();
-                        }, 1150);
-
-                        return 0xDEAD;
-                    });
-
-
-
-                });
-
-                mb.retrieveChatHistory();
-            }
+            mb.retrieveChatHistory();
         }
 
-        if (self.lastScrollPosition !== ps.getScrollPositionY()) {
-            self.lastScrollPosition = ps.getScrollPositionY();
+        if (self.lastScrollPosition !== scrollPositionY) {
+            self.lastScrollPosition = scrollPositionY;
         }
+    }
 
+    isLoading() {
+        const chatRoom = this.props.chatRoom;
+        const mb = chatRoom.messagesBuff;
 
-    },
-    specificShouldComponentUpdate: function() {
-        if (
-            this.isRetrievingHistoryViaScrollPull ||
-            this.loadingShown ||
-            (this.props.chatRoom.messagesBuff.messagesHistoryIsLoading() && this.loadingShown) ||
-            (
-                this.props.chatRoom.messagesBuff.isDecrypting &&
-                this.props.chatRoom.messagesBuff.isDecrypting.state() === 'pending' &&
-                this.loadingShown
-            ) ||
-            (
-                this.props.chatRoom.messagesBuff.isDecrypting &&
-                this.props.chatRoom.messagesBuff.isDecrypting.state() === 'pending' &&
-                this.loadingShown
-            ) ||
-            !this.props.chatRoom.isCurrentlyActive
-        ) {
-            return false;
-        }
-        else {
-            return undefined;
-        }
-    },
-    render: function() {
+        return this.scrollPullHistoryRetrieval === true
+            || chatRoom.activeSearches || mb.messagesHistoryIsLoading()
+            || mb.joined === false || mb.isDecrypting;
+    }
+
+    specShouldComponentUpdate() {
+        return !this.loadingShown && this.isComponentEventuallyVisible();
+    }
+
+    @SoonFcWrap(450, true)
+    enableScrollbar() {
+        const ps = this.messagesListScrollable;
+
+        ps.enable();
+        this._reposOnUpdate = undefined;
+        this.lastScrollPosition = ps.__prevPosY | 0;
+    }
+
+    @timing(0.7, 9)
+    render() {
         var self = this;
 
         var room = this.props.chatRoom;
@@ -1260,88 +1091,70 @@ var ConversationPanel = React.createClass({
         }
         else if (contacts && contacts.length > 1) {
             contactName = room.getRoomTitle(true);
-
         }
 
-        var conversationPanelClasses = "conversation-panel " + room.type + "-chat";
+        var conversationPanelClasses = "conversation-panel " + (room.type === "public" ? "group-chat " : "") +
+            room.type + "-chat";
 
         if (!room.isCurrentlyActive) {
             conversationPanelClasses += " hidden";
         }
 
+        var topicBlockClass = "chat-topic-block";
+        if (room.type !== "public") {
+            topicBlockClass += " privateChat";
+        }
+        var messagesList = [];
 
-
-
-
-        var messagesList = [
-        ];
-
-        if (
-            (
-                ChatdIntegration._loadingChats[room.roomId] &&
-                ChatdIntegration._loadingChats[room.roomId].loadingPromise &&
-                ChatdIntegration._loadingChats[room.roomId].loadingPromise.state() === 'pending'
-            ) ||
-            (self.isRetrievingHistoryViaScrollPull && !self.loadingShown) ||
-            room.messagesBuff.messagesHistoryIsLoading() === true ||
-            room.messagesBuff.joined === false ||
-            (
-                room.messagesBuff.joined === true &&
-                room.messagesBuff.haveMessages === true &&
-                room.messagesBuff.messagesHistoryIsLoading() === true
-            ) ||
-            (
-                room.messagesBuff.isDecrypting &&
-                room.messagesBuff.isDecrypting.state() === 'pending'
-            )
-        ) {
+        if (this.isLoading()) {
             self.loadingShown = true;
         }
-        else if (
-            room.messagesBuff.joined === true
-        ) {
-            if (!self.isRetrievingHistoryViaScrollPull && room.messagesBuff.haveMoreHistory() === false) {
-                var headerText = (
-                    room.messagesBuff.messages.length === 0 ?
-                        __(l[8002]) :
-                        __(l[8002])
-                );
+        else {
+            const mb = room.messagesBuff;
 
-                headerText = headerText.replace("%s", "<span>" + htmlentities(contactName) + "</span>");
+            if (this.scrollPullHistoryRetrieval < 0) {
+                this.scrollPullHistoryRetrieval = false;
+                self.enableScrollbar();
+            }
+            delete self.loadingShown;
+
+            if (mb.joined === true && !self.scrollPullHistoryRetrieval && mb.haveMoreHistory() === false) {
+                var headerText = l[8002];
+
+                if (contactName) {
+                    headerText = headerText.replace("%s", "<span>" + htmlentities(contactName) + "</span>");
+                }
+                else {
+                    headerText = megaChat.plugins.emoticonsFilter.processHtmlMessage(htmlentities(room.getRoomTitle()));
+                }
 
                 messagesList.push(
                     <div className="messages notification" key="initialMsg">
                         <div className="header" dangerouslySetInnerHTML={{__html: headerText}}>
                         </div>
                         <div className="info">
-                            {__(l[8080])}
+                            {l[8080]}
                             <p>
-                                <i className="semi-big-icon grey-lock"></i>
+                                <i className="semi-big-icon grey-lock" />
                                 <span dangerouslySetInnerHTML={{
-                                    __html: __(l[8540])
+                                    __html: l[8540]
                                         .replace("[S]", "<strong>")
                                         .replace("[/S]", "</strong>")
-                                }}></span>
+                                }} />
                             </p>
                             <p>
-                                <i className="semi-big-icon grey-tick"></i>
+                                <i className="semi-big-icon grey-tick" />
                                 <span dangerouslySetInnerHTML={{
-                                    __html: __(l[8539])
+                                    __html: l[8539]
                                         .replace("[S]", "<strong>")
                                         .replace("[/S]", "</strong>")
-                                }}></span>
+                                }} />
                             </p>
                         </div>
                     </div>
                 );
             }
-
-            delete self.loadingShown;
         }
-        else {
-            delete self.loadingShown;
-        }
-
 
         var lastTimeMarker;
         var lastMessageFrom = null;
@@ -1349,7 +1162,7 @@ var ConversationPanel = React.createClass({
         var lastMessageState = null;
         var grouped = false;
 
-        room.messagesBuff.messages.forEach(function(v, k) {
+        room.messagesBuff.messages.forEach(function (v, k) {
             if (!v.protocol && v.revoked !== true) {
                 var shouldRender = true;
                 if (
@@ -1364,22 +1177,14 @@ var ConversationPanel = React.createClass({
                 }
 
                 var timestamp = v.delay;
-                var curTimeMarker;
-                var iso = (new Date(timestamp * 1000).toISOString());
-                if (todayOrYesterday(iso)) {
-                    // if in last 2 days, use the time2lastSeparator
-                    curTimeMarker = time2lastSeparator(iso);
-                }
-                else {
-                    // if not in the last 2 days, use 1st June [Year]
-                    curTimeMarker = acc_time2date(timestamp, true);
-                }
+                var curTimeMarker = getTimeMarker(timestamp);
                 var currentState = v.getState ? v.getState() : null;
 
                 if (shouldRender === true && curTimeMarker && lastTimeMarker !== curTimeMarker) {
                     lastTimeMarker = curTimeMarker;
                     messagesList.push(
-                        <div className="message date-divider" key={v.messageId + "_marker"}>{curTimeMarker}</div>
+                        <div className="message date-divider" key={v.messageId + "_marker"}
+                             title={time2date(timestamp)}>{curTimeMarker}</div>
                     );
 
                     grouped = false;
@@ -1398,35 +1203,28 @@ var ConversationPanel = React.createClass({
                         }
                     }
 
-                    if (
-                        (v instanceof Message) &&
-                        (v.keyid !== 0)
-                    ) {
+                    if (v instanceof Message && v.dialogType !== "truncated") {
 
                         // the grouping logic for messages.
                         if (!lastMessageFrom || (userId && lastMessageFrom === userId)) {
                             if (timestamp - lastGroupedMessageTimeStamp < (5 * 60)) {
                                 grouped = true;
-                            }
-                            else {
+                            } else {
                                 grouped = false;
                                 lastMessageFrom = userId;
                                 lastGroupedMessageTimeStamp = timestamp;
                                 lastMessageState = currentState;
                             }
-                        }
-                        else {
+                        } else {
                             grouped = false;
                             lastMessageFrom = userId;
                             if (lastMessageFrom === userId) {
                                 lastGroupedMessageTimeStamp = timestamp;
-                            }
-                            else {
+                            } else {
                                 lastGroupedMessageTimeStamp = null;
                             }
                         }
-                    }
-                    else {
+                    } else {
                         grouped = false;
                         lastMessageFrom = null;
                         lastGroupedMessageTimeStamp = null;
@@ -1434,7 +1232,7 @@ var ConversationPanel = React.createClass({
                 }
 
                 if (
-                    v.dialogType === "remoteCallEnded" &&
+                    (v.dialogType === "remoteCallEnded" || v.dialogType === "remoteCallStarted") &&
                     v &&
                     v.wrappedChatDialogMessage
                 ) {
@@ -1445,41 +1243,56 @@ var ConversationPanel = React.createClass({
                 if (v.dialogType) {
                     var messageInstance = null;
                     if (v.dialogType === 'alterParticipants') {
-                        messageInstance = <AlterParticipantsConversationMessage
+                        messageInstance = <AltPartsConvMessage
                             message={v}
                             key={v.messageId}
-                            contact={M.u[v.userId]}
+                            contact={Message.getContactForMessage(v)}
                             grouped={grouped}
+                            chatRoom={room}
                         />
-                    }
-                    else if (v.dialogType === 'truncated') {
+                    } else if (v.dialogType === 'truncated') {
                         messageInstance = <TruncatedMessage
                             message={v}
                             key={v.messageId}
-                            contact={M.u[v.userId]}
+                            contact={Message.getContactForMessage(v)}
                             grouped={grouped}
+                            chatRoom={room}
                         />
-                    }
-                    else if (v.dialogType === 'privilegeChange') {
+                    } else if (v.dialogType === 'privilegeChange') {
                         messageInstance = <PrivilegeChange
                             message={v}
                             key={v.messageId}
-                            contact={M.u[v.userId]}
+                            contact={Message.getContactForMessage(v)}
                             grouped={grouped}
+                            chatRoom={room}
                         />
-                    }
-                    else if (v.dialogType === 'topicChange') {
+                    } else if (v.dialogType === 'topicChange') {
                         messageInstance = <TopicChange
                             message={v}
                             key={v.messageId}
-                            contact={M.u[v.userId]}
+                            contact={Message.getContactForMessage(v)}
                             grouped={grouped}
+                            chatRoom={room}
+                        />
+                    } else if (v.dialogType === 'openModeClosed') {
+                        messageInstance = <CloseOpenModeMessage
+                            message={v}
+                            key={v.messageId}
+                            contact={Message.getContactForMessage(v)}
+                            grouped={grouped}
+                            chatRoom={room}
+                        />
+                    } else if (v.dialogType === 'chatHandleUpdate') {
+                        messageInstance = <ChatHandleMessage
+                            message={v}
+                            key={v.messageId}
+                            contact={Message.getContactForMessage(v)}
+                            grouped={grouped}
+                            chatRoom={room}
                         />
                     }
-
                     messagesList.push(messageInstance);
-                }
-                else {
+                } else {
                     if (!v.chatRoom) {
                         // ChatDialogMessages...
                         v.chatRoom = room;
@@ -1490,7 +1303,7 @@ var ConversationPanel = React.createClass({
                             message={v}
                             state={v.state}
                             key={v.messageId}
-                            contact={contact}
+                            contact={Message.getContactForMessage(v)}
                             grouped={grouped}
                             onUpdate={() => {
                                 self.onResizeDoUpdate();
@@ -1502,6 +1315,7 @@ var ConversationPanel = React.createClass({
                                 self.setState({'editing': v.messageId});
                                 self.forceUpdate();
                             }}
+                            chatRoom={room}
                             onEditDone={(messageContents) => {
                                 self.props.chatRoom.scrolledToBottom = true;
                                 self.editDomElement = null;
@@ -1512,10 +1326,9 @@ var ConversationPanel = React.createClass({
 
                                 if (messageContents === false || messageContents === currentContents) {
                                     self.messagesListScrollable.scrollToBottom(true);
-                                    self.lastScrollPositionPerc = 1;
                                 }
                                 else if (messageContents) {
-                                    $(room).trigger('onMessageUpdating', v);
+                                    room.trigger('onMessageUpdating', v);
                                     room.megaChat.plugins.chatdIntegration.updateMessage(
                                         room,
                                         v.internalId ? v.internalId : v.orderValue,
@@ -1543,7 +1356,7 @@ var ConversationPanel = React.createClass({
                                         }
 
 
-                                        $(v).trigger(
+                                        v.trigger(
                                             'onChange',
                                             [
                                                 v,
@@ -1557,9 +1370,7 @@ var ConversationPanel = React.createClass({
                                     }
 
                                     self.messagesListScrollable.scrollToBottom(true);
-                                    self.lastScrollPositionPerc = 1;
-                                }
-                                else if (messageContents.length === 0) {
+                                } else if (messageContents.length === 0) {
 
                                     self.setState({
                                         'confirmDeleteDialog': true,
@@ -1568,6 +1379,10 @@ var ConversationPanel = React.createClass({
                                 }
 
                                 self.setState({'editing': false});
+
+                                Soon(function () {
+                                    $('.chat-textarea-block:visible textarea').focus();
+                                }, 300);
                             }}
                             onDeleteClicked={(e, msg) => {
                                 self.setState({
@@ -1588,6 +1403,8 @@ var ConversationPanel = React.createClass({
             var selected = [];
             attachCloudDialog = <CloudBrowserModalDialog.CloudBrowserDialog
                 folderSelectNotAllowed={true}
+                allowAttachFolders={true}
+                room={room}
                 onClose={() => {
                     self.setState({'attachCloudDialog': false});
                     selected = [];
@@ -1604,7 +1421,84 @@ var ConversationPanel = React.createClass({
                         selected
                     );
                 }}
+            />;
+        }
+
+        var nonLoggedInJoinChatDialog = null;
+        if (self.state.nonLoggedInJoinChatDialog === true) {
+            var usersCount = Object.keys(room.members).length;
+            nonLoggedInJoinChatDialog = <ModalDialogsUI.ModalDialog
+                title={l[20596]}
+                className={"fm-dialog chat-links-preview-desktop"}
+                chatRoom={room}
+                onClose={() => {
+                    self.setState({'nonLoggedInJoinChatDialog': false});
+                }}
+            >
+                <div className="fm-dialog-body">
+                    <div className="chatlink-contents">
+                        <div className="huge-icon group-chat"></div>
+                        <h3>
+                            <utils.EmojiFormattedContent>
+                                {room.topic ? room.getRoomTitle() : " "}
+                            </utils.EmojiFormattedContent>
+                        </h3>
+                        <h5>{usersCount? l[20233].replace("%s", usersCount) : " "}</h5>
+
+                        <p>{l[20595]}</p>
+
+                        <a className="join-chat" onClick={function(e) {
+                            self.setState({'nonLoggedInJoinChatDialog': false});
+
+                            megaChat.loginOrRegisterBeforeJoining(room.publicChatHandle);
+                        }}>{l[20597]}</a>
+
+                        <a className="not-now" onClick={function(e) {
+                            self.setState({'nonLoggedInJoinChatDialog': false});
+                        }}>{l[18682]}</a>
+                    </div>
+                </div>
+            </ModalDialogsUI.ModalDialog>;
+        }
+
+        var chatLinkDialog;
+        if (self.state.chatLinkDialog === true) {
+            chatLinkDialog = <ChatlinkDialog
+                chatRoom={self.props.chatRoom}
+                onClose={() => {
+                    self.setState({'chatLinkDialog': false});
+                }}
             />
+        }
+
+        let privateChatDialog;
+        if (self.state.privateChatDialog === true) {
+            const onClose = () => this.setState({ privateChatDialog: false });
+            privateChatDialog = (
+                <ModalDialogsUI.ModalDialog
+                    title={l[20594]}
+                    className="fm-dialog create-private-chat"
+                    chatRoom={room}
+                    onClose={onClose}>
+                    <div className="create-private-chat-content-block fm-dialog-body">
+                        <i className="huge-icon lock" />
+                        <div className="dialog-body-text">
+                            <strong>{l[20590]}</strong>
+                            <br />
+                            <span>{l[20591]}</span>
+                        </div>
+                        <div className="clear" />
+                        <div
+                            className="big-red-button"
+                            onClick={() => {
+                                this.props.chatRoom.switchOffPublicMode();
+                                onClose();
+                            }}>
+                            <div className="big-btn-txt">{l[20593]}</div>
+                        </div>
+                    </div>
+                </ModalDialogsUI.ModalDialog>
+            );
         }
 
         var sendContactDialog = null;
@@ -1622,10 +1516,8 @@ var ConversationPanel = React.createClass({
             }
 
             sendContactDialog = <ModalDialogsUI.SelectContactDialog
-                megaChat={room.megaChat}
                 chatRoom={room}
                 exclude={excludedContacts}
-                contacts={M.u}
                 onClose={() => {
                     self.setState({'sendContactDialog': false});
                     selected = [];
@@ -1641,9 +1533,8 @@ var ConversationPanel = React.createClass({
         var confirmDeleteDialog = null;
         if (self.state.confirmDeleteDialog === true) {
             confirmDeleteDialog = <ModalDialogsUI.ConfirmDialog
-                megaChat={room.megaChat}
                 chatRoom={room}
-                title={__(l[8004])}
+                title={l[8004]}
                 name="delete-message"
                 onClose={() => {
                     self.setState({'confirmDeleteDialog': false});
@@ -1657,10 +1548,19 @@ var ConversationPanel = React.createClass({
                     if (msg.getState() === Message.STATE.SENT ||
                         msg.getState() === Message.STATE.DELIVERED ||
                         msg.getState() === Message.STATE.NOT_SENT) {
-                        chatdint.deleteMessage(room, msg.internalId ? msg.internalId : msg.orderValue);
-                        msg.deleted = true;
-                        msg.textContents = "";
-                        room.messagesBuff.removeMessageById(msg.messageId);
+                            const textContents = msg.textContents || '';
+
+                            if (textContents[1] === Message.MANAGEMENT_MESSAGE_TYPES.VOICE_CLIP) {
+                                const attachmentMetadata = msg.getAttachmentMeta() || [];
+
+                                attachmentMetadata.forEach((v) => {
+                                    M.moveToRubbish(v.h);
+                                });
+                            }
+
+                            chatdint.deleteMessage(room, msg.internalId ? msg.internalId : msg.orderValue);
+                            msg.deleted = true;
+                            msg.textContents = "";
                     }
                     else if (
                         msg.getState() === Message.STATE.NOT_SENT_EXPIRED
@@ -1684,7 +1584,7 @@ var ConversationPanel = React.createClass({
                         msg.messageHtml = "";
                         msg.deleted = true;
 
-                        $(msg).trigger(
+                        msg.trigger(
                             'onChange',
                             [
                                 msg,
@@ -1700,14 +1600,16 @@ var ConversationPanel = React.createClass({
                 <div className="fm-dialog-content">
 
                     <div className="dialog secondary-header">
-                        {__(l[8879])}
+                        {l[8879]}
                     </div>
 
                     <GenericConversationMessage
-                        className="dialog-wrapper"
+                        className=" dialog-wrapper"
                         message={self.state.messageToBeDeleted}
                         hideActionButtons={true}
                         initTextScrolling={true}
+                        dialog={true}
+                        chatRoom={self.props.chatRoom}
                     />
                 </div>
             </ModalDialogsUI.ConfirmDialog>
@@ -1716,9 +1618,8 @@ var ConversationPanel = React.createClass({
         var pasteImageConfirmDialog = null;
         if (self.state.pasteImageConfirmDialog) {
             confirmDeleteDialog = <ModalDialogsUI.ConfirmDialog
-                megaChat={room.megaChat}
                 chatRoom={room}
-                title={__("Confirm paste")}
+                title={l[20905]}
                 name="paste-image-chat"
                 onClose={() => {
                     self.setState({'pasteImageConfirmDialog': false});
@@ -1752,7 +1653,7 @@ var ConversationPanel = React.createClass({
                 <div className="fm-dialog-content">
 
                     <div className="dialog secondary-header">
-                        {__("Please confirm that you want to upload this image and share it in this chat room.")}
+                        {l[20906]}
                     </div>
 
                     <img
@@ -1776,13 +1677,37 @@ var ConversationPanel = React.createClass({
             </ModalDialogsUI.ConfirmDialog>
         }
 
+        //
+        // Push notification settings
+        // ----------------------------------------------------------------------
+
+        let pushSettingsDialog = null;
+        if (self.state.pushSettingsDialog === true) {
+            const state = { pushSettingsDialog: false, pushSettingsValue: null };
+            pushSettingsDialog = (
+                <PushSettingsDialog
+                    room={room}
+                    pushSettingsValue={this.state.pushSettingsValue}
+                    onClose={() =>
+                        this.setState({ ...state, pushSettingsValue: this.state.pushSettingsValue })
+                    }
+                    onConfirm={pushSettingsValue =>
+                        self.setState({ ...state, pushSettingsValue }, () =>
+                            pushNotificationSettings.setDnd(
+                                room.chatId,
+                                pushSettingsValue === Infinity ? 0 : unixtime() + pushSettingsValue * 60
+                            )
+                        )
+                    }
+                />
+            );
+        }
 
         var confirmTruncateDialog = null;
         if (self.state.truncateDialog === true) {
             confirmDeleteDialog = <ModalDialogsUI.ConfirmDialog
-                megaChat={room.megaChat}
                 chatRoom={room}
-                title={__(l[8871])}
+                title={l[8871]}
                 name="truncate-conversation"
                 dontShowAgainCheckbox={false}
                 onClose={() => {
@@ -1801,16 +1726,16 @@ var ConversationPanel = React.createClass({
                 <div className="fm-dialog-content">
 
                     <div className="dialog secondary-header">
-                        {__(l[8881])}
+                        {l[8881]}
                     </div>
                 </div>
             </ModalDialogsUI.ConfirmDialog>
         }
+
         if (self.state.archiveDialog === true) {
             confirmDeleteDialog = <ModalDialogsUI.ConfirmDialog
-                megaChat={room.megaChat}
                 chatRoom={room}
-                title={__(l[19068])}
+                title={l[19068]}
                 name="archive-conversation"
                 onClose={() => {
                     self.setState({'archiveDialog': false});
@@ -1828,16 +1753,15 @@ var ConversationPanel = React.createClass({
                 <div className="fm-dialog-content">
 
                     <div className="dialog secondary-header">
-                        {__(l[19069])}
+                        {l[19069]}
                     </div>
                 </div>
             </ModalDialogsUI.ConfirmDialog>
         }
         if (self.state.unarchiveDialog === true) {
             confirmDeleteDialog = <ModalDialogsUI.ConfirmDialog
-                megaChat={room.megaChat}
                 chatRoom={room}
-                title={__(l[19063])}
+                title={l[19063]}
                 name="unarchive-conversation"
                 onClose={() => {
                     self.setState({'unarchiveDialog': false});
@@ -1855,54 +1779,26 @@ var ConversationPanel = React.createClass({
                 <div className="fm-dialog-content">
 
                     <div className="dialog secondary-header">
-                        {__(l[19064])}
+                        {l[19064]}
                     </div>
                 </div>
             </ModalDialogsUI.ConfirmDialog>
         }
         if (self.state.renameDialog === true) {
             var onEditSubmit = function(e) {
-                if ($.trim(self.state.renameDialogValue).length > 0 &&
-                    self.state.renameDialogValue !== self.props.chatRoom.getRoomTitle()
-                ) {
-                    self.props.chatRoom.scrolledToBottom = true;
-
-                    var participants = self.props.chatRoom.protocolHandler.getTrackedParticipants();
-                    var promises = [];
-                    promises.push(
-                        ChatdIntegration._ensureKeysAreLoaded(undefined, participants)
-                    );
-                    var _runUpdateTopic = function() {
-                        // self.state.value
-                        var newTopic = self.state.renameDialogValue;
-                        var topic = self.props.chatRoom.protocolHandler.embeddedEncryptTo
-                                            (newTopic,
-                                             strongvelope.MESSAGE_TYPES.TOPIC_CHANGE,
-                                             participants);
-                        if (topic) {
-                            asyncApiReq({
-                                "a":"mcst",
-                                "id":self.props.chatRoom.chatId,
-                                "ct":base64urlencode(topic),
-                                "v": Chatd.VERSION
-                            });
-                        }
-                    };
-                    MegaPromise.allDone(promises).done(
-                        function () {
-                            _runUpdateTopic();
-                        }
-                    );
+                if (self.props.chatRoom.setRoomTitle(self.state.renameDialogValue)) {
                     self.setState({'renameDialog': false, 'renameDialogValue': undefined});
                 }
                 e.preventDefault();
                 e.stopPropagation();
             };
+            var renameDialogValue = typeof(self.state.renameDialogValue) !== 'undefined' ?
+                self.state.renameDialogValue :
+                self.props.chatRoom.getRoomTitle();
 
             confirmDeleteDialog = <ModalDialogsUI.ModalDialog
-                megaChat={room.megaChat}
                 chatRoom={room}
-                title={__(l[9080])}
+                title={l[9080]}
                 name="rename-group"
                 className="chat-rename-dialog"
                 onClose={() => {
@@ -1932,20 +1828,25 @@ var ConversationPanel = React.createClass({
                     },
                 ]}>
                 <div className="fm-dialog-content">
-
                     <div className="dialog secondary-header">
                         <div className="rename-input-bl">
-                            <input type="text" name="newTopic"
-                                   defaultValue={self.props.chatRoom.getRoomTitle()}
-                                   value={self.state.renameDialogValue}
-                                   maxLength="30"
-                                   onChange={(e) => {
-                                self.setState({'renameDialogValue': e.target.value.substr(0, 30)});
-                            }} onKeyUp={(e) => {
-                                if (e.which === 13) {
-                                    onEditSubmit(e);
-                                }
-                            }} />
+                            <input
+                                type="text"
+                                className="chat-rename-group-dialog"
+                                name="newTopic"
+                                value={renameDialogValue}
+                                maxLength="30"
+                                onChange={(e) => {
+                                    self.setState({
+                                        'renameDialogValue': e.target.value.substr(0, 30)
+                                    });
+                                }}
+                                onKeyUp={(e) => {
+                                    if (e.which === 13) {
+                                        onEditSubmit(e);
+                                    }
+                                }}
+                            />
                         </div>
                     </div>
                 </div>
@@ -1962,17 +1863,49 @@ var ConversationPanel = React.createClass({
             additionalClass = " small-block";
         }
 
+        var topicInfo = null;
+        if (self.props.chatRoom.type === "group" || self.props.chatRoom.type === "public") {
+            topicInfo = <div className="chat-topic-info">
+                <div className="chat-topic-icon"></div>
+                <div className="chat-topic-text">
+                    <span className="txt">
+                        <utils.EmojiFormattedContent>{
+                            self.props.chatRoom.getRoomTitle()
+                        }</utils.EmojiFormattedContent>
+                    </span>
+                    <span className="txt small">
+                        <MembersAmount room={self.props.chatRoom} />
+                    </span>
+                </div>
+            </div>;
+        }
+        else {
+            contactHandle = contacts[0];
+            contact = M.u[contactHandle];
 
+            topicInfo = <ContactCard
+                className="short"
+                chatRoom={room}
+                noContextButton="true"
+                contact={contact}
+                showLastGreen={true}
+                key={contact.u} />;
+        }
+
+        var startCallDisabled = isStartCallDisabled(room);
+        var startCallButtonClass = startCallDisabled ? " disabled" : "";
         return (
-            <div className={conversationPanelClasses} onMouseMove={self.onMouseMove}
+            <div className={conversationPanelClasses} onMouseMove={() => self.onMouseMove()}
                  data-room-id={self.props.chatRoom.chatId}>
-                <div className="chat-content-block">
-                    <ConversationRightArea
+                <div className={"chat-content-block " + (!room.megaChat.chatUIFlags['convPanelCollapse'] ?
+                    "with-pane" : "no-pane")}>
+                    {!room.megaChat.chatUIFlags['convPanelCollapse'] ? <ConversationRightArea
+                        isVisible={this.props.chatRoom.isCurrentlyActive}
                         chatRoom={this.props.chatRoom}
-                        members={this.props.chatRoom.members}
-                        contacts={self.props.contacts}
-                        megaChat={this.props.chatRoom.megaChat}
+                        roomFlags={this.props.chatRoom.flags}
+                        members={this.props.chatRoom.membersSetFromApi}
                         messagesBuff={room.messagesBuff}
+                        pushSettingsValue={pushNotificationSettings.getDnd(this.props.chatRoom.chatId)}
                         onAttachFromComputerClicked={function() {
                             self.uploadFromComputer();
                         }}
@@ -1991,20 +1924,48 @@ var ConversationPanel = React.createClass({
                                 'renameDialogValue': self.props.chatRoom.getRoomTitle()
                             });
                         }}
+                        onGetManageChatLinkClicked={function() {
+                            self.setState({
+                                'chatLinkDialog': true
+                            });
+                        }}
+                        onMakePrivateClicked={function() {
+                            self.setState({'privateChatDialog': true});
+                        }}
                         onLeaveClicked={function() {
                             room.leave(true);
                         }}
                         onCloseClicked={function() {
                             room.destroy();
                         }}
+                        onJoinViaPublicLinkClicked={function() {
+                            room.joinViaPublicHandle();
+                        }}
+                        onSwitchOffPublicMode = {function(topic) {
+                            room.switchOffPublicMode(topic);
+                        }}
                         onAttachFromCloudClicked={function() {
                             self.setState({'attachCloudDialog': true});
+                        }}
+                        onPushSettingsClicked={function() {
+                            self.setState({ 'pushSettingsDialog': true });
+                        }}
+                        onPushSettingsToggled={function() {
+                            return room.dnd || room.dnd === 0 ?
+                                self.setState({ pushSettingsValue: null }, () =>
+                                    pushNotificationSettings.disableDnd(room.chatId)
+                                ) :
+                                pushNotificationSettings.setDnd(room.chatId, 0);
                         }}
                         onAddParticipantSelected={function(contactHashes) {
                             self.props.chatRoom.scrolledToBottom = true;
 
                             if (self.props.chatRoom.type == "private") {
                                 var megaChat = self.props.chatRoom.megaChat;
+                                const options = {
+                                    keyRotation: false,
+                                    topic: ''
+                                };
 
                                 loadingDialog.show();
 
@@ -2013,38 +1974,47 @@ var ConversationPanel = React.createClass({
                                     [
                                         self.props.chatRoom.getParticipantsExceptMe().concat(
                                             contactHashes
-                                        )
-                                    ]
+                                        ),
+                                        options
+                                    ],
                                 );
                             }
                             else {
                                 self.props.chatRoom.trigger('onAddUserRequest', [contactHashes]);
                             }
                         }}
-                    />
-                    <ConversationAudioVideoPanel
-                        chatRoom={this.props.chatRoom}
-                        contacts={self.props.contacts}
-                        megaChat={this.props.chatRoom.megaChat}
-                        unreadCount={this.props.chatRoom.messagesBuff.getUnreadCount()}
-                        onMessagesToggle={function(isActive) {
-                            self.setState({
-                                'messagesToggledInCall': isActive
-                            });
-                        }}
-                    />
+                    /> : null}
+                    {
+                        room.callManagerCall && room.callManagerCall.isStarted() ?
+                            <ConversationAVPanel
+                                chatRoom={this.props.chatRoom}
+                                unreadCount={this.props.chatRoom.messagesBuff.getUnreadCount()}
+                                onMessagesToggle={function(isActive) {
+                                    self.setState({
+                                        'messagesToggledInCall': isActive
+                                    }, function() {
+                                        $('.js-messages-scroll-area', self.findDOMNode())
+                                            .trigger('forceResize', [true]);
+                                    });
+                                }}
+                            /> : null
+                    }
 
+                    {privateChatDialog}
+                    {chatLinkDialog}
+                    {nonLoggedInJoinChatDialog}
                     {attachCloudDialog}
                     {sendContactDialog}
                     {confirmDeleteDialog}
                     {confirmTruncateDialog}
+                    {pushSettingsDialog}
 
 
                     <div className="dropdown body dropdown-arrow down-arrow tooltip not-sent-notification hidden">
                         <i className="dropdown-white-arrow"></i>
                         <div className="dropdown notification-text">
                             <i className="small-icon conversations"></i>
-                            {__(l[8882])}
+                            {l[8882]}
                         </div>
                     </div>
 
@@ -2053,7 +2023,7 @@ var ConversationPanel = React.createClass({
                         <i className="dropdown-white-arrow"></i>
                         <div className="dropdown notification-text">
                             <i className="small-icon conversations"></i>
-                            {__(l[8883])}
+                            {l[8883]}
                         </div>
                     </div>
 
@@ -2062,55 +2032,79 @@ var ConversationPanel = React.createClass({
                         <i className="dropdown-white-arrow"></i>
                         <div className="dropdown notification-text">
                             <i className="small-icon conversations"></i>
-                            {__(l[8884])}
+                            {l[8884]}
                         </div>
                     </div>
 
-                    {
-                        self.props.chatRoom.type === "group" ?
-                            <div className="chat-topic-block">
-                                <utils.EmojiFormattedContent>{
-                                    self.props.chatRoom.getRoomTitle()
-                                }</utils.EmojiFormattedContent>
-                            </div> :
-                            undefined
-                    }
+                    <div
+                        className={`
+                            chat-topic-block
+                            ${topicBlockClass}
+                            ${room.havePendingCall() || room.haveActiveCall() ? 'have-pending-group-call' : ''}
+                        `}>
+                        <div className="chat-topic-buttons">
+                            <Button
+                                className="right"
+                                disableCheckingVisibility={true}
+                                icon={"small-icon " + (
+                                    !room.megaChat.chatUIFlags.convPanelCollapse ?
+                                        "arrow-in-square" :
+                                        "arrow-in-square active"
+                                )}
+                                onClick={() => room.megaChat.toggleUIFlag('convPanelCollapse')} />
+                            <Button
+                                className="button right"
+                                icon={`small-icon small-icon video-call colorized ${startCallButtonClass}`}
+                                onClick={() => !startCallDisabled && room.startVideoCall()} />
+                            <Button
+                                className="button right"
+                                icon={`small-icon small-icon audio-call colorized ${startCallButtonClass}`}
+                                onClick={() => !startCallDisabled && room.startAudioCall()} />
+                        </div>
+                        {topicInfo}
+                    </div>
+
                     <div className={"messages-block " + additionalClass}>
                         <div className="messages scroll-area">
                             <PerfectScrollbar
-                                   onFirstInit={(ps, node) => {
-                                        ps.scrollToBottom(true);
-                                        self.props.chatRoom.scrolledToBottom = 1;
-
-                                    }}
-                                   onReinitialise={self.onMessagesScrollReinitialise}
-                                   onUserScroll={self.onMessagesScrollUserScroll}
-                                   className="js-messages-scroll-area perfectScrollbarContainer"
-                                   messagesToggledInCall={self.state.messagesToggledInCall}
-                                   ref={(ref) => self.messagesListScrollable = ref}
-                                   chatRoom={self.props.chatRoom}
-                                   messagesBuff={self.props.chatRoom.messagesBuff}
-                                   editDomElement={self.state.editDomElement}
-                                   editingMessageId={self.state.editing}
-                                   confirmDeleteDialog={self.state.confirmDeleteDialog}
-                                   renderedMessagesCount={messagesList.length}
-                                   isLoading={
-                                       this.props.chatRoom.messagesBuff.messagesHistoryIsLoading() ||
-                                       this.loadingShown
-                                   }
-                                   options={{
-                                       'suppressScrollX': true
-                                   }}
-                                >
+                                onFirstInit={ps => {
+                                    ps.scrollToBottom(true);
+                                    this.props.chatRoom.scrolledToBottom = 1;
+                                }}
+                                onReinitialise={this.onMessagesScrollReinitialise.bind(this)}
+                                onUserScroll={this.onMessagesScrollUserScroll.bind(this)}
+                                className="js-messages-scroll-area perfectScrollbarContainer"
+                                messagesToggledInCall={this.state.messagesToggledInCall}
+                                ref={(ref) => {
+                                    this.messagesListScrollable = ref;
+                                    $(document).rebind(
+                                        'keydown.keyboardScroll_' + this.props.chatRoom.roomId,
+                                        this.onKeyboardScroll
+                                    );
+                                }}
+                                chatRoom={this.props.chatRoom}
+                                messagesBuff={this.props.chatRoom.messagesBuff}
+                                editDomElement={this.state.editDomElement}
+                                editingMessageId={this.state.editing}
+                                confirmDeleteDialog={this.state.confirmDeleteDialog}
+                                renderedMessagesCount={messagesList.length}
+                                isLoading={
+                                    this.props.chatRoom.messagesBuff.messagesHistoryIsLoading() ||
+                                    this.props.chatRoom.activeSearches > 0 ||
+                                    this.loadingShown
+                                }
+                                options={{ 'suppressScrollX': true }}>
                                 <div className="messages main-pad">
                                     <div className="messages content-area">
-                                        <div className="loading-spinner js-messages-loading light manual-management"
-                                         key="loadingSpinner" style={{top: "50%"}}>
-                                            <div className="main-loader" style={{
-                                                'position': 'fixed',
-                                                'top': '50%',
-                                                'left': '50%'
-                                            }}></div>
+                                        <div
+                                            key="loadingSpinner" style={{ top: "50%" }}
+                                            className={`
+                                                loading-spinner js-messages-loading light manual-management
+                                                ${this.loadingShown ? '' : 'hidden'}
+                                            `}>
+                                            <div
+                                                className="main-loader"
+                                                style={{ 'position': 'fixed', 'top': '50%', 'left': '50%' }} />
                                         </div>
                                         {/* add a naive pre-pusher that would eventually keep the the scrollbar
                                         realistic */}
@@ -2119,57 +2113,74 @@ var ConversationPanel = React.createClass({
                                 </div>
                             </PerfectScrollbar>
                         </div>
+                        {
+                            !anonymouschat &&
+                            room.state != ChatRoom.STATE.LEFT &&
+                            room.havePendingGroupCall() && (
+                                !room.callManagerCall ||
+                                room.callManagerCall.state !== CallManagerCall.STATE.WAITING_RESPONSE_OUTGOING
+                            )    ?
+                                <JoinCallNotification chatRoom={room} /> : null
+                        }
 
+                        {
+                            anonymouschat || (
+                                !room.membersSetFromApi.members.hasOwnProperty(u_handle) &&
+                                room.type === "public" && !anonymouschat &&
+                                room.publicChatHandle && room.publicChatKey
+                            ) ?
+                        (
+                        <div className="join-chat-block">
+                            <div className="join-chat-button"
+                                onClick={(e) => {
+                                    if (anonymouschat) {
+                                        megaChat.loginOrRegisterBeforeJoining(room.publicChatHandle);
+                                    }
+                                    else {
+                                        room.joinViaPublicHandle();
+                                    }
+                                }}>
+                                {l[20597]}
+                            </div>
+                        </div>
+                        ) :
+                        (
                         <div className="chat-textarea-block">
                             <WhosTyping chatRoom={room} />
 
-                            <TypingAreaUI.TypingArea
+                            <TypingArea
                                 chatRoom={self.props.chatRoom}
                                 className="main-typing-area"
                                 disabled={room.isReadOnly()}
                                 persist={true}
                                 onUpEditPressed={() => {
-                                    var foundMessage = false;
-                                    room.messagesBuff.messages.keys().reverse().some(function(k) {
-                                        if(!foundMessage) {
-                                            var message = room.messagesBuff.messages[k];
+                                    const time = unixtime();
+                                    const keys = room.messagesBuff.messages.keys();
+                                    for (var i = keys.length; i--;) {
+                                        var message = room.messagesBuff.messages[keys[i]];
 
-                                            var contact;
-                                            if (message.userId) {
-                                                if (!M.u[message.userId]) {
-                                                    // data is still loading!
-                                                    return;
-                                                }
-                                                contact = M.u[message.userId];
-                                            }
-                                            else {
-                                                // contact not found
-                                                return;
-                                            }
-
-                                            if (
-                                                    contact && contact.u === u_handle &&
-                                                    (unixtime() - message.delay) < MESSAGE_NOT_EDITABLE_TIMEOUT &&
-                                                    !message.requiresManualRetry &&
-                                                    !message.deleted &&
-                                                    (!message.type ||
-                                                         message instanceof Message) &&
-                                                    (!message.isManagement || !message.isManagement())
-                                                ) {
-                                                    foundMessage = message;
-                                                    return foundMessage;
-                                            }
+                                        var contact = M.u[message.userId];
+                                        if (!contact) {
+                                            // data is still loading!
+                                            continue;
                                         }
-                                    });
 
-                                    if (!foundMessage) {
-                                        return false;
+                                        if (
+                                            contact.u === u_handle &&
+                                            time - message.delay < MESSAGE_NOT_EDITABLE_TIMEOUT &&
+                                            !message.requiresManualRetry &&
+                                            !message.deleted &&
+                                            (!message.type ||
+                                                message instanceof Message) &&
+                                            (!message.isManagement || !message.isManagement())
+                                        ) {
+                                            self.setState({'editing': message.messageId});
+                                            self.props.chatRoom.scrolledToBottom = false;
+                                            return true;
+                                        }
                                     }
-                                    else {
-                                        self.setState({'editing': foundMessage.messageId});
-                                        self.props.chatRoom.scrolledToBottom = false;
-                                        return true;
-                                    }
+
+                                    return false;
                                 }}
                                 onResized={() => {
                                     self.handleWindowResize();
@@ -2185,11 +2196,13 @@ var ConversationPanel = React.createClass({
                                             // start of the chat, the event continues to be received event that the
                                             // scrollTop is now 0..and if in that time the user sends a message
                                             // the event triggers a weird "scroll up" animation out of nowhere...
-                                            $(self.props.chatRoom).rebind('onMessagesBuffAppend.pull', function() {
-                                                self.messagesListScrollable.scrollToBottom(false);
-                                                setTimeout(function() {
-                                                    self.messagesListScrollable.enable();
-                                                }, 1500);
+                                            self.props.chatRoom.rebind('onMessagesBuffAppend.pull', function() {
+                                                if (self.messagesListScrollable) {
+                                                    self.messagesListScrollable.scrollToBottom(false);
+                                                    setTimeout(function() {
+                                                        self.messagesListScrollable.enable();
+                                                    }, 1500);
+                                                }
                                             });
 
                                             self.props.chatRoom.sendMessage(messageContents);
@@ -2202,113 +2215,109 @@ var ConversationPanel = React.createClass({
                                     }
                                 }}
                             >
-                                    <ButtonsUI.Button
-                                        className="popup-button"
-                                        icon="small-icon grey-medium-plus"
+                                    <Button
+                                        className="popup-button left"
+                                        icon="small-icon grey-small-plus"
                                         disabled={room.isReadOnly()}
                                         >
-                                        <DropdownsUI.Dropdown
-                                            className="wide-dropdown attach-to-chat-popup"
-                                            vertOffset={10}
+                                        <Dropdown
+                                            className="wide-dropdown attach-to-chat-popup light"
+                                            noArrow="true"
+                                            positionMy="left top"
+                                            positionAt="left bottom"
+                                            vertOffset={4}
                                         >
-                                            <DropdownsUI.DropdownItem
-                                                icon="grey-cloud"
-                                                label={__(l[8011])}
+                                            <div className="dropdown info-txt">
+                                                {l[23753] ? l[23753] : "Send..."}
+                                            </div>
+                                            <DropdownItem
+                                                className="link-button light"
+                                                icon="grey-cloud colorized"
+                                                label={l[19794] ? l[19794] : "My Cloud Drive"}
                                                 onClick={(e) => {
                                                     self.setState({'attachCloudDialog': true});
                                             }} />
-                                            <DropdownsUI.DropdownItem
-                                                icon="grey-computer"
-                                                label={__(l[8014])}
+                                            <DropdownItem
+                                                className="link-button light"
+                                                icon="grey-computer colorized"
+                                                label={l[19795] ? l[19795] : "My computer"}
                                                 onClick={(e) => {
                                                     self.uploadFromComputer();
                                             }} />
-                                            <DropdownsUI.DropdownItem
-                                                icon="square-profile"
-                                                label={__(l[8628])}
+                                            <div className="chat-button-seperator"></div>
+                                            <DropdownItem
+                                                className="link-button light"
+                                                icon="square-profile colorized"
+                                                label={l[8628]}
                                                 onClick={(e) => {
                                                     self.setState({'sendContactDialog': true});
                                             }} />
-                                        </DropdownsUI.Dropdown>
-                                    </ButtonsUI.Button>
-                            </TypingAreaUI.TypingArea>
-
+                                        </Dropdown>
+                                    </Button>
+                            </TypingArea>
                         </div>
+                        )
+                        }
                     </div>
                 </div>
             </div>
         );
     }
-});
+};
 
-var ConversationPanels = React.createClass({
-    mixins: [MegaRenderMixin, RenderDebugger],
-    render: function() {
+export class ConversationPanels extends MegaRenderMixin {
+    render() {
         var self = this;
-
+        var now = Date.now();
         var conversations = [];
 
-        var hadLoaded = (
-            ChatdIntegration.allChatsHadLoaded.state() !== 'pending' &&
-            ChatdIntegration.mcfHasFinishedPromise.state() !== 'pending' &&
-            Object.keys(ChatdIntegration._loadingChats).length === 0
-        );
-
-        if (hadLoaded && getSitePath() === "/fm/chat") {
-            // do we need to "activate" an conversation?
-            var activeFound = false;
-            self.props.conversations.forEach(function (chatRoom) {
-                if (chatRoom.isCurrentlyActive) {
-                    activeFound = true;
-                }
-            });
-            if (self.props.conversations.length > 0 && !activeFound) {
-                self.props.megaChat.showLastActive();
-            }
-        }
-
-        hadLoaded && self.props.conversations.forEach(function(chatRoom) {
-            var otherParticipants = chatRoom.getParticipantsExceptMe();
-
-            var contact;
-            if (otherParticipants && otherParticipants.length > 0) {
-                contact = M.u[otherParticipants[0]];
-            }
-
-            conversations.push(
-                <ConversationPanel
-                    chatRoom={chatRoom}
-                    isActive={chatRoom.isCurrentlyActive}
-                    messagesBuff={chatRoom.messagesBuff}
-                    contacts={M.u}
-                    contact={contact}
-                    key={chatRoom.roomId + "_" + chatRoom.instanceIndex}
+        // eslint-disable-next-line local-rules/misc-warnings
+        megaChat.chats.forEach(function(chatRoom) {
+            if (chatRoom.isCurrentlyActive || now - chatRoom.lastShownInUI < 15 * 60 * 1000) {
+                conversations.push(
+                    <ConversationPanel
+                        chatUIFlags={self.props.chatUIFlags}
+                        isExpanded={chatRoom.megaChat.chatUIFlags['convPanelCollapse']}
+                        chatRoom={chatRoom}
+                        roomType={chatRoom.type}
+                        isActive={chatRoom.isCurrentlyActive}
+                        messagesBuff={chatRoom.messagesBuff}
+                        key={chatRoom.roomId + "_" + chatRoom.instanceIndex}
                     />
-            );
+                );
+            }
         });
 
-        if (conversations.length === 0) {
+        if (self._MuChangeListener) {
+            console.assert(M.u.removeChangeListener(self._MuChangeListener));
+            delete self._MuChangeListener;
+        }
+
+        if (megaChat.chats.length === 0) {
+            self._MuChangeListener = M.u.addChangeListener(() => self.safeForceUpdate());
             var contactsList = [];
             var contactsListOffline = [];
 
-            if (hadLoaded) {
-                self.props.contacts.forEach(function (contact) {
-                    if (contact.u === u_handle) {
-                        return;
-                    }
-                    if(contact.c === 1) {
-                        var pres = self.props.megaChat.userPresenceToCssClass(contact.presence);
+            var lim = Math.min(10, M.u.length);
+            var userHandles = M.u.keys();
+            for (var i = 0; i < lim; i++) {
+                var contact = M.u[userHandles[i]];
+                if (contact.u !== u_handle && contact.c === 1) {
+                    var pres = megaChat.userPresenceToCssClass(contact.presence);
 
-                        (pres === "offline" ? contactsListOffline : contactsList).push(
-                            <ContactsUI.ContactCard contact={contact} megaChat={self.props.megaChat}
-                                                    key={contact.u}/>
-                        );
-                    }
-                });
+                    (pres === "offline" ? contactsListOffline : contactsList).push(
+                        <ContactCard contact={contact} key={contact.u} chatRoom={false}/>
+                    );
+                }
             }
-            var emptyMessage = hadLoaded ?
-                l[8008] :
-                l[7006];
+            let emptyMessage = escapeHTML(l[8008]).replace("[P]", "<span>").replace("[/P]", "</span>");
+            let button = <div className="big-red-button new-chat-link"
+                onClick={() => $(document.body).trigger('startNewChatLink')}>{l[20638]}</div>;
+
+            if (anonymouschat) {
+                button = null;
+                emptyMessage = '';
+            }
 
             return (
                 <div>
@@ -2322,30 +2331,38 @@ var ConversationPanels = React.createClass({
                     </div>
                     <div className="empty-block">
                         <div className="empty-pad conversations">
-                            <div className="empty-icon conversations"></div>
-                            <div className="empty-title" dangerouslySetInnerHTML={{
-                                __html: __(emptyMessage)
-                                    .replace("[P]", "<span>")
-                                    .replace("[/P]", "</span>")
-                            }}></div>
+                            <div className="fm-empty-conversations-bg"/>
+                            <div className="fm-empty-cloud-txt small"
+                                dangerouslySetInnerHTML={{__html: emptyMessage}}>
+                            </div>
+                            {button}
                         </div>
                     </div>
                 </div>
             );
         }
-        else {
-            return (
-                <div className={"conversation-panels " + self.props.className}>
-                    {conversations}
-                </div>
-            );
-        }
+
+        return (
+            <div className={"conversation-panels " + self.props.className}>
+                {conversations}
+            </div>
+        );
     }
-});
+}
 
-
-
-module.exports = {
-    ConversationPanel,
-    ConversationPanels
-};
+function isStartCallDisabled(room) {
+    if (Object.keys(room.members).length > 20) {
+        return true;
+    }
+    return !room.isOnlineForCalls() || room.isReadOnly() || room._callSetupPromise || !room.chatId ||
+        (
+            room.callManagerCall &&
+            room.callManagerCall.state !== CallManagerCall.STATE.WAITING_RESPONSE_INCOMING
+        )
+        || (
+            (room.type === "group" || room.type === "public")
+            && !ENABLE_GROUP_CALLING_FLAG
+        )
+        || (room.getCallParticipants().length > 0)
+        || (room.getParticipantsExceptMe() < 1);
+}

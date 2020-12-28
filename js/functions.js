@@ -1,5 +1,97 @@
 
+/* jshint -W098 */
 makeEnum(['MDBOPEN', 'EXECSC', 'LOADINGCLOUD'], 'MEGAFLAG_', window);
+
+// navigate to links internally, not by the browser.
+function clickURLs() {
+    'use strict';
+    var nodeList = document.querySelectorAll('a.clickurl');
+
+    if (nodeList.length) {
+        $(nodeList).rebind('click', function() {
+            var $this = $(this);
+            var url = $this.attr('href') || $this.data('fxhref');
+
+            if (url) {
+                var target = $this.attr('target');
+
+                if (target === '_blank') {
+                    open(getBaseUrl() + url);
+                    return false;
+                }
+
+                if (window.loadingDialog && $this.hasClass('pages-nav')) {
+                    loadingDialog.quiet = true;
+                    onIdle(function() {
+                        loadingDialog.quiet = false;
+                    });
+                }
+                loadSubPage(url.substr(1));
+                return false;
+            }
+        });
+        if (is_extension) {
+            $(nodeList).rebind('auxclick', function(e) {
+
+                // if this is middle click on mouse to open it on new tab and this is extension
+                if (e.which === 2) {
+
+                    var $this = $(this);
+                    var url = $this.attr('href') || $this.data('fxhref');
+
+                    open(getBaseUrl() + url);
+
+                    return false;
+                }
+            });
+        }
+    }
+    nodeList = undefined;
+}
+
+// Handler that deals with scroll to element links.
+function scrollToURLs() {
+    'use strict';
+    var nodeList = document.querySelectorAll('a.scroll_to');
+
+    if (nodeList) {
+        $(nodeList).rebind("click", function() {
+            var $scrollTo = $($(this).data("scrollto"));
+
+            if ($scrollTo.length) {
+                var $toScroll;
+                var newOffset = $scrollTo[0].offsetTop;
+
+                if (is_mobile) {
+                    if (page === "privacy" || page === "updatedprivacy") {
+                        $toScroll = $('html');
+                    }
+                    else if (page === "terms" || page === "updatedterms") {
+                        $toScroll = $('.fm-block.terms-of-service .mobile.fm-scrolling');
+                    }
+                }
+                else {
+                    $toScroll = $scrollTo.closest(".jspScrollable");
+                    if ($toScroll.length) {
+                        var jspInstance = $toScroll.data('jsp');
+                        if (jspInstance) {
+                            jspInstance.scrollToY(newOffset);
+                        }
+                        return false;
+                    } else {
+                        $toScroll = $('.fmholder');
+                    }
+                }
+
+                if ($toScroll) {
+                    $toScroll.animate({scrollTop: newOffset - 40}, 400);
+                }
+
+            }
+        });
+    }
+    nodeList = undefined;
+}
 
 /**
  *  Check if value is contained in a array. If it is return value
@@ -197,7 +289,7 @@ function updateIpcRequests() {
 function countrydetails(isocode) {
     var cdetails = {
         name: M.getCountryName(isocode),
-        icon: isocode.toLowerCase() + '.gif'
+        icon: isocode.toLowerCase() + '.png'
     };
     return cdetails;
 }
@@ -207,11 +299,12 @@ function countrydetails(isocode) {
  * similar to `bytesToSize` but this function returns an object
  * (`{ size: "23,33", unit: 'KB' }`) which is easier to consume
  *
- * @param {Number} bytes        Size in bytes to convert
- * @param {Number} precision    Precision to show the decimal number
+ * @param {Number} bytes Size in bytes to convert
+ * @param {Number} [precision] Precision to show the decimal number
+ * @param {Boolean} [isSpd] True if this is a speed, unit will be returned as speed unit like KB/s
  * @returns {Object} Returns an object similar to `{size: "2.1", unit: "MB"}`
  */
-function numOfBytes(bytes, precision) {
+function numOfBytes(bytes, precision, isSpd) {
 
     'use strict';
 
@@ -220,7 +313,8 @@ function numOfBytes(bytes, precision) {
         precision = 2;
     }
 
-    var parts = bytesToSize(bytes, precision).split(' ');
+    var fn = isSpd ? bytesToSpeed : bytesToSize;
+    var parts = fn(bytes, precision).split(' ');
 
     return { size: parts[0], unit: parts[1] || 'B' };
 }
@@ -228,21 +322,12 @@ function numOfBytes(bytes, precision) {
 function bytesToSize(bytes, precision, format) {
     'use strict'; /* jshint -W074 */
 
-    var s_b = 'B';
-    var s_kb = 'KB';
-    var s_mb = 'MB';
-    var s_gb = 'GB';
-    var s_tb = 'TB';
-    var s_pb = 'PB';
-
-    if (lang === 'fr') {
-        s_b = 'O';
-        s_kb = 'Ko';
-        s_mb = 'Mo';
-        s_gb = 'Go';
-        s_tb = 'To';
-        s_pb = 'Po';
-    }
+    var s_b = l[20158];
+    var s_kb = l[7049];
+    var s_mb = l[20159];
+    var s_gb = l[17696];
+    var s_tb = l[20160];
+    var s_pb = l[23061];
 
     var kilobyte = 1024;
     var megabyte = kilobyte * 1024;
@@ -300,9 +385,17 @@ function bytesToSize(bytes, precision, format) {
         resultUnit = s_b;
     }
 
+    if (window.lang !== 'en') {
+        // @todo measure the performance degradation by invoking this here now..
+        resultSize = mega.intl.decimal.format(resultSize);
+    }
+
     // XXX: If ever adding more HTML here, make sure it's safe and/or sanitize it.
     if (format === 2) {
         return resultSize + '<span>' + resultUnit + '</span>';
+    }
+    else if (format === 3) {
+        return resultSize;
     }
     else if (format) {
         return '<span>' + resultSize + '</span>' + resultUnit;
@@ -311,6 +404,25 @@ function bytesToSize(bytes, precision, format) {
         return resultSize + ' ' + resultUnit;
     }
 }
+
+/*
+ * Very Similar function as bytesToSize due to it is just simple extended version of it by making it as speed.
+ * @returns {String} Returns a string that build with value entered and speed unit e.g. 100 KB/s
+ */
+var bytesToSpeed = function bytesToSpeed() {
+    'use strict';
+    return l[23062].replace('[%s]', bytesToSize.apply(this, arguments));
+};
+mBroadcaster.once('startMega', function() {
+    'use strict';
+
+    if (lang === 'en' || lang === 'es') {
+        bytesToSpeed = function(bytes, precision, format) {
+            return bytesToSize(bytes, precision, format) + '/s';
+        };
+    }
+});
+
 
 function makeid(len) {
     var text = "";
@@ -322,55 +434,34 @@ function makeid(len) {
 }
 
 /**
- * Checks if the email address is valid
+ * Checks if the email address is valid using the inbuilt HTML5
+ * validation method suggested at https://stackoverflow.com/a/13975255
  * @param {String} email The email address to validate
- * @returns {Boolean} Returns true if email is invalid, false if email is fine
+ * @returns {Boolean} Returns true if email is valid, false if email is invalid
  */
-function checkMail(email) {
-    email = email.replace(/\+/g, '');
-    var filter = /^([a-zA-Z0-9_\.\-])+\@(([a-zA-Z0-9\-])+\.)+([a-zA-Z0-9]{2,4})+$/;
-    if (filter.test(email)) {
-        return false;
-    }
-    else {
-        return true;
-    }
+function isValidEmail(email) {
+
+    'use strict';
+    // reference to html spec https://html.spec.whatwg.org/multipage/input.html#e-mail-state-(type=email)
+    // with one modification, that the standard allows emails like khaled@mega
+    // which is possible in local environment/networks but not in WWW.
+    // so I applied + instead of * at the end
+    var regex = /^[a-zA-Z0-9.!#$%&'*+\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
+    return regex.test(email);
 }
 
 /**
  * Adds on, bind, unbind, one and trigger methods to a specific class's prototype.
  *
  * @param kls class on which prototype this method should add the on, bind, unbind, etc methods
+ * @deprecated
  */
 function makeObservable(kls) {
     'use strict';
-
-    var target = kls.prototype || kls;
-    var aliases = [['on'], ['off'], ['bind', 'on'], ['unbind', 'off'], ['one'], ['trigger'], ['rebind']];
-
-    aliases.forEach(function(fn) {
-        var prop = fn[0];
-        fn = fn[1] || prop;
-
-        Object.defineProperty(target, prop, {
-            value: function() {
-                return this.$__eventEmitter___[fn].apply(this.$__eventEmitter___, arguments);
-            },
-            writable: true,
-            configurable: true
-        });
-    });
-
-    Object.defineProperty(target, '$__eventEmitter___', {
-        get: function() {
-            // TODO: Get a real event emitter and deprecate jQuery here.
-            Object.defineProperty(this, '$__eventEmitter___', {value: $(this)});
-            return this.$__eventEmitter___;
-        },
-        configurable: true
-    });
-
-    target = aliases = kls = undefined;
+    if (d > 1) {
+        console.warn('makeObservable() is deprecated.');
+    }
+    inherits(kls, MegaDataEmitter);
 }
 
 /**
@@ -475,6 +566,25 @@ function makeMetaAware(kls) {
 }
 
 /**
+ * Gets UAO parameter from the URL if exists and store it
+ * @param {String} url          URL
+ * @param {String} page         Page
+ */
+function getUAOParameter(url, page) {
+    'use strict';
+    var pageLen = page.length;
+    if (url.length > pageLen) {
+        var urlParams = url.substr(pageLen);
+        if (urlParams.length > 14) {
+            var uaoParam = urlParams.indexOf('/uao=');
+            if (uaoParam > -1) {
+                mega.uaoref = urlParams.substr(uaoParam + 5);
+            }
+        }
+    }
+}
+
+/**
  * Simple method for generating unique event name with a .suffix that is a hash of the passed 3-n arguments
  * Main purpose is to be used with jQuery.bind and jQuery.unbind.
  *
@@ -520,11 +630,11 @@ function createTimeoutPromise(validateFunction, tick, timeout,
 
     var $promise = new MegaPromise();
     resolveRejectArgs = resolveRejectArgs || [];
-    if (!$.isArray(resolveRejectArgs)) {
+    if (!Array.isArray(resolveRejectArgs)) {
         resolveRejectArgs = [resolveRejectArgs];
     }
 
-    $promise.verify = function() {
+    $promise.verify = SoonFc(20, function _ctpVerify() {
         if (validateFunction()) {
             if (window.d && typeof(window.promisesDebug) !== 'undefined') {
                 console.debug("Resolving timeout promise", name,
@@ -533,7 +643,8 @@ function createTimeoutPromise(validateFunction, tick, timeout,
             }
             $promise.resolve.apply($promise, resolveRejectArgs);
         }
-    };
+    });
+
     $promise.stopTimers = function() {
         if (tickInterval !== false) {
             clearInterval(tickInterval);
@@ -600,8 +711,10 @@ function createTimeoutPromise(validateFunction, tick, timeout,
  */
 function AssertionFailed(message) {
     this.message = message;
-    this.stack = M.getStack();
+    // karma env?
+    this.stack = M && M.getStack ? M.getStack() : String(new Error().stack);
 }
+
 AssertionFailed.prototype = Object.create(Error.prototype);
 AssertionFailed.prototype.name = 'AssertionFailed';
 
@@ -710,7 +823,7 @@ function srvlog(msg, data, silent) {
         console.error(msg, data);
     }
     if (typeof window.onerror === 'function') {
-        window.onerror(msg, '', data ? 1 : -1, 0, data || null);
+        window.onerror(msg, '@srvlog', data ? 1 : -1, 0, data || null);
     }
 }
 
@@ -748,13 +861,15 @@ function srvlog2(type /*, ...*/) {
  * @constructor
  */
 function RegExpEscape(text) {
-    return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
+    'use strict';
+    return text.replace(/[\s#$()*+,.?[\\\]^{|}-]/g, "\\$&");
 }
 
 function unixtimeToTimeString(timestamp) {
     var date = new Date(timestamp * 1000);
+    var hourSeparator = locale === 'fr' ? ' h ' : ':';
     return addZeroIfLenLessThen(date.getHours(), 2)
-        + ":" + addZeroIfLenLessThen(date.getMinutes(), 2);
+        + hourSeparator + addZeroIfLenLessThen(date.getMinutes(), 2);
 }
 
 
@@ -832,10 +947,14 @@ function MurmurHash3(key, seed) {
  * @param {String} keyr If a wrong key was used
  * @return {MegaPromise}
  */
-function mKeyDialog(ph, fl, keyr) {
+function mKeyDialog(ph, fl, keyr, selector) {
     "use strict";
 
     var promise = new MegaPromise();
+    var $dialog = $(is_mobile ? '#mobile-decryption-key-overlay' : '.fm-dialog.dlkey-dialog').removeClass('hidden');
+    var $button = $(is_mobile ? '.mobile.decrypt-button' : '.fm-dialog-new-folder-button', $dialog);
+    var $input = $(is_mobile ? '.mobile.decryption-key' : 'input', $dialog);
+
     if (keyr) {
         $('.fm-dialog.dlkey-dialog .instruction-message')
             .text(l[9048]);
@@ -852,45 +971,50 @@ function mKeyDialog(ph, fl, keyr) {
         name: 'unknown.unknown'
     }));
 
-    var $newFolderBtn = $('.fm-dialog.dlkey-dialog .fm-dialog-new-folder-button');
-    $newFolderBtn.addClass('disabled').removeClass('active');
-    $('.fm-dialog.dlkey-dialog').removeClass('hidden');
+    $button.addClass('disabled').removeClass('active');
     fm_showoverlay();
 
-    $('.fm-dialog.dlkey-dialog input').off('input keypress').on('input keypress', function(e) {
-        var length = $('.fm-dialog.dlkey-dialog input').val().length;
+    $input.rebind('input keypress', function(e) {
+        var length = String($(this).val() || '').length;
 
         if (length) {
-            $newFolderBtn.removeClass('disabled').addClass('active');
+            $button.removeClass('disabled').addClass('active');
             if (e.keyCode === 13) {
-                $newFolderBtn.click();
+                $button.click();
             }
         }
         else {
-            $newFolderBtn.removeClass('active').addClass('disabled');
+            $button.removeClass('active').addClass('disabled');
         }
     });
 
-    $newFolderBtn.rebind('click', function() {
+    $button.rebind('click.keydlg', function() {
 
         if ($(this).hasClass('active')) {
 
             // Trim the input from the user for whitespace, newlines etc on either end
-            var key = $.trim($('.fm-dialog.dlkey-dialog input').val());
+            var key = $.trim($input.val());
 
             if (key) {
 
-                // Remove the ! from the key which is exported from the export dialog
-                key = key.replace('!', '');
+                // Remove the !,# from the key which is exported from the export dialog
+                key = key.replace('!', '').replace('#', '');
 
                 var newHash = (fl ? '/#F!' : '/#!') + ph + '!' + key;
+
+                var currLink = getSitePath();
+
+                if (isPublickLinkV2(currLink)) {
+                    newHash = (fl ? '/folder/' : '/file/') + ph + '#' + key + (selector ? selector : '');
+                }
 
                 if (getSitePath() !== newHash) {
                     promise.resolve(key);
 
                     fm_hideoverlay();
-                    $('.fm-dialog.dlkey-dialog').addClass('hidden');
+                    $dialog.addClass('hidden');
                     loadSubPage(newHash);
+
                 }
             }
             else {
@@ -926,16 +1050,14 @@ function str_mtrunc(str, len) {
     return str.substr(0, p1) + '\u2026' + str.substr(-p2);
 }
 
-function percent_megatitle() {
+function getTransfersPercent() {
     var dl_r = 0;
     var dl_t = 0;
     var ul_r = 0;
     var ul_t = 0;
     var tp = $.transferprogress || {};
-    var dl_s = 0;
-    var ul_s = 0;
     var zips = {};
-    var t, i;
+    var i;
 
     for (i = dl_queue.length; i--;) {
         var q = dl_queue[i];
@@ -948,27 +1070,23 @@ function percent_megatitle() {
                 if (q.zipid) {
                     zips[q.zipid] = 1;
                 }
-                dl_s += td[2];
             }
         }
         else {
             dl_t += q && q.size || 0;
         }
     }
-
     for (i = ul_queue.length; i--;) {
         var tu = tp['ul_' + ul_queue[i].id];
 
         if (tu) {
             ul_r += tu[0];
             ul_t += tu[1];
-            ul_s += tu[2];
         }
         else {
             ul_t += ul_queue[i].size || 0;
         }
     }
-
     if (dl_t) {
         dl_t += tp['dlc'] || 0;
         dl_r += tp['dlc'] || 0;
@@ -978,22 +1096,32 @@ function percent_megatitle() {
         ul_r += tp['ulc'] || 0;
     }
 
-    var x_ul = Math.floor(ul_r / ul_t * 100) || 0;
-    var x_dl = Math.floor(dl_r / dl_t * 100) || 0;
+    return {
+        ul_total: ul_t,
+        ul_done: ul_r,
+        dl_total: dl_t,
+        dl_done: dl_r
+    };
+}
 
-    mega.ui.tpp.setTotalProgress(x_ul, 'ul');
-    mega.ui.tpp.setTotalProgress(x_dl, 'dl');
+function percent_megatitle() {
+    'use strict';
+    var t;
+    var transferStatus = getTransfersPercent();
 
-    if (dl_t && ul_t) {
+    var x_ul = Math.floor(transferStatus.ul_done / transferStatus.ul_total * 100) || 0;
+    var x_dl = Math.floor(transferStatus.dl_done / transferStatus.dl_total * 100) || 0;
+
+    if (transferStatus.dl_total && transferStatus.ul_total) {
         t = ' \u2193 ' + x_dl + '% \u2191 ' + x_ul + '%';
     }
-    else if (dl_t) {
+    else if (transferStatus.dl_total) {
         t = ' \u2193 ' + x_dl + '%';
     }
-    else if (ul_t) {
+    else if (transferStatus.ul_total) {
         t = ' \u2191 ' + x_ul + '%';
         if (mega.megadrop.isInit()) {
-            mega.megadrop.uiUpdateTotalProgress(ul_r, ul_t, x_ul);
+            mega.megadrop.uiUpdateTotalProgress(transferStatus.ul_done, transferStatus.ul_total, x_ul);
         }
     }
     else {
@@ -1131,6 +1259,14 @@ function getAppBaseUrl() {
     return base;
 }
 
+if (d && location.hostname === 'localhost') {
+    // eslint-disable-next-line no-func-assign
+    getBaseUrl = function() {
+        'use strict';
+        return location.origin;
+    };
+}
+
 /**
  * http://stackoverflow.com/a/16344621/402133
  *
@@ -1210,7 +1346,7 @@ function generateAnonymousReport() {
         report.numOpenedChats = Object.keys(megaChat.chats).length;
         report.haveRtc = megaChat.rtc ? true : false;
         if (report.haveRtc) {
-            report.rtcStatsAnonymousId = megaChat.rtc.ownAnonId;
+            report.rtcStatsAnonymousId = base64urlencode(megaChat.rtc.ownAnonId);
         }
     }
 
@@ -1236,7 +1372,6 @@ function generateAnonymousReport() {
             });
 
             var r = {
-                'roomUniqueId': roomUniqueId,
                 'roomState': v.getStateAsText(),
                 'roomParticipants': participants
             };
@@ -1247,31 +1382,20 @@ function generateAnonymousReport() {
         });
 
         if (report.haveRtc) {
-            var callSessions = megaChat.plugins.callManager.callSessions ?
-                megaChat.plugins.callManager.callSessions :
-                megaChat.plugins.callManager._calls;
-
-            Object.keys(callSessions).forEach(function (k) {
-                var v = callSessions[k];
-
-                var r = {
-                    'callStats': v.callStats,
-                    'state': v.state
-                };
-
-                var roomIdx = roomUniqueIdMap[v.room.roomId];
-                if (!roomIdx) {
-                    roomUniqueId += 1; // room which was closed, create new tmp id;
-                    roomIdx = roomUniqueId;
-                }
-                if (!chatStates[roomIdx]) {
-                    chatStates[roomIdx] = {};
-                }
-                if (!chatStates[roomIdx].callSessions) {
-                    chatStates[roomIdx].callSessions = [];
-                }
-                chatStates[roomIdx].callSessions.push(r);
-            });
+            report.calls = [];
+            var calls = megaChat.plugins.callManager._calls;
+            var len = calls.length;
+            for (var i = 0; i < len; i++) {
+                var call = calls[i];
+                var rtcCall = call.rtcCall;
+                report.calls.push({
+                    cid: base64urlencode(rtcCall.id),
+                    chatid: base64urlencode(rtcCall.chatid),
+                    callid: base64urlencode(rtcCall.id),
+                    endReason: call.state,
+                    isJoiner: rtcCall.isJoiner ? 1 : 0
+                });
+            }
         };
 
         report.chatRoomState = chatStates;
@@ -1425,7 +1549,7 @@ function constStateToText(enumMap, state) {
 function assertStateChange(currentState, newState, allowedStatesMap, enumMap) {
     "use strict";
 
-    assert(typeof newState !== "undefined", "assertStateChange: Invalid newState");
+    assert(typeof newState !== "undefined", "assertStateChange: newState is 'undefined'");
     var checksAvailable = allowedStatesMap[currentState];
     var allowed = false;
     if (checksAvailable) {
@@ -1454,6 +1578,17 @@ function assertStateChange(currentState, newState, allowedStatesMap, enumMap) {
 function mLogout(aCallback, force) {
     "use strict";
 
+    // If user are trying logged out from paid ephemral session, warn user that they cannot get back the paid session.
+    if (isNonActivatedAccount()) {
+        msgDialog('warninga:!^' + l[78] + '!' + l[79], 'warning', l[23443], l[23444], function(response) {
+            if (!response) {
+                M.logout();
+            }
+        });
+
+        return;
+    }
+
     if (!force && mega.ui.passwordReminderDialog) {
         var passwordReminderLogout = mega.ui.passwordReminderDialog.recheckLogoutDialog();
 
@@ -1481,32 +1616,6 @@ function mLogout(aCallback, force) {
     else {
         M.logout();
     }
-}
-
-/**
- * Perform a strict logout, by removing databases
- * and cleaning sessionStorage/localStorage.
- *
- * @param {String} aUserHandle optional
- */
-function mCleanestLogout(aUserHandle) {
-    if (u_type !== 0 && u_type !== 3) {
-        throw new Error('Operation not permitted.');
-    }
-
-    mLogout(function() {
-        MegaDB.dropAllDatabases(aUserHandle)
-            .always(function(r) {
-                console.debug('mCleanestLogout', r);
-
-                localStorage.clear();
-                sessionStorage.clear();
-
-                setTimeout(function() {
-                    location.reload(true);
-                }, 7e3);
-            });
-    });
 }
 
 // Initialize Rubbish-Bin Cleaning Scheduler
@@ -1819,33 +1928,52 @@ function rand_range(a, b) {
  *
  */
 function passwordManager(form) {
+
+    'use strict';
+
+    var $form = $(form);
+
+    if ($form.length === 0) {
+        return false;
+    }
+
     if (is_chrome_firefox) {
         var creds = passwordManager.pickFormFields(form);
         if (creds) {
             mozRunAsync(mozLoginManager.saveLogin.bind(mozLoginManager, creds.usr, creds.pwd));
         }
-        $(form).find('input').val('');
+        $form.find('input').val('');
         return;
     }
     if (typeof history !== "object") {
         return false;
     }
-    $(form).rebind('submit', function() {
+    $form.rebind('submit', function() {
         setTimeout(function() {
             var path = getSitePath();
             history.replaceState({ success: true }, '', "index.html#" + document.location.hash.substr(1));
             if (hashLogic || isPublicLink(path)) {
                 path = path.replace('/', '/#');
 
-                if (is_chrome_web_ext || is_firefox_web_ext) {
-                    path = path.replace('/#', '/mega/secure.html#');
+                if (is_extension) {
+                    path = path.replace('/#', '/' + urlrootfile + '#');
                 }
             }
-            history.replaceState({ success: true, subpage: path.replace('#','').replace('/','') }, '', path);
-            $(form).find('input').val('');
+            history.replaceState({ success: true, subpage: getCleanSitePath(path) }, '', path);
+            $form.find('input').val('');
         }, 1000);
         return false;
-    }).submit();
+    });
+
+    // For trigger FF Password Manager, submit the form by making submit button and click it.
+    var submitButton = document.createElement("input");
+    submitButton.setAttribute("type", "submit");
+    submitButton.style.opacity = '0';
+
+    $form[0].appendChild(submitButton);
+
+    submitButton.click();
+
     return true;
 }
 passwordManager.knownForms = Object.freeze({
@@ -1862,33 +1990,6 @@ passwordManager.knownForms = Object.freeze({
         pwd: '#register-password'
     }
 });
-passwordManager.getStoredCredentials = function(password) {
-    // Retrieve `keypw` and `userhash` from pwd string
-    var result = null;
-
-    if (String(password).substr(0, 2) === '~:') {
-        var parts = password.substr(2).split(':');
-
-        if (parts.length === 2) {
-            try {
-                var hash = parts[1];
-                var keypw = base64_to_a32(parts[0]);
-
-                if (base64_to_a32(hash).length === 2
-                        && keypw.length === 4) {
-
-                    result = {
-                        hash: hash,
-                        keypw: keypw
-                    };
-                }
-            }
-            catch (e) {}
-        }
-    }
-
-    return result;
-};
 passwordManager.pickFormFields = function(form) {
     var result = null;
     var $form = $(form);
@@ -2086,30 +2187,26 @@ if (typeof sjcl !== 'undefined') {
         var promise = MegaPromise.resolve();
         var targets = [];
         var $shareDialog = $('.share-dialog');
-        var $newContacts;
-        var permissionLevel;
-        var iconPermLvl;
-        var permissionClass;
         var selectedNode;
+        var userEmail;
+        var permissionLevel;
 
         // Share button enabled
-        if ($.dialog === 'share' && !$shareDialog.find('.dialog-share-button').is('.disabled')) {
-
+        if ($.dialog === 'share' && !$('.done-share', $shareDialog).is('.disabled')) {
             selectedNode = $.selected[0];
-            $newContacts = $shareDialog.find('.token-input-list-mega .token-input-token-mega');
 
             // Is there a new contacts planned for addition to share
-            if ($newContacts.length) {
-
-                // Determin current group permission level
-                iconPermLvl = $shareDialog.find('.permissions-icon')[0];
-                permissionClass = checkMultiInputPermission($(iconPermLvl));
-                permissionLevel = sharedPermissionLevel(permissionClass[0]);
+            if (Object.keys($.addContactsToShare).length > 0) {
 
                 // Add new planned contact to list
-                $.each($newContacts, function(ind, val) {
-                    targets.push({u: $(val).contents().eq(1).text(), r: permissionLevel});
-                });
+                for (var i in $.addContactsToShare) {
+                    userEmail = $.addContactsToShare[i].u;
+                    permissionLevel = $.addContactsToShare[i].r;
+
+                    if (userEmail && permissionLevel !== undefined) {
+                        targets.push({u: userEmail, r: permissionLevel});
+                    }
+                }
             }
 
             closeDialog();
@@ -2134,8 +2231,8 @@ if (typeof sjcl !== 'undefined') {
             .always(function() {
                 var promises = [];
 
-                if (Object($.changedPermissions).length > 0) {
-                    promises.push(doShare($.selected[0], $.changedPermissions, true));
+                if (Object.keys($.changedPermissions).length > 0) {
+                    promises.push(doShare($.selected[0], Object.values($.changedPermissions), true));
                 }
                 promises.push(self.addContactToFolderShare());
 
@@ -2150,13 +2247,11 @@ if (typeof sjcl !== 'undefined') {
     };
 
 
-    Share.prototype.removeFromPermissionQueue = function(handleOrEmail) {
-
-        $.changedPermissions.forEach(function(value, index) {
-            if (value.u === handleOrEmail) {
-                $.changedPermissions.splice(index, 1);
-            }
-        });
+    Share.prototype.removeFromPermissionQueue = function(handle) {
+        // Remove the permission change belongs to the specific contact since got removed already
+        if ($.changedPermissions[handle]) {
+            delete $.changedPermissions[handle];
+        }
     };
 
     Share.prototype.removeContactFromShare = function() {
@@ -2164,59 +2259,70 @@ if (typeof sjcl !== 'undefined') {
         var self = this;
         var promises = [];
 
-        if (Object($.removedContactsFromShare).length > 0) {
+        if (Object.keys($.removedContactsFromShare).length > 0) {
 
-            $.removedContactsFromShare.forEach(function(elem) {
-                var userEmail = elem.userEmail;
+            Object.values($.removedContactsFromShare).forEach(function(elem) {
+                var userEmailOrHandle = elem.userEmailOrHandle;
                 var selectedNodeHandle = elem.selectedNodeHandle;
-                var handleOrEmail = elem.handleOrEmail;
+                var userHandle = elem.userHandle;
+                var step = 2;
+                var packet = null;
+                var idtag = mRandomToken('s2');
+                var promise = new MegaPromise();
+                var resolve = function() {
+                    if (!--step) {
+                        if (packet.okd && u_sharekeys[selectedNodeHandle]) {
+                            console.error('The sharekey should have been removed...');
+                        }
+                        promise.resolve(packet);
+                    }
+                };
 
-                promises.push(new MegaPromise());
+                promises.push(promise);
+                M.scAckQueue[idtag] = requesti;
+
+                // Wait for action-packet acknowledge, this is needed so that removing the last user
+                // from a share will issue an `okd` flag which removes the associated sharekey that we
+                // have to wait for *if* we're going to re-share to a different user next...
+                mBroadcaster.once('share-packet.' + idtag, function(a) {
+                    packet = a;
+                    resolve();
+                });
 
                 // The s2 api call can remove both shares and pending shares
                 api_req({
                     a: 's2',
                     n:  selectedNodeHandle,
-                    s: [{ u: userEmail, r: ''}],
+                    s: [{ u: userEmailOrHandle, r: ''}],
                     ha: '',
-                    i: requesti
+                    i: idtag
                 }, {
-                    userEmail: userEmail,
+                    userEmailOrHandle: userEmailOrHandle,
                     selectedNodeHandle: selectedNodeHandle,
-                    handleOrEmail: handleOrEmail,
-                    promise: promises[promises.length - 1],
+                    userHandle: userHandle,
 
                     callback : function(res, ctx) {
-                        var promise = ctx.promise;
 
                         if (typeof res === 'object') {
                             // FIXME: examine error codes in res.r, display error
                             // to user if needed
 
                             // If it was a user handle, the share is a full share
-                            if (M.u[ctx.handleOrEmail]) {
-                                M.delNodeShare(ctx.selectedNodeHandle, ctx.handleOrEmail);
-                                setLastInteractionWith(ctx.handleOrEmail, "0:" + unixtime());
+                            if (M.u[ctx.userHandle]) {
+                                M.delNodeShare(ctx.selectedNodeHandle, ctx.userHandle);
+                                setLastInteractionWith(ctx.userHandle, "0:" + unixtime());
 
-                                self.removeFromPermissionQueue(ctx.handleOrEmail);
+                                self.removeFromPermissionQueue(ctx.userHandle);
                             }
                             // Pending share
                             else {
-                                var pendingContactId = M.findOutgoingPendingContactIdByEmail(ctx.userEmail);
+                                var pendingContactId = M.findOutgoingPendingContactIdByEmail(ctx.userEmailOrHandle);
                                 M.deletePendingShare(ctx.selectedNodeHandle, pendingContactId);
 
-                                self.removeFromPermissionQueue(ctx.userEmail);
+                                self.removeFromPermissionQueue(pendingContactId);
                             }
 
-                            // Wait for action-packet acknowledge, this is needed so that removing the last user
-                            // from a share will issue an `okd` flag which removes the associated sharekey that we
-                            // have to wait for *if* we're going to re-share to a different user next...
-                            mBroadcaster.once('share-packet.' + ctx.selectedNodeHandle, function(packet) {
-                                if (packet.okd && u_sharekeys[ctx.selectedNodeHandle]) {
-                                    console.error('The sharekey should have been removed...');
-                                }
-                                promise.resolve(packet);
-                            });
+                            resolve();
                         }
                         else {
                             // FIXME: display error to user
@@ -2335,6 +2441,46 @@ if (typeof sjcl !== 'undefined') {
     };
 })(window);
 
+/**
+ * Transoms the numerical preferences to preferences view object
+ * @param {Number} pref     Integer value representing the preferences
+ * @returns {Object}        View preferences object
+ */
+function getFMColPrefs(pref) {
+    'use strict';
+    if (pref === undefined) {
+        return;
+    }
+    var columnsPreferences = Object.create(null);
+    columnsPreferences.fav = pref & 4;
+    columnsPreferences.label = pref & 1;
+    columnsPreferences.size = pref & 8;
+    columnsPreferences.type = pref & 64;
+    columnsPreferences.timeAd = pref & 32;
+    columnsPreferences.timeMd = pref & 16;
+    columnsPreferences.versions = pref & 2;
+
+    return columnsPreferences;
+}
+
+/**
+ * Get the number needed for bitwise operator
+ * @param {String} colName      Column name
+ * @returns {Number}            Number to be used in bitwise operator
+ */
+function getNumberColPrefs(colName) {
+    'use strict';
+    switch (colName) {
+        case 'fav': return 4;
+        case 'label': return 1;
+        case 'size': return 8;
+        case 'type': return 64;
+        case 'timeAd': return 32;
+        case 'timeMd': return 16;
+        case 'versions': return 2;
+        default: return null;
+    }
+}
 
 // Constructs an extensible hashmap-like class...
 function Hash(a, b, c, d) {
@@ -2426,162 +2572,6 @@ Hash.prototype = Object.create(null, {
     }
 });
 
-
-// this is to change pdf.viewer.js on the fly, as we cant change the original file
-function modifyPdfViewerScript(pdfViewerSrcCode) {
-    'use strict';
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('defaultFilename = \'compressed.tracemonkey - pldi - 09.pdf\';',
-        'defaultFilename = \'document.pdf\';');
-
-    var pdfImagesPath = 'PDFJS.imageResourcesPath = \'' + (is_extension ? '' : '/') + 'images/pdfV/\';';
-    var pdfWorkerPath = 'PDFJS.workerSrc = \'' + (is_extension ? '' : '/') + 'pdf.worker.js\';';
-
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('PDFJS.imageResourcesPath = \'./images/\';',
-        pdfImagesPath);
-
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('PDFJS.workerSrc = \'../build/pdf.worker.js\';',
-        pdfWorkerPath);
-
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('setTitleUsingUrl: function pdfViewSetTitleUsingUrl(url) {',
-        'setTitleUsingUrl: function pdfViewSetTitleUsingUrl(url) { return;');
-
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('var filename = getPDFFileNameFromURL(this.url);',
-        'var filename = PDFViewerApplication.appConfig.pdfDocTitile;');
-
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('var filename = pdfjsLib.getFilenameFromUrl(item.filename);',
-        'var filename = PDFViewerApplication.appConfig.pdfDocTitile;');
-
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('validateFileURL(file);',
-        ' ');
-
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('mozL10n.setLanguage(PDFJS.locale);',
-        ' ');
-
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('document.getElementsByTagName(\'html\')[0].dir = mozL10n.getDirection();',
-        ' ');
-
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('\'fileName\': getPDFFileNameFromURL(this.url),',
-        '\'fileName\': data.info.Title,');
-
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('debuggerScriptPath: \'./debugger.js\',',
-        ' ');
-
-    // algorithm to remove 'mozL10n.get'
-    var st = 5000; // start from char 50000
-
-    var getMsgFromLine = function (startPos, endPos, file) { // this method cuts the last parameter
-        var firstParam = true;
-        var secondParam = false;
-        var finalParam = false;
-        var msg = '';
-        var lastLoc = -1;
-        for (var k = startPos; k < endPos; k++) {
-            if (!finalParam) {
-                if (file.charAt(k) === ',') {
-                    if (firstParam) {
-                        firstParam = false;
-                        secondParam = true;
-                    }
-                    else if (secondParam) {
-                        secondParam = false;
-                        finalParam = true;
-                    }
-                }
-                else if (secondParam && file.charAt(k) === '{') {
-                    while (file.charAt(k) !== '}') {
-                        k++;
-                    }
-                }
-            }
-            else {
-                var counter = 0;
-                for (var h = k; h < endPos; h++) {
-                    if (file.charAt(h) === ')') {
-                        if (counter === 0) {
-                            lastLoc = h + 1;
-                            break;
-                        }
-                        else {
-                            counter--;
-                        }
-                    }
-                    else if (file.charAt(h) === '(') {
-                        counter++;
-                    }
-                    msg += file.charAt(h);
-                }
-                break;
-            }
-        }
-        return {
-            message: msg, endLocation: lastLoc
-        };
-    };
-
-    var loc = -1;
-    loc = pdfViewerSrcCode.indexOf('mozL10n.get(', st);
-    while (loc !== -1) {
-        var endPos = pdfViewerSrcCode.indexOf(';', loc);
-        var currRes = getMsgFromLine(loc, endPos, pdfViewerSrcCode);
-        pdfViewerSrcCode = pdfViewerSrcCode.substring(0, loc)
-            + currRes.message
-            + pdfViewerSrcCode.substring(currRes.endLocation, pdfViewerSrcCode.length);
-        loc = pdfViewerSrcCode.indexOf('mozL10n.get', loc + 1);
-    }
-    // end algorithm to remove 'mozL10n.get'
-
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('items.numPages.textContent =  \'of {{pagesCount}}\'',
-        'items.numPages.textContent = \'of \' + pagesCount');
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('items.numPages.textContent =  \'({{pageNumber}} of {{pagesCount}})\'',
-        'items.numPages.textContent = pageNumber + \' of \' + pagesCount');
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('return  \'{{date}}, {{time}}\'',
-        'return dateString + \',\' + timeString');
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('items.customScaleOption.textContent =  \'{{scale}}%\'',
-        'items.customScaleOption.textContent = customScale + \' %\'');
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('return  \'{{size_kb}} KB ({{size_b}} bytes)\'',
-        'return kb + \' KB (\' + fileSize + \' bytes)\'');
-    pdfViewerSrcCode = pdfViewerSrcCode
-        .replace('return  \'{{size_mb}} MB ({{size_b}} bytes)\'',
-        'return (kb / 1024) + \' MB (\' + fileSize + \' bytes)\'');
-
-    var finalFunctionOnViewLoad = 'function webViewerLoad() { '
-        + 'var config = getViewerConfiguration(); '
-        + 'var pdfRef = JSON.parse(localStorage.getItem(\'currPdfPrev2\')); '
-        + 'localStorage.removeItem(\'currPdfPrev2\'); '
-        + 'config.pdfDocTitile = localStorage.getItem(\'pdfPrevTitle\'); '
-        + 'localStorage.removeItem(\'pdfPrevTitle\'); '
-        + 'config.defaultUrl = pdfRef; '
-        + 'config.toolbar.openFile.setAttribute(\'hidden\', \'true\'); '
-        + 'config.secondaryToolbar.openFileButton.setAttribute(\'hidden\', \'true\'); '
-        + 'window.PDFViewerApplication = pdfjsWebApp.PDFViewerApplication; '
-        + 'pdfjsWebApp.PDFViewerApplication.run(config);} '
-        + 'document.addEventListener(\'DOMContentLoaded\', webViewerLoad, true); '
-        + '}) ]);';
-
-    var placeToCut = pdfViewerSrcCode.indexOf('function webViewerLoad() {');
-    pdfViewerSrcCode = pdfViewerSrcCode.substring(0, placeToCut);
-
-    pdfViewerSrcCode += finalFunctionOnViewLoad;
-
-    return pdfViewerSrcCode;
-}
-
 function invalidLinkError() {
     'use strict';
     loadingDialog.hide();
@@ -2603,75 +2593,375 @@ function invalidLinkError() {
     }
 }
 
-/* jshint -W098 */
-
 /**
- * Classifies the strength of the password (used on the main Registration, Reset password (key or park) pages and
- * in the Pro Register dialog.
+ * Classifies the strength of the password (Mainly used on the MegaInputs)
+ * ZXCVBN library need to be inited before executing this function.
+ * The minimum allowed strength is 8 characters in length and password score of 1 (weak).
  * @param {String} password The user's password (should be trimmed for whitespace beforehand)
  */
 function classifyPassword(password) {
 
     'use strict';
 
+    if (typeof zxcvbn !== 'function') {
+        console.error('zxcvbn is not inited');
+        return false;
+    }
+
     // Calculate the password score using the ZXCVBN library and its length
+    password = $.trim(password);
     var passwordScore = zxcvbn(password).score;
     var passwordLength = password.length;
-    var $passStatus = $('.account.password-stutus');
-    var className = '';
-    var string1 = '';
-    var string2 = '';
-    var strongWeak = '';
+    var result = {};
 
-    if (passwordLength < security.minPasswordLength) {
-        string1 = l[18700];
-        string2 = l[18701];
-        className = 'good1';
-        strongWeak = 'strong-password';
+    if (passwordLength === 0) {
+        return false;
+    }
+    else if (passwordLength < security.minPasswordLength) {
+        result = {
+            string1: l[18700],
+            string2: l[18701],                      // Your password needs to be at least 8 characters long
+            className: 'good1',                     // Very weak
+            statusClass: 'insufficient-strength'
+        };
     }
     else if (passwordScore === 4) {
-        string1 = l[1128];
-        string2 = l[1123];
-        className = 'good5';
-        strongWeak = 'strong-password';
+        result = {
+            string1: l[1128],
+            string2: l[1123],
+            className: 'good5',                     // Strong
+            statusClass: 'meets-minimum-strength'
+        };
     }
     else if (passwordScore === 3) {
-        string1 = l[1127];
-        string2 = l[1122];
-        className = 'good4';
+        result = {
+            string1: l[1127],
+            string2: l[1122],
+            className: 'good4',                     // Good
+            statusClass: 'meets-minimum-strength'
+        };
     }
     else if (passwordScore === 2) {
-        string1 = l[1126];
-        string2 = l[1121];
-        className = 'good3';
-        strongWeak = 'weak-password';
+        result = {
+            string1: l[1126],
+            string2: l[1121],
+            className: 'good3',                     // Medium
+            statusClass: 'meets-minimum-strength'
+        };
     }
     else if (passwordScore === 1) {
-        string1 = l[1125];
-        string2 = l[1120];
-        className = 'good2';
-        strongWeak = 'weak-password';
+        result = {
+            string1: l[1125],
+            string2: l[1120],
+            className: 'good2',                     // Weak
+            statusClass: 'meets-minimum-strength'
+        };
     }
     else {
-        string1 = l[1124];
-        string2 = l[1119];
-        className = 'good1';
-        strongWeak = 'weak-password';
+        result = {
+            string1: l[1124],
+            string2: l[1119],
+            className: 'good1',                     // Very weak
+            statusClass: 'insufficient-strength'
+        };
     }
 
-    if ($('.login-register-input.password').length) {
-        $('.login-register-input.password').addClass(strongWeak);
-        $('.new-registration').addClass(className);
-        $('.new-reg-status-pad').safeHTML('<strong>@@</strong> @@', l[1105], string1);   // Too short
-        $('.new-reg-status-description').text(string2);
-    }
-    else if ($passStatus.length) {
-        $passStatus.addClass(className + ' checked').text(string1);
-    }
-
-    $('.password-status-warning')
-        .safeHTML('<span class="password-warning-txt">@@</span> ' +
-            '@@<div class="password-tooltip-arrow"></div>', l[34], l[1129]);
-    $('.password-status-warning').css('margin-left', ($('.password-status-warning').width() / 2 * -1) - 13);
+    return result;
 }
-/* jshint +W098 */
+
+/**
+ * A function to get the last day of the month
+ * @param {Date} dateObj        The Date for which to return the last day of the month
+ * @returns {Date}              the result date object with the last day of the month
+ */
+function getLastDayofTheMonth(dateObj) {
+    "use strict";
+    if (!dateObj) {
+        return null;
+    }
+
+    var day;
+    var month = dateObj.getUTCMonth();
+    var year = dateObj.getUTCFullYear();
+    if ([0, 2, 4, 6, 7, 9, 11].indexOf(month) >= 0) {
+        day = 31;
+    }
+    else if (month === 1) {
+        if (year % 4 !== 0) {
+            day = 28;
+        }
+        else if (year % 100 !== 0) {
+            day = 29;
+        }
+        else if (year % 400 !== 0) {
+            day = 28;
+        }
+        else {
+            day = 29;
+        }
+    }
+    else {
+        day = 30;
+    }
+    return new Date(year, month, day);
+}
+
+/**
+ * Block Chrome Password manager for password field with attribute `autocomplete="new-password"`
+ */
+function blockChromePasswordManager() {
+
+    "use strict";
+
+    if (window.chrome) {
+        var $newPasswordField = $('input[type="password"][autocomplete="new-password"]');
+        var switchReadonly = function __switchReadonly(input) {
+
+            input.setAttribute('readonly', true);
+            onIdle(function() {
+                input.removeAttribute('readonly');
+            });
+        };
+
+        $newPasswordField.rebind('focus.blockAutofill, mousedown.blockAutofill', function() {
+            switchReadonly(this);
+        });
+
+        // For prevent last chracter deletion pops up password manager
+        $newPasswordField.rebind('keydown.blockAutofill', function(e) {
+
+            if ((e.keyCode === 8 &&
+                ((this.selectionStart === 1 && this.selectionEnd === 1) ||
+                (this.selectionStart === 0 && this.selectionEnd === this.value.length))) ||
+                (e.keyCode === 46 &&
+                ((this.selectionStart === 0 && this.selectionEnd === 0 && this.value.length === 1) ||
+                (this.selectionStart === 0 && this.selectionEnd === this.value.length)))) {
+                e.preventDefault();
+                this.value = '';
+            }
+        });
+    }
+}
+
+/**
+ * Attach the download file link handler
+ * Use in /sync and /cmd
+ * @param $links
+ */
+/*exported registerLinuxDownloadButton */
+function registerLinuxDownloadButton($links) {
+    'use strict';
+    $links.rebind('click', function() {
+        var $link = $(this);
+        if (!$link.hasClass('disabled') && $link.attr('data-link')) {
+            window.location = $link.attr('data-link');
+        }
+        return false;
+    });
+}
+/* eslint-disable complexity */
+/**
+ * Function that takes users attributes, then prepare content texts of ODQ paywall dialog
+ * @param {Object} user_attr        u_attr or {}
+ * @param {Object} accountData      M.account, caller must populate then pass
+ * @returns {Object}                contains {dialogText, dlgFooterText,fmBannerText}
+ */
+function odqPaywallDialogTexts(user_attr, accountData) {
+    'use strict';
+
+    var dialogText = l[23525];
+    var dlgFooterText = l[23524];
+    var fmBannerText = l[23534];
+
+    if (user_attr.uspw) {
+        if (user_attr.uspw.dl) {
+            var deadline = new Date(user_attr.uspw.dl * 1000);
+            var currDate = new Date();
+            var remainDays = Math.floor((deadline - currDate) / 864e5);
+            var remainHours = Math.floor((deadline - currDate) / 36e5);
+
+            if (remainDays > 0) {
+                dlgFooterText = remainDays > 1 ? l[23521].replace('%1', remainDays) : l[23522];
+                fmBannerText = remainDays > 1 ? l[23532].replace('%1', remainDays) : l[23533];
+            }
+            else if (remainDays === 0 && remainHours > 0) {
+                dlgFooterText = l[23523].replace('%1', remainHours);
+            }
+        }
+        if (user_attr.uspw.wts && user_attr.uspw.wts.length) {
+            dialogText = l[23520];
+            if (user_attr.uspw.wts.length === 1) {
+                dialogText = l[23530];
+                dialogText = dialogText.replace('%2', time2date(user_attr.uspw.wts[0], 1));
+            }
+            if (user_attr.uspw.wts.length === 2) {
+                dialogText = dialogText.replace('%2', time2date(user_attr.uspw.wts[0], 1)).replace('%3', '')
+                    .replace('%4', time2date(user_attr.uspw.wts[1], 1));
+            }
+            else if (user_attr.uspw.wts.length === 3) {
+                dialogText = dialogText.replace('%2', time2date(user_attr.uspw.wts[0], 1))
+                    .replace('%3', time2date(user_attr.uspw.wts[1], 1))
+                    .replace('%4', time2date(user_attr.uspw.wts[2], 1));
+            }
+            else {
+                // more than 3
+                var datesString = time2date(user_attr.uspw.wts[1], 1);
+                for (var k = 2; k < user_attr.uspw.wts.length - 1; k++) {
+                    datesString += ', ' + time2date(user_attr.uspw.wts[k], 1);
+                }
+
+                dialogText = dialogText.replace('%2', time2date(user_attr.uspw.wts[0], 1))
+                    .replace('%3', datesString)
+                    .replace('%4', time2date(user_attr.uspw.wts[user_attr.uspw.wts.length - 1], 1));
+            }
+        }
+    }
+
+    var filesText = l[23253]; // 0 files
+    var totalFiles = accountData.stats[M.RootID].files +
+        (accountData.stats[M.RubbishID] ? accountData.stats[M.RubbishID].files : 0) +
+        (accountData.stats[M.InboxID] ? accountData.stats[M.InboxID].files : 0);
+    if (totalFiles === 1) {
+        filesText = l[835];
+    }
+    else if (totalFiles > 1) {
+        filesText = l[833].replace('[X]', totalFiles);
+    }
+
+    dialogText = dialogText.replace('%1', user_attr.email || ' ');
+    dialogText = dialogText.replace('%6', bytesToSize(accountData.space_used))
+        .replace('%5', filesText);
+
+    // In here, it's guaranteed that we have pro.membershipPlans,
+    // but we will check for error free logic in case of changes
+    var minPlanId = -1;
+    var neededPro = 4;
+    if (pro.membershipPlans && pro.membershipPlans.length) {
+        var spaceUsedGB = accountData.space_used / 1073741824; // = 1024*1024*1024
+        var minPlan = 9000000;
+        for (var h = 0; h < pro.membershipPlans.length; h++) {
+            if (pro.membershipPlans[h][4] === 1 && pro.membershipPlans[h][2] > spaceUsedGB &&
+                pro.membershipPlans[h][2] < minPlan) {
+                minPlan = pro.membershipPlans[h][2];
+                minPlanId = pro.membershipPlans[h][1];
+            }
+        }
+    }
+    if (minPlanId === -1) {
+        // weirdly, we dont have plans loaded, or no plan matched the storage.
+        if (user_attr.p) {
+            neededPro = user_attr.p + 1;
+            if (neededPro === 3) {
+                neededPro = 100;
+            }
+            else if (neededPro === 5) {
+                neededPro = 1;
+            }
+        }
+    }
+    else {
+        neededPro = minPlanId;
+    }
+
+    dialogText = dialogText.replace('%7', pro.getProPlanName(neededPro));
+
+    return {
+        dialogText: dialogText,
+        dlgFooterText: dlgFooterText,
+        fmBannerText: fmBannerText
+    };
+}
+
+
+function getTaxName(countryCode) {
+    'use strict';
+    switch (countryCode) {
+        case "AT": return "USt";
+        case "BE": return "TVA";
+        case "HR": return "PDV";
+        case "CZ": return "DPH";
+        case "DK": return "moms";
+        case "EE": return "km";
+        case "FI": return "ALV";
+        case "FR": return "TVA";
+        case "DE": return "USt";
+        case "HU": return "AFA";
+        case "IT": return "IVA";
+        case "LV": return "PVN";
+        case "LT": return "PVM";
+        case "LU": return "TVA";
+        case "NL": return "BTW";
+        case "PL": return "PTU";
+        case "PT": return "IVA";
+        case "RO": return "TVA";
+        case "SK": return "DPH";
+        case "SI": return "DDV";
+        case "SE": return "MOMS";
+        case "AL": return "TVSH";
+        case "AD": return "IGI";
+        case "AR": return "IVA";
+        case "AM": return "AAH";
+        case "AU": return "GST";
+        case "BO": return "IVA";
+        case "BA": return "PDV";
+        case "BR": return "ICMS";
+        case "CA": return "GST";
+        case "CL": return "IVA";
+        case "CO": return "IVA";
+        case "DO": return "ITBIS";
+        case "EC": return "IVA";
+        case "SV": return "IVA";
+        case "FO": return "MVG";
+        case "GT": return "IVA";
+        case "IS": return "VSK";
+        case "ID": return "PPN";
+        case "JE": return "GST";
+        case "JO": return "GST";
+        case "LB": return "TVA";
+        case "LI": return "MWST";
+        case "MK": return "DDV";
+        case "MY": return "GST";
+        case "MV": return "GST";
+        case "MX": return "IVA";
+        case "MD": return "TVA";
+        case "MC": return "TVA";
+        case "ME": return "PDV";
+        case "MA": return "GST";
+        case "NZ": return "GST";
+        case "NO": return "MVA";
+        case "PK": return "GST";
+        case "PA": return "ITBMS";
+        case "PY": return "IVA";
+        case "PE": return "IGV";
+        case "PH": return "RVAT";
+        case "RU": return "NDS";
+        case "SG": return "GST";
+        case "CH": return "MWST";
+        case "TN": return "TVA";
+        case "TR": return "KDV";
+        case "UA": return "PDV";
+        case "UY": return "IVA";
+        case "UZ": return "QQS";
+        case "VN": return "GTGT";
+        case "VE": return "IVA";
+        case "ES": return "NIF";
+
+        default: return "VAT";
+    }
+}
+/* eslint-enable complexity */
+
+/**
+ * Validate entered address is on correct structure, if there is more type of bitcoin structure please update.
+ * Reference - https://stackoverflow.com/a/59756959
+ * Use in Referral program redemption
+ * @param {String} address Bitcoin address
+ *
+ * @returns {Boolean} result Validity of entered address
+ */
+function validateBitcoinAddress(address) {
+
+    'use strict';
+
+    return address.match(/(^[13][\1-9A-HJ-NP-Za-km-z]{25,34}$)|(^(bc1)[\dA-HJ-NP-Za-z]{8,87}$)/) === null;
+}

@@ -1,5 +1,6 @@
+// jscs:disable validateIndentation
 (function(scope) {
-    'use strict'; // jscs:disable validateIndentation
+'use strict';
 
 /**
  * Manages RTC <-> MegChat logic and mapping to UI
@@ -10,6 +11,12 @@
  */
 var CallManager = function (megaChat) {
     var self = this;
+
+    if (anonymouschat) {
+        return;
+    }
+
+
     self.logger = MegaLogger.getLogger("callManager", {}, megaChat.logger);
 
     self.megaChat = megaChat;
@@ -32,7 +39,17 @@ var CallManager = function (megaChat) {
                 megaChat.options.rtc.iceServers
             );
 
-            self._attachToChat(megaChat);
+            megaChat.rtc.statsUrl = "https://stats.karere.mega.nz";
+
+            if (d) {
+                megaChat.rebind("onRoomDestroy.callManager", function(e, chatRoom) {
+                    CallManager.assert(chatRoom.type, 'missing room type');
+                });
+
+                megaChat.rebind("onRoomInitialized.chatStore", function(e, chatRoom) {
+                    CallManager.assert(chatRoom.type, 'missing room type');
+                });
+            }
         }
         catch (exc) {
             // no RTC support.
@@ -63,87 +80,104 @@ CallManager.CALL_END_REMOTE_REASON = {
     "CANCELED": 0x05
 };
 
-/**
- * Entry point, for attaching the chat store to a specific `Chat` instance
- *
- * @param megaChat
- */
-CallManager.prototype._attachToChat = function (megaChat) {
-    megaChat.rtc.statsUrl = "https://stats.karere.mega.nz/stats";
+function makeStreamId(rtcSess) {
+    return base64urlencode(rtcSess.peer) +
+        ":" + base64urlencode(rtcSess.peerClient) +
+        ":" + base64urlencode(rtcSess.sid);
+}
 
-    megaChat.rebind("onRoomDestroy.callManager", function(e, chatRoom) {
-        CallManager.assert(chatRoom.type, 'missing room type');
-    });
-
-    megaChat.rebind("onRoomInitialized.chatStore", function(e, chatRoom) {
-        CallManager.assert(chatRoom.type, 'missing room type');
-    });
-};
-
-/**
- * Suggested by Alex, a simple regexp to detect and find ALL 'reason's for a call failed reasons.
- **/
-CallManager._isAFailedReason = function (reason) {
-    if (!reason || !reason.match) {
-        return false;
-    }
-    return reason.match(/.*(ice-disconnect|fail|error|security|timeout|xmpp-disconnect).*/) ? 1 : 0;
-};
-
-CallManager._proxyCallTo = function (prototype, listName, fnName, subpropName) {
-    prototype[fnName] = function () {
-        var args = toArray.apply(null, arguments);
-        var targetObj = args.shift();
-        if (targetObj instanceof jQuery.Event) {
-            // if called via local .trigger(...)
-            var event = targetObj;
-            targetObj = args.shift();
-            args.unshift(event);
-            return targetObj[fnName].apply(targetObj, args);
-        }
-
-        var self = this;
-        for (var i = 0; i < self[listName].length; i++) {
-            if (subpropName) {
-                if (self[listName][i][fnName] && self[listName][i][subpropName] === targetObj) {
-                    return self[listName][i][fnName].apply(self[listName][i], args);
-                }
-            }
-            else {
-                if (self[listName][i][fnName] && self[listName][i] === targetObj) {
-                    return self[listName][i].apply(self[listName][i], args);
-                }
-            }
-        }
-        if (d) {
-            console.warn("Could not find:", fnName, 'on', prototype, 'called with: ', arguments);
-        }
-    };
-};
-
-CallManager._proxyCallTo(CallManager.prototype, '_calls', 'onDestroy', 'rtcCall');
-CallManager._proxyCallTo(CallManager.prototype, '_calls', 'onRemoteStreamAdded', 'rtcCall');
-CallManager._proxyCallTo(CallManager.prototype, '_calls', 'onRemoteStreamRemoved', 'rtcCall');
-CallManager._proxyCallTo(CallManager.prototype, '_calls', 'onRemoteMute', 'rtcCall');
-CallManager._proxyCallTo(CallManager.prototype, '_calls', 'onLocalMute', 'rtcCall');
-CallManager._proxyCallTo(CallManager.prototype, '_calls', 'onCallStarted', 'rtcCall');
-CallManager._proxyCallTo(CallManager.prototype, '_calls', 'onCallStarting', 'rtcCall');
-
-CallManager.prototype.registerCall = function (chatRoom, rtcCall) {
+CallManager.prototype.registerCall = function (chatRoom, rtcCall, fromUser) {
     var self = this;
-    var callManagerCall = new CallManagerCall(chatRoom, rtcCall);
+    var callManagerCall = new CallManagerCall(chatRoom, rtcCall, fromUser);
     self._calls.push(callManagerCall);
+    $('.camera-access').addClass('hidden');
     return callManagerCall;
 };
 
 
 CallManager.prototype.startCall = function (chatRoom, mediaOptions) {
     var self = this;
+    if (chatRoom._callSetupPromise) {
+        return chatRoom._callSetupPromise;
+    }
+    chatRoom.megaChat.closeChatPopups();
 
-    // if (chatRoom.callManagerCall && !chatRoom.callManagerCall.isTerminated()) {
-    //     chatRoom.callManagerCall.endCall('other');
-    // }
+    var participants = chatRoom.getParticipantsExceptMe();
+    CallManager.assert(participants.length > 0, "No participants.");
 
+    if (!chatRoom.megaChat.rtc) {
+        if (chatRoom.megaChat.rtcError && chatRoom.megaChat.rtcError instanceof RtcModule.NotSupportedError) {
+            msgDialog('warninga', 'Error', l[7211]);
+        }
+        else {
+            var errorMsg = chatRoom.megaChat.rtcError ?
+                chatRoom.megaChat.rtcError.toString() + "\n" + chatRoom.megaChat.rtcError.stack
+                : l[1679];
+            msgDialog('warninga', 'Error', l[1657] + ":\n" + errorMsg + "\n" + errorMsg);
+        }
+        return;
+    }
+    var $masterPromise = chatRoom._callSetupPromise = new MegaPromise();
+    var $promise = chatRoom._retrieveTurnServerFromLoadBalancer(4000);
+
+    $promise.always(function () {
+        var callManagerCall;
+        var callObj = chatRoom.megaChat.rtc.startCall(
+            chatRoom.chatIdBin,
+            Av.fromMediaOptions(mediaOptions),
+            // instead of a handler, a factory function can be passed here to avoid creating
+            // a handler before a call exists. The factory function will be called immediately
+            // after the call object is created (and only if one is actually created, i.e. if startCall()
+            // doesn't fail).
+            function(call) {
+                callManagerCall = self.registerCall(chatRoom, call);
+                return callManagerCall;
+            }
+        );
+        delete chatRoom._callSetupPromise;
+        if (!callObj) {
+            // call already starte/dup call.
+            $masterPromise.reject();
+            return;
+        }
+        assert(callManagerCall && callManagerCall.rtcCall);
+        callManagerCall.setState(CallManagerCall.STATE.WAITING_RESPONSE_OUTGOING);
+
+        chatRoom.trigger('onOutgoingCall', [callManagerCall, mediaOptions]);
+
+        chatRoom.appendMessage(
+            new ChatDialogMessage({
+                messageId: 'outgoing-call-' + callManagerCall.id,
+                type: 'outgoing-call',
+                showInitiatorAvatar: chatRoom.type === "group" || chatRoom.type === "public",
+                authorContact: M.u[u_handle],
+                delay: unixtime(),
+                persist: false,
+                buttons: {
+                    'reject': {
+                        'type': 'secondary',
+                        'classes': 'default-white-button small-text left red',
+                        'text': l[1686],
+                        'callback': function () {
+                            if (callManagerCall) {
+                                callManagerCall.endCall('caller');
+                            }
+                        }
+                    }
+                }
+            })
+        );
+
+
+        self.trigger('WaitingResponseOutgoing', [callManagerCall, mediaOptions]);
+        $masterPromise.resolve(callManagerCall);
+    });
+
+    return $masterPromise;
+};
+
+CallManager.prototype.joinCall = function (chatRoom, mediaOptions) {
+    var self = this;
     var $masterPromise = new MegaPromise();
 
     chatRoom.megaChat.closeChatPopups();
@@ -167,56 +201,33 @@ CallManager.prototype.startCall = function (chatRoom, mediaOptions) {
     var $promise = chatRoom._retrieveTurnServerFromLoadBalancer(4000);
 
     $promise.always(function () {
-        var callEventHandler = new RtcCallEventHandler(chatRoom);
-        var callObj = chatRoom.megaChat.rtc.startCall(
+        var callManagerCall;
+        var callObj = chatRoom.megaChat.rtc.joinCall(
             chatRoom.chatIdBin,
             Av.fromMediaOptions(mediaOptions),
-            callEventHandler
+            function(call) {
+                callManagerCall = self.registerCall(chatRoom, call);
+                return callManagerCall;
+            }
         );
         if (!callObj) {
             // call already starte/dup call.
             $masterPromise.reject();
             return;
         }
-        callEventHandler.call = callObj;
-        var callManagerCall = self.registerCall(chatRoom, callObj);
+        assert(callManagerCall && callManagerCall.rtcCall);
+        callManagerCall.setState(CallManagerCall.STATE.STARTING);
 
-        chatRoom._resetCallStateInCall();
+        chatRoom.trigger('onCallStarting', [callManagerCall, mediaOptions]);
 
-        callManagerCall.setState(CallManagerCall.STATE.WAITING_RESPONSE_OUTGOING);
-
-        chatRoom.trigger('onOutgoingCall', [callManagerCall, mediaOptions]);
-
-        chatRoom.appendMessage(
-            new ChatDialogMessage({
-                messageId: 'outgoing-call-' + callManagerCall.id,
-                type: 'outgoing-call',
-                authorContact: M.u[participants[0]],
-                delay: unixtime(),
-                persist: false,
-                buttons: {
-                    'reject': {
-                        'type': 'secondary',
-                        'classes': 'default-white-button small-text left red',
-                        'text': l[1686],
-                        'callback': function () {
-                            if (callManagerCall) {
-                                callManagerCall.endCall('caller');
-                            }
-                        }
-                    }
-                }
-            })
-        );
-
-
-        self.trigger('WaitingResponseOutgoing', [callManagerCall, mediaOptions]);
+        self.trigger('CallStarting', [callManagerCall, mediaOptions]);
         $masterPromise.resolve(callManagerCall);
 
     });
 
     return $masterPromise;
 };
+
 
 (function () { // used to make the _origTrigger a private var.
     var _origTrigger = CallManager.prototype.trigger;
@@ -269,62 +280,189 @@ CallManager.prototype.forEachCallManagerCall = function (cb) {
 };
 
 /**
+ * Private method for handling multi string text contents for messages in private rooms
+ * @param message {Message}
+ * @param otherContactsName {Array}
+ * @param contact {Object}
+ * @param textMessage {String}
+ * @returns {String}
+ * @private
+ */
+CallManager._getMultiStringTextContentsForMessagePrivate = function(message, otherContactsName, contact, textMessage) {
+    var tmpMsg = "";
+    if (!$.isArray(textMessage[0])) {
+        tmpMsg = textMessage[0].replace("[X]", "%s");
+        tmpMsg = mega.utils.trans.listToString(otherContactsName, tmpMsg);
+    }
+    else {
+        if (contact.u === u_handle) {
+            tmpMsg = textMessage[0][0].replace("[X]", otherContactsName[0] || "");
+        }
+        else {
+            tmpMsg = textMessage[0][1].replace("[X]", "%s");
+            tmpMsg = mega.utils.trans.listToString(otherContactsName, tmpMsg);
+        }
+    }
+
+    // append duration, if available in the meta
+    if (
+        message.meta && message.meta.duration &&
+        (
+            message.type === "call-ended" ||
+            message.dialogType === "remoteCallEnded" ||
+            message.type === "call-failed"
+        )
+    ) {
+        tmpMsg += " " + l[7208].replace("[X]", "[[" + secToDuration(message.meta.duration) + "]]");
+    }
+    return tmpMsg;
+};
+
+/**
+ * Private method for handling multi string text contents for messages in group rooms
+ * @param message {Message}
+ * @param otherContactsName {Array}
+ * @param textMessage {String}
+ * @param contactName {String}
+ * @param contact {Object}
+ * @returns {String}
+ * @private
+ */
+CallManager._getMultiStringTextContentsForMessageGroup = function(
+    message,
+    otherContactsName,
+    textMessage,
+    contactName,
+    contact
+) {
+    var tmpMsg = "";
+    if (message.type === "call-handled-elsewhere") {
+        otherContactsName = [contactName];
+    }
+    if (message.type === "incoming-call") {
+        tmpMsg = textMessage[0].replace("%s", contactName);
+    }
+    else if (message.type === "call-started") {
+        tmpMsg = textMessage[0].replace("%s", contactName);
+    }
+    else if (!$.isArray(textMessage[0])) {
+        tmpMsg = textMessage[0].replace("[X]", "%s");
+        tmpMsg = mega.utils.trans.listToString(otherContactsName, tmpMsg);
+    }
+    else {
+        if (contact.u === u_handle) {
+            tmpMsg = mega.utils.trans.listToString(otherContactsName, textMessage[0][0]);
+        }
+        else {
+            tmpMsg = mega.utils.trans.listToString(otherContactsName, textMessage[0][1]);
+        }
+    }
+    return tmpMsg;
+};
+
+/**
  * To be used internally by Message._getTextContentsForDialogType
  * @param message {Message|ChatDialogMessage}
  * @param textMessage {String}
  * @param [html] {boolean} pass true to return (eventually) HTML formatted messages
+ * @param [participants] {Array} optional list of handles to use for this message
  */
-CallManager._getMultiStringTextContentsForMessage = function(message, textMessage, html) {
+CallManager._getMultiStringTextContentsForMessage = function(message, textMessage, html, participants) {
     var tmpMsg;
     var contact = Message.getContactForMessage(message);
     var contactName = "";
     if (contact) {
         contactName = htmlentities(M.getNameByHandle(contact.u));
     }
-    var otherContactName = "";
-    if (message.chatRoom && message.chatRoom.type === "private") {
-        // TODO: group calls?
-        var otherContact = message.chatRoom.getParticipantsExceptMe()[0];
-        if (otherContact) {
-            otherContactName = htmlentities(M.getNameByHandle(otherContact));
-        }
-    }
-    else {
-        console.error("TBD.");
+
+    if (!participants && message.meta && message.meta.participants && message.meta.participants.length > 0) {
+        participants = message.meta.participants;
     }
 
-    if (!$.isArray(textMessage[0])) {
-        tmpMsg = textMessage[0].replace("[X]", contactName);
-        tmpMsg = tmpMsg.replace("%s", contactName);
-    }
-    else {
-        if (contact.u === u_handle) {
-            tmpMsg = textMessage[0][0].replace("[X]", otherContactName);
+    var otherContactsName = [];
+    if (message.chatRoom) {
+        (participants || message.chatRoom.getParticipantsExceptMe()).forEach(function(handle) {
+            if (handle !== u_handle) {
+                var name = htmlentities(M.getNameByHandle(handle));
+                if (name) {
+                    otherContactsName.push(name);
+                }
+            }
+        });
+        if (!otherContactsName || otherContactsName.length === 0) {
+            if (participants) {
+                message.chatRoom.getParticipantsExceptMe().forEach(function(handle) {
+                    if (handle !== u_handle) {
+                        var name = htmlentities(M.getNameByHandle(handle));
+                        if (name) {
+                            otherContactsName.push(name);
+                        }
+                    }
+                });
+            }
+            if (!otherContactsName || otherContactsName.length === 0) {
+                // this should never happen, but in case it does... e.g. a room where I'm the only one left, but had
+                // a call recorded with no participants passed in the meta
+                otherContactsName.push(l[7381]);
+            }
         }
-        else {
-            tmpMsg = textMessage[0][1].replace("[X]", contactName);
-        }
-        tmpMsg = tmpMsg.replace("%s", contactName);
     }
 
-    if (message.currentCallCounter) {
-        tmpMsg += " " +
-            textMessage[1].replace("[X]", "[[ " + secToDuration(message.currentCallCounter)) + "]] ";
+
+    if (message.chatRoom.type === "private") {
+        tmpMsg = CallManager._getMultiStringTextContentsForMessagePrivate(
+            message,
+            otherContactsName,
+            contact,
+            textMessage
+        );
+    }
+    else {
+        tmpMsg = CallManager._getMultiStringTextContentsForMessageGroup(
+            message,
+            otherContactsName,
+            textMessage,
+            contactName,
+            contact
+        );
     }
 
     textMessage = tmpMsg;
-    if (!html) {
-        textMessage = textMessage
-            .replace("[[ ", " ")
-            .replace("]]", "");
-    }
-    else {
-        textMessage = textMessage
-            .replace("[[ ", "<span className=\"grey-color\">")
-            .replace("]]", "</span>");
-    }
+
+    textMessage = textMessage
+        .replace("[[", " ")
+        .replace("]]", "");
 
     return textMessage;
+};
+
+CallManager.prototype.remoteStartedCallToDialogMsg = function(chatRoom, msgInstance) {
+    var result = false;
+    var meta = msgInstance.meta;
+    var authorContact = M.u[meta.userId];
+    var delay = msgInstance.delay;
+    var msgId;
+    var type;
+    var cssClasses = [];
+    var currentCallCounter;
+
+    msgId = 'call-started-' + msgInstance.messageId;
+    type = "call-started";
+    cssClasses = ['fm-chat-call-started'];
+    currentCallCounter = meta.duration;
+
+    result = new ChatDialogMessage({
+        messageId: msgId,
+        type: type,
+        showInitiatorAvatar: chatRoom.type === "group" || chatRoom.type === "public",
+        authorContact: authorContact,
+        delay: delay,
+        cssClasses: cssClasses,
+        currentCallCounter: currentCallCounter,
+        meta: meta
+    });
+
+    return result;
 };
 
 CallManager.prototype.remoteEndCallToDialogMsg = function(chatRoom, msgInstance) {
@@ -354,6 +492,7 @@ CallManager.prototype.remoteEndCallToDialogMsg = function(chatRoom, msgInstance)
             messageId: msgId,
             type: type,
             authorContact: authorContact,
+            showInitiatorAvatar: chatRoom.type === "group" || chatRoom.type === "public",
             delay: delay,
             cssClasses: cssClasses,
             currentCallCounter: currentCallCounter,
@@ -365,24 +504,39 @@ CallManager.prototype.remoteEndCallToDialogMsg = function(chatRoom, msgInstance)
             messageId: 'call-rejected-' + msgInstance.messageId,
             type: 'call-rejected',
             authorContact: authorContact,
+            showInitiatorAvatar: chatRoom.type === "group" || chatRoom.type === "public",
             delay: delay,
             meta: meta
         });
     }
     else if (meta.reason === CallManager.CALL_END_REMOTE_REASON.CANCELED) {
-        result = new ChatDialogMessage({
-            messageId: 'call-canceled-' + msgInstance.messageId,
-            type: 'call-canceled',
-            authorContact: authorContact,
-            delay: delay,
-            meta: meta
-        });
+        if (authorContact && authorContact.u === u_handle) {
+            result = new ChatDialogMessage({
+                messageId: 'call-canceled-' + msgInstance.messageId,
+                type: 'call-canceled',
+                authorContact: authorContact,
+                showInitiatorAvatar: chatRoom.type === "group" || chatRoom.type === "public",
+                delay: delay,
+                meta: meta
+            });
+        }
+        else {
+            result = new ChatDialogMessage({
+                messageId: 'call-missed-' + msgInstance.messageId,
+                type: 'call-missed',
+                authorContact: authorContact,
+                showInitiatorAvatar: chatRoom.type === "group" || chatRoom.type === "public",
+                delay: delay,
+                meta: meta
+            });
+        }
     }
     else if (meta.reason === CallManager.CALL_END_REMOTE_REASON.NO_ANSWER && authorContact.u !== u_handle) {
         result = new ChatDialogMessage({
             messageId: 'call-missed-' + msgInstance.messageId,
             type: 'call-missed',
             authorContact: authorContact,
+            showInitiatorAvatar: chatRoom.type === "group" || chatRoom.type === "public",
             delay: delay,
             meta: meta
         });
@@ -392,18 +546,32 @@ CallManager.prototype.remoteEndCallToDialogMsg = function(chatRoom, msgInstance)
             messageId: 'call-timeout-' + msgInstance.messageId,
             type: 'call-timeout',
             authorContact: authorContact,
+            showInitiatorAvatar: chatRoom.type === "group" || chatRoom.type === "public",
             delay: delay,
             meta: meta
         });
     }
     else if (meta.reason === CallManager.CALL_END_REMOTE_REASON.FAILED) {
-        result = new ChatDialogMessage({
-            messageId: 'call-failed-' + msgInstance.messageId,
-            type: 'call-failed',
-            authorContact: authorContact,
-            delay: delay,
-            meta: meta
-        });
+        if (meta.duration >= 5) {
+            result = new ChatDialogMessage({
+                messageId: 'call-ended-' + msgInstance.messageId,
+                type: 'call-ended',
+                authorContact: authorContact,
+                showInitiatorAvatar: chatRoom.type === "group" || chatRoom.type === "public",
+                delay: delay,
+                meta: meta
+            });
+        }
+        else {
+            result = new ChatDialogMessage({
+                messageId: 'call-failed-' + msgInstance.messageId,
+                type: 'call-failed',
+                authorContact: authorContact,
+                showInitiatorAvatar: chatRoom.type === "group" || chatRoom.type === "public",
+                delay: delay,
+                meta: meta
+            });
+        }
     }
     else {
         self.logger.error("Unknown (remote) CALL_ENDED reason: ", meta.reason, meta);
@@ -439,22 +607,18 @@ CallManager.assert = function (cond) {
  * @param rtcCall
  * @constructor
  */
-var CallManagerCall = function (chatRoom, rtcCall) {
+var CallManagerCall = function (chatRoom, rtcCall, fromUser) {
     var self = this;
     CallManager.assert(chatRoom, 'missing chatRoom for CallManagerCall');
     CallManager.assert(rtcCall, 'missing rtcCall for CallManagerCall');
 
     self.rtcCall = rtcCall;
     self.room = chatRoom;
-    self._streams = {};
-
-    Object.defineProperty(this, 'id', {
-        get: function () {
-            return base64urlencode(self.rtcCall.id);
-        },
-        enumerable: true,
-        configurable: false
-    });
+    if (fromUser) {
+        self.initiator = fromUser;
+    }
+    self.callNotificationsEngine = new CallNotificationsEngine(chatRoom, self);
+    self.id = base64urlencode(rtcCall.id); // we need the callid even if rtcCall becomes null during call recovery
 
     var level = localStorage['webrtcDebug'] === "1" ? MegaLogger.LEVELS.DEBUG : MegaLogger.LEVELS.ERROR;
 
@@ -498,31 +662,6 @@ var CallManagerCall = function (chatRoom, rtcCall) {
 
     self.localPlayer = null;
     self.remotePlayer = null;
-
-
-    if (self.room.callManagerCall) {
-        if (self.room.callManagerCall.isStarting() === true) {
-            self.logger.debug(
-                "Room have a starting session, will terminate and replace with the the newly created session."
-            );
-            self.room.callManagerCall.endCall();
-        } else if (
-            self.room.callManagerCall.isNotStarted() === true && self.room.callManagerCall.isTerminated() === false
-        ) {
-            self.logger.debug(
-                "Room have a not started session, will terminate and replace with the the newly created session."
-            );
-            // self.room.callManagerCall.endCall('other');
-        } else if (self.room.callManagerCall.isStarted() === true) {
-            self.logger.debug(
-                "Room have a started session, will terminate and replace with the the newly created session."
-            );
-            self.room.callManagerCall.endCall();
-        } else if (self.room.callManagerCall.isTerminated() === false) {
-            self.logger.error("Room already have an attached started/in progress/waiting session.");
-            return;
-        }
-    }
     self.room.callManagerCall = this;
 };
 
@@ -537,7 +676,8 @@ CallManagerCall.ALLOWED_STATE_TRANSITIONS = {};
 CallManagerCall.ALLOWED_STATE_TRANSITIONS[CallManagerCall.STATE.INITIALISED] =  // ->
     [
         CallManagerCall.STATE.WAITING_RESPONSE_INCOMING,
-        CallManagerCall.STATE.WAITING_RESPONSE_OUTGOING
+        CallManagerCall.STATE.WAITING_RESPONSE_OUTGOING,
+        CallManagerCall.STATE.STARTING,
     ];
 
 CallManagerCall.ALLOWED_STATE_TRANSITIONS[CallManagerCall.STATE.WAITING_RESPONSE_OUTGOING] =  // ->
@@ -562,6 +702,7 @@ CallManagerCall.ALLOWED_STATE_TRANSITIONS[CallManagerCall.STATE.STARTING] = // -
     [
         CallManagerCall.STATE.STARTED,
         CallManagerCall.STATE.FAILED,
+        CallManagerCall.STATE.ENDED,
         CallManagerCall.STATE.REJECTED
     ];
 
@@ -601,17 +742,25 @@ CallManagerCall.prototype.onWaitingResponseIncoming = function (e, eventData) {
     var mediaOptions = {audio: true, video: true};
     // var mediaOptions = self.getRemoteMediaOptions();
 
-    var doAnswer = function () {
+    var doAnswer = ChatRoom._fnRequireParticipantKeys(function () {
         self.room.activateWindow();
         self.room.show();
         self.getCallManager().incomingCallDialog.hide();
 
-        self.rtcCall.answer(Av.fromMediaOptions(mediaOptions));
 
+        var $promise = self.room._retrieveTurnServerFromLoadBalancer(4000);
 
-        self.room.megaChat.trigger('onCallAnswered', [self, eventData]);
-        self.getCallManager().trigger('CallAnswered', [self, eventData]);
-    };
+        $promise.always(function () {
+            self.rtcCall.answer(Av.fromMediaOptions(mediaOptions))
+            .then(function() {
+                self.room.megaChat.trigger('onCallAnswered', [self, eventData]);
+                self.getCallManager().trigger('CallAnswered', [self, eventData]);
+            })
+            .catch(function(err) {
+                self.onCallTerminated();
+            });
+        });
+    }, self.room);
 
     var doCancel = function () {
         self.getCallManager().incomingCallDialog.hide();
@@ -621,10 +770,13 @@ CallManagerCall.prototype.onWaitingResponseIncoming = function (e, eventData) {
 
     var participants = self.room.getParticipantsExceptMe();
 
+    var contact = M.u[base64urlencode(self.initiator)];
+
     var dialogMessage = new ChatDialogMessage({
         messageId: 'incoming-call-' + self.id,
         type: 'incoming-call',
-        authorContact: self.getPeer(),
+        authorContact: contact,
+        showInitiatorAvatar: self.room.type === "group" || self.room.type === "public",
         delay: unixtime(),
         persist: false,
         buttons: {
@@ -643,69 +795,67 @@ CallManagerCall.prototype.onWaitingResponseIncoming = function (e, eventData) {
         }
     });
 
-    if (self.room.type === "private") {
+    CallManager.assert(participants[0], "No participants found.");
 
-        CallManager.assert(participants[0], "No participants found.");
+    if (!contact) {
+        self.logger.error("Contact not found: ", participants[0]);
+    } else {
 
+        var avatar = useravatar.contact(contact.u, '', 'div');
 
-        var contact = self.getPeer();
+        // Show the nickname if it's set for this contact
+        var userName = contact.nickname || contact.name;
 
-        if (!contact) {
-            self.logger.error("Contact not found: ", participants[0]);
-        } else {
+        // callOptions, can be == {} in the cases then the user does not have/have not provided access
+        // to the cam & mic
+        var showVideoButton = true;
 
-            var avatar = useravatar.contact(contact.u, '', 'div');
-
-            // callOptions, can be == {} in the cases then the user does not have/have not provided access
-            // to the cam & mic
-            var showVideoButton = true;
-
-            if (self.getRemoteMediaOptions().video === false && self.getRemoteMediaOptions().audio === true) {
-                showVideoButton = false;
-            }
-
-            self.room.megaChat.trigger('onIncomingCall', [
-                self.room,
-                M.getNameByHandle(self.getPeer().u),
-                avatar,
-                showVideoButton,
-                self.id,
-                self,
-                dialogMessage
-            ]);
-
-
-            self.getCallManager().incomingCallDialog.show(
-                self.getPeer().name,
-                avatar,
-                self.id,
-                showVideoButton,
-                function () {
-                    mediaOptions.audio = true;
-                    mediaOptions.video = false;
-
-                    doAnswer();
-                },
-                function () {
-                    mediaOptions.audio = true;
-                    mediaOptions.video = true;
-
-                    doAnswer();
-                },
-                function () {
-                    doCancel();
-                }
-            );
+        if (self.getRemoteMediaOptions().video === false && self.getRemoteMediaOptions().audio === true) {
+            showVideoButton = false;
         }
 
-    } else {
-        // TODO: Groups, TBD
-        throw new Error("Not implemented");
+        self.room.megaChat.trigger('onIncomingCall', [
+            self.room,
+            M.getNameByHandle(contact.u),
+            avatar,
+            showVideoButton,
+            self.id,
+            self,
+            dialogMessage
+        ]);
+
+
+        self.getCallManager().incomingCallDialog.show(
+            userName,
+            avatar,
+            self.id,
+            showVideoButton,
+            function () {
+                mediaOptions.audio = true;
+                mediaOptions.video = false;
+
+                doAnswer();
+            },
+            function () {
+                mediaOptions.audio = true;
+                mediaOptions.video = true;
+
+                doAnswer();
+            },
+            function () {
+                doCancel();
+            },
+            self.room.type === "group" || self.room.type === "public"
+        );
     }
 
-    self.room.appendMessage(
-        dialogMessage
-    );
+    if (self.room.type !== "group") {
+        // there is now an overlay hint + button for joining a call + the incoming call dialog, no need to show
+        // the inline dialog message ...
+        self.room.appendMessage(
+            dialogMessage
+        );
+    }
 };
 
 CallManagerCall.prototype._removeTempMessages = function () {
@@ -745,6 +895,7 @@ CallManagerCall.prototype.onCallStarting = function () {
 
     self.room.appendMessage(
         new ChatDialogMessage({
+            showInitiatorAvatar: self.room.type === "group" || self.room.type === "public",
             messageId: 'call-starting-' + self.id,
             type: 'call-starting',
             authorContact: self.getPeer(),
@@ -755,6 +906,10 @@ CallManagerCall.prototype.onCallStarting = function () {
 
 };
 
+CallManagerCall.prototype.localStream = function() {
+    return this.room.megaChat.rtc.callLocalStream(this.room.chatIdBin);
+};
+
 CallManagerCall.prototype.onCallAnswered = function () {
     var self = this;
 
@@ -762,6 +917,7 @@ CallManagerCall.prototype.onCallAnswered = function () {
 
     self.room.appendMessage(
         new ChatDialogMessage({
+            showInitiatorAvatar: self.room.type === "group" || self.room.type === "public",
             messageId: 'call-initialising-' + self.id,
             type: 'call-initialising',
             authorContact: self.getPeer(),
@@ -775,46 +931,46 @@ CallManagerCall.prototype.onCallAnswered = function () {
 CallManagerCall.prototype._renderInCallUI = function () {
     var self = this;
 
-    self.room._currentCallCounter = self.room._currentCallCounter || 0;
-
-
+    if (self.state === CallManagerCall.STATE.STARTING) {
+        // onRemoteStreamAdded may trigger this. Skip if call haven't really started.
+        return;
+    }
     if (self.room._currentCallTimer) {
         clearInterval(self.room._currentCallTimer);
     }
     self.room._currentCallTimer = setInterval(function () {
+        var tsCallStart = self._tsCallStart;
+        var elapsed = tsCallStart ? Math.round((Date.now() - self._tsCallStart) / 1000) : 0;
         $('.call-counter[data-room-id="' + self.room.chatId + '"]').text(
-            secondsToTimeShort(self.room._currentCallCounter)
+            secondsToTimeShort(elapsed)
         );
-
-        self.room._currentCallCounter++;
+        $('.call-header-duration[data-room-id="' + self.room.chatId + '"]').text(
+            secondsToTimeShort(elapsed)
+        );
     }, 1000);
 
     self.renderCallStartedState();
+    this.room.trackDataChange();
 };
 
-CallManagerCall.prototype.onCallStarted = function () {
+CallManagerCall.prototype.onCallStarted = function (tsCallStart) {
     var self = this;
-
-
-    if (
-        self.room.callManagerCall &&
-        self.room.callManagerCall !== self &&
-        (
-            self.room.callManagerCall.isStarted() || self.room.callManagerCall.isStarting()
-        )
-    ) {
-        self.room.callManagerCall.endCall('busy');
+    self._tsCallStart = tsCallStart;
+    var currCall = self.room.callManagerCall;
+    // TODO: The webrtc module should handle the case where there is an existing call
+    // In theory there should not be an existing call at this point
+    if (currCall && currCall !== self && currCall.isStarted()) {
+        console.warn("CallManagerCall.onCallStarted: There is an existing call, but there shouldn't be. " +
+            "Terminating it with busy");
+        currCall.endCall('busy');
     }
 
-    if (!self.room.callManagerCall || self.room.callManagerCall !== self) {
+    if (currCall && currCall !== self) {
         delete self.room.callManagerCall;
         self.room.callManagerCall = self;
     }
 
     self.setState(CallManagerCall.STATE.STARTED);
-
-    self.room._currentCallCounter = 0;
-
     self._renderInCallUI();
 
 
@@ -829,42 +985,49 @@ CallManagerCall.prototype.onCallStarted = function () {
     }
 
 
-    self.room.appendMessage(
-        new ChatDialogMessage({
-            messageId: 'call-started-' + self.id,
-            type: 'call-started',
-            authorContact: self.getPeer(),
-            delay: unixtime(),
-            persist: false
-        })
-    );
-
-    self.renderCallStartedState();
-};
-
-CallManagerCall.prototype.onCallEnded = function (e, reason) {
-    var self = this;
-
-    if (self.room._currentCallCounter === 0) {
+    if (self.room.type !== "group") {
         self.room.appendMessage(
             new ChatDialogMessage({
-                messageId: 'call-failed-' + self.id,
-                type: 'call-failed',
+                messageId: 'call-started-' + self.id,
+                type: 'call-started',
                 authorContact: self.getPeer(),
+                showInitiatorAvatar: self.room.type === "group" || self.room.type === "public",
                 delay: unixtime(),
                 persist: false
             })
         );
     }
-    self.room.trigger('CallTerminated', [e, self.room]);
-    self.getCallManager().trigger('CallTerminated', [self, e]);
+
+    self.renderCallStartedState();
 };
+
+
+CallManagerCall.prototype.onCallEnded = function (e, reason) {
+    var self = this;
+
+    if (Date.now() === self._tsCallStart) {
+        self.room.appendMessage(
+            new ChatDialogMessage({
+                messageId: 'call-failed-' + self.id,
+                type: 'call-failed',
+                authorContact: self.getPeer(),
+                showInitiatorAvatar: self.room.type === "group" || self.room.type === "public",
+                delay: unixtime(),
+                persist: false
+            })
+        );
+    }
+    self.room.trigger('call-ended', self);
+    self.room.trigger('CallTerminated', [e, self.room]);
+};
+
 
 CallManagerCall.prototype.onCallRejected = function (e, reason) {
     var self = this;
-    if (reason === Term.kBusy) {
+    if (reason === Term.kErrAlready) {
         self.room.appendMessage(
             new ChatDialogMessage({
+                showInitiatorAvatar: self.room.type === "group" || self.room.type === "public",
                 messageId: 'call-rejected-' + self.id,
                 type: 'call-rejected',
                 authorContact: self.getPeer(),
@@ -873,61 +1036,78 @@ CallManagerCall.prototype.onCallRejected = function (e, reason) {
             })
         );
     }
-    self.getCallManager().trigger('CallTerminated', [self, e]);
 };
-CallManagerCall.prototype.onCallAborted = function (e, reason) {
+
+CallManagerCall.prototype.onCallRecovering = function(newCall, tsCallStart) {
     var self = this;
-    self.getCallManager().trigger('CallTerminated', [self, e]);
+    self.rtcCall = newCall;
+    self._renderInCallUI();
+    self.room.trigger('onCallSessReconnected', [self]);
+};
+
+CallManagerCall.prototype.onCallRequestSent = function(localAv) {
+    var self = this;
+    self.room.trigger('onCallRequestSent', [self, Av.toMediaOptions(localAv)]);
+};
+
+CallManagerCall.prototype.onCallAborted = function (e, reason) {
 };
 
 CallManagerCall.prototype.onCallHandledElsewhere = function (e) {
     var self = this;
 
-    var peer = self.room.getParticipantsExceptMe()[0];
+    var peer = self.getPeer();
 
     self.room.appendMessage(
         new ChatDialogMessage({
+            showInitiatorAvatar: self.room.type === "group" || self.room.type === "public",
             messageId: 'call-handled-elsewhere-' + self.id,
             type: 'call-handled-elsewhere',
-            authorContact: M.u[peer],
+            authorContact: peer,
             delay: unixtime(),
             persist: false
         })
     );
-
-    self.getCallManager().trigger('CallTerminated', [self, e]);
 };
 
-CallManagerCall.prototype.onCallFailed = function (e) {
+CallManagerCall.prototype.onCallFailed = function (e, reason) {
     var self = this;
 
-    var peer = self.room.getParticipantsExceptMe()[0];
+    var peer;
+    if (self.room.type === "private") {
+        peer = M.u[self.room.getParticipantsExceptMe()[0]];
+    }
+    else {
+        peer = self.getPeer();
+    }
+
+    var msgConstInfo = {
+        messageId: 'call-failed-' + self.id,
+        type: 'call-failed',
+        authorContact: peer,
+        showInitiatorAvatar: self.room.type === "group" || self.room.type === "public",
+        delay: unixtime(),
+        persist: false
+    };
+
+    if (reason === Term.kErrNetSignalling && this._tsCallStart) {
+        msgConstInfo['meta'] = {'duration': (Date.now() - this._tsCallStart) / 1000};
+        msgConstInfo['messageId'] = 'call-ended-' + self.id;
+        msgConstInfo['type'] = 'call-ended';
+        msgConstInfo['isLocallyGenerated'] = true;
+    }
 
     self.room.appendMessage(
-        new ChatDialogMessage({
-            messageId: 'call-failed-' + self.id,
-            type: 'call-failed',
-            authorContact: M.u[peer],
-            delay: unixtime(),
-            persist: false
-        })
+        new ChatDialogMessage(msgConstInfo)
     );
 
     self.room.trigger('CallTerminated', [e, self.room]);
-
-    self.getCallManager().trigger('CallTerminated', [self, e]);
 };
 
 CallManagerCall.prototype.onCallMissed = function (e) {
-    var self = this;
-
-    self.getCallManager().trigger('CallTerminated', [self, e]);
 };
+
 CallManagerCall.prototype.onCallTimeout = function (e) {
-    var self = this;
-
-
-    self.getCallManager().trigger('CallTerminated', [self, e]);
 };
 
 /**
@@ -952,67 +1132,81 @@ CallManagerCall.prototype.onCallTerminated = function () {
     if ($(document).fullScreen() && self.room.isCurrentlyActive) {
         $(document).fullScreen(false);
     }
-
-
     self.renderCallEndedState();
 
     self.room.trackDataChange();
+    delete self.room.callReconnecting;
+    setTimeout(function() {
+        // force re-render in case no "remote call ended" is received.
+        self.room.trackDataChange();
+    }, 1000);
 };
 
-CallManagerCall.prototype.onDestroy = function (terminationCode, peerTerminates) {
+CallManagerCall.prototype.onDestroy = function(terminationCode, peerTerminates, msg, recovery) {
     var self = this;
-    // TODO: @lp: Execute onRemoteStreamRemoved() just in case it wasn't called by the rtcModule before session destroy
-    var isIncoming = self.rtcCall.isJoiner;
-    var state = self.rtcCall.termCodeToUIState(terminationCode);
-    self.setState(state);
-    var callMgr = self.getCallManager();
-    switch (state) {
-        case CallManagerCall.STATE.REJECTED:
-            callMgr.trigger('CallRejected', [self, terminationCode]);
-            break;
-        case CallManagerCall.STATE.ABORTED:
-            callMgr.trigger('CallAborted', [self, terminationCode]);
-            break;
-        case CallManagerCall.STATE.MISSED:
-            callMgr.trigger('CallMissed', [self, terminationCode]);
-            break;
-        case CallManagerCall.STATE.STARTED:
-            callMgr.trigger('CallStarted', [self, terminationCode]);
-            break;
-        case CallManagerCall.STATE.ENDED:
-            callMgr.trigger('CallEnded', [self, terminationCode]);
-            break;
-        case CallManagerCall.STATE.FAILED:
-            callMgr.trigger('CallFailed', [self, terminationCode]);
-            break;
-        case CallManagerCall.STATE.HANDLED_ELSEWHERE:
-            callMgr.trigger('CallHandledElsewhere', [self, terminationCode]);
-            break;
-        case CallManagerCall.STATE.MISSED:
-            callMgr.trigger('CallMissed', [self, terminationCode]);
-            break;
-        case CallManagerCall.STATE.TIMEOUT:
-            callMgr.trigger('CallTimeout', [self, terminationCode]);
-            break;
-        default:
-            self.logger.warn("onDestroy: Unknown UI call termination state",
-                constStateToText(CallManagerCall.STATE, state),
-                " for termcode ", RtcModule.getTermCodeName(terminationCode));
-            break;
+    if (recovery) {
+        self.rtcCall = recovery;
+        self.room.trigger('onCallSessReconnecting', [self]);
+        return;
     }
-    this.onCallTerminated();
+    $('.camera-access').addClass('hidden');
+    var callMgr = self.getCallManager();
+
+    // in case rtcCall is empty, this is a "Call resume timeout"'s destroy event
+    if (!self.rtcCall.isRecovery) {
+        var state = self.rtcCall.termCodeToUIState(terminationCode);
+        self.setState(state);
+        if (terminationCode === Term.kCancelOutAnswerIn) {
+            // @lp Simultaneous 1on1 call to each other
+            // Terminate the call but don't display anything in the history
+            self.onCallTerminated();
+            return;
+        }
+        switch (state) {
+            case CallManagerCall.STATE.REJECTED:
+                callMgr.trigger('CallRejected', [self, terminationCode]);
+                break;
+            case CallManagerCall.STATE.ABORTED:
+                callMgr.trigger('CallAborted', [self, terminationCode]);
+                break;
+            case CallManagerCall.STATE.MISSED:
+                callMgr.trigger('CallMissed', [self, terminationCode]);
+                break;
+            case CallManagerCall.STATE.ENDED:
+                callMgr.trigger('CallEnded', [self, terminationCode]);
+                break;
+            case CallManagerCall.STATE.FAILED:
+                callMgr.trigger('CallFailed', [self, terminationCode]);
+                break;
+            case CallManagerCall.STATE.HANDLED_ELSEWHERE:
+                callMgr.trigger('CallHandledElsewhere', [self, terminationCode]);
+                break;
+            case CallManagerCall.STATE.TIMEOUT:
+                callMgr.trigger('CallTimeout', [self, terminationCode]);
+                break;
+            default:
+                self.logger.warn("onDestroy: Unknown UI call termination state",
+                    constStateToText(CallManagerCall.STATE, state),
+                    " for termcode ", RtcModule.getTermCodeName(terminationCode));
+                break;
+        }
+    } else {
+        // recovery failed/timed out
+        self.setState(CallManagerCall.STATE.FAILED);
+        callMgr.trigger('CallFailed', [self, terminationCode]);
+    }
+    self.onCallTerminated();
 };
 
-CallManagerCall.prototype.onRemoteStreamAdded = function (rtcSessionEventHandler, stream) {
-    var peerId = base64urlencode(rtcSessionEventHandler.rtcCallSession.peer);
-    this._streams[peerId] = stream;
+CallManagerCall.prototype.onSessionConnected = function(id) {
     this._renderInCallUI();
 };
-CallManagerCall.prototype.onRemoteStreamRemoved = function (rtcSessionEventHandler) {
-    var peerId = base64urlencode(rtcSessionEventHandler.rtcCallSession.peer);
-    if (this._streams[peerId]) {
-        delete this._streams[peerId];
-    }
+
+CallManagerCall.prototype.onRemoteStreamAdded = function (streamId, stream) {
+    this._renderInCallUI();
+};
+
+CallManagerCall.prototype.onRemoteStreamRemoved = function (streamId) {
     this.room.trackDataChange();
 };
 
@@ -1026,6 +1220,7 @@ CallManagerCall.prototype.onRemoteStreamRemoved = function (rtcSessionEventHandl
  * @param newState
  */
 CallManagerCall.prototype.onStateChanged = function (e, session, oldState, newState) {
+    this.room.callParticipantsUpdated();
     this.room.trackDataChange();
 };
 
@@ -1037,7 +1232,10 @@ CallManagerCall.prototype.onStateChanged = function (e, session, oldState, newSt
  */
 CallManagerCall.prototype.endCall = function (reason) {
     var self = this;
-
+    if (self.rtcCall.isRecovery) {
+        self.rtcCall.hangup(Term.kUserHangup); // will fire onDestroy() with this reason
+        return;
+    }
     if (
         self.isStarting() ||
         self.state === CallManagerCall.STATE.WAITING_RESPONSE_OUTGOING ||
@@ -1061,6 +1259,9 @@ CallManagerCall.prototype.endCall = function (reason) {
                 return self.rtcCall.hangup();
             }
         }
+        else if (!reason && self.isStarting()) {
+            return self.rtcCall.hangup();
+        }
         self.logger.warn("(non started call) Convert to Term.k* type of hangup reason: ", reason);
     } else if (self.isStarted()) {
         return self.rtcCall.hangup(Term.kUserHangup);
@@ -1074,50 +1275,42 @@ CallManagerCall.prototype.onRemoteMute = function () {
     self.room.trackDataChange();
 };
 
-CallManagerCall.prototype.onLocalMute = function () {
+CallManagerCall.prototype.onLocalMuteInProgress = function () {
     var self = this;
+    this.room.trigger('onLocalMuteInProgress', [this]);
+    self.room.trackDataChange();
+};
+CallManagerCall.prototype.onLocalMuteComplete = function () {
+    var self = this;
+    this.room.trigger('onLocalMuteComplete', [this]);
     self.room.trackDataChange();
 };
 
-CallManagerCall.prototype.muteAudio = function () {
-    var self = this;
-
-    var mediaOpts = self.getMediaOptions();
-    mediaOpts.audio = false;
-
-    self.rtcCall.muteUnmute(Av.fromMediaOptions(mediaOpts));
-
-    self.getCallManager().trigger('LocalMute', [self]);
+CallManagerCall.prototype.onLocalMediaRequest = function () {
+    $('.camera-access').removeClass('hidden');
 };
-CallManagerCall.prototype.unmuteAudio = function () {
+
+CallManagerCall.prototype.onLocalMediaObtained = function () {
     var self = this;
-
-    var mediaOpts = self.getMediaOptions();
-    mediaOpts.audio = true;
-
-    self.rtcCall.muteUnmute(Av.fromMediaOptions(mediaOpts));
-
-    self.getCallManager().trigger('LocalMute', [self]);
+    $('.camera-access').addClass('hidden');
+    self.room.trackDataChange();
 };
-CallManagerCall.prototype.muteVideo = function () {
+
+CallManagerCall.prototype.onLocalMediaFail = function (what, err) {
     var self = this;
-
-    var mediaOpts = self.getMediaOptions();
-    mediaOpts.video = false;
-
-    self.rtcCall.muteUnmute(Av.fromMediaOptions(mediaOpts));
-
-    self.getCallManager().trigger('LocalMute', [self]);
-};
-CallManagerCall.prototype.unmuteVideo = function () {
-    var self = this;
-
-    var mediaOpts = self.getMediaOptions();
-    mediaOpts.video = true;
-
-    self.rtcCall.muteUnmute(Av.fromMediaOptions(mediaOpts));
-
-    self.getCallManager().trigger('LocalMute', [self]);
+    $('.camera-access').addClass('hidden');
+    self.room.trackDataChange();
+    var deviceMsg;
+    if (what === 0) {
+        showToast("warning", l[22884]); // timeout
+        return;
+    }
+    if (what & Av.Audio) {
+        deviceMsg = (what & Av.Video) ? l[10372] : l[22096];
+    } else if (what & Av.Video) {
+        deviceMsg = l[22186];
+    }
+    showToast("warning", deviceMsg + ".<br/>" + l[22185]);
 };
 
 CallManagerCall.prototype.setState = function (newState) {
@@ -1147,7 +1340,6 @@ CallManagerCall.prototype.setState = function (newState) {
 
     this.getCallManager().trigger('StateChanged', [this, this, oldState, newState]);
 };
-
 
 CallManagerCall.prototype.getStateAsText = function () {
     return constStateToText(CallManagerCall.STATE, this.state);
@@ -1185,12 +1377,16 @@ CallManagerCall.prototype.getCallManager = function () {
 };
 
 CallManagerCall.prototype.getPeer = function () {
-    if (this.rtcCall.callerInfo) {
-        if (!M.u[base64urlencode(this.rtcCall.callerInfo.fromUser)]) {
+    var rtcCall = this.rtcCall;
+    if (rtcCall.callerInfo) {
+        if (!M.u[base64urlencode(rtcCall.callerInfo.fromUser)]) {
             self.logger.error("this should never happen.");
             return M.u[u_handle];
         }
         return M.u[base64urlencode(this.rtcCall.callerInfo.fromUser)];
+    }
+    else if ((this.room.type === "group" || this.room.type === "public") && this.initiator) {
+        return M.u[base64urlencode(this.initiator)];
     }
     else if (this.room.type === "private") {
         var peer = this.room.getParticipantsExceptMe()[0];
@@ -1202,29 +1398,52 @@ CallManagerCall.prototype.getPeer = function () {
 };
 
 CallManagerCall.prototype.getMediaOptions = function () {
-    var gLocalAv = this.room.megaChat.rtc.gLocalAv;
-    if (typeof gLocalAv === 'undefined') {
-        this.logger.error(".getMediaOptions could not find rtc.gLocalAv.");
+    var localAv = this.rtcCall.localAv();
+    if (typeof localAv === 'undefined') {
+        this.logger.log(".getMediaOptions: rtcCall.localAv() returned undefined");
         return {audio: false, video: false};
     }
-    return {audio: !!(gLocalAv & Av.Audio), video: !!(gLocalAv & Av.Video)};// jscs:ignore
+    return Av.toMediaOptions(localAv);
 };
 
-CallManagerCall.prototype.getRemoteMediaOptions = function () {
+CallManagerCall.prototype.videoMode = function() {
+    var localAv = this.rtcCall.localAv();
+    if (localAv & Av.Screen) {
+        return Av.Screen;
+    }
+    else if (localAv & Av.Video) {
+        return Av.Video;
+    }
+    else {
+        return 0;
+    }
+};
+
+CallManagerCall.prototype.getRemoteMediaOptions = function (sessionId) {
+    if (this.rtcCall.isRecovery) {
+        return { audio: false, video: false };
+    }
     var sessions = this.rtcCall.sessions;
-    var firstSession = sessions[Object.keys(sessions)[0]];
-    if (typeof firstSession === 'undefined') {
-        this.logger.debug(".getRemoteMediaOptions could not find any remote sessions.");
-        return {audio: false, video: false};
+    var firstSession;
+    if (sessionId) {
+        firstSession = sessions[base64urldecode(sessionId)];
+        if (!firstSession) {
+            var msg = ".getRemoteMediaOptions could not find session with id:" + sessionId;
+            if (!Object.keys(sessions).length) {
+                msg += " Call has no sessions";
+            }
+            this.logger.debug(msg);
+            return {audio: false, video: false};
+        }
+    } else {
+        firstSession = sessions[Object.keys(sessions)[0]];
+        if (!firstSession) {
+            this.logger.debug(".getRemoteMediaOptions: Call has no sessions");
+            return {audio: false, video: false};
+        }
     }
-    if (typeof firstSession.peerAv === 'undefined') {
-        this.logger.error(".getRemoteMediaOptions could not find firstSession.peerAv.");
-        return {audio: false, video: false};
-    }
-
-    return {audio: !!(firstSession.peerAv & Av.Audio), video: !!(firstSession.peerAv & Av.Video)};// jscs:ignore
+    return Av.toMediaOptions(firstSession.peerAv());
 };
-
 
 CallManagerCall.prototype.renderCallStartedState = function () {
     var self = this;
@@ -1255,10 +1474,84 @@ CallManagerCall.prototype.renderCallEndedState = function () {
     }
 
     self._removeTempMessages();
+
+    self.callNotificationsEngine.destroy();
+};
+
+CallManagerCall.prototype.hasVideoSlotLimitReached = function() {
+    return this.getCurrentVideoSlotsUsed() >= RtcModule.kMaxCallVideoSenders;
 };
 
 CallManagerCall.prototype.destroy = function () {
     // TODO: self destruct + remove self from the CallManager's registers onCallTerminated with some timeout.
+};
+
+var RtcSessionEventHandler = function (callManagerCall, rtcSession) {
+    this.call = callManagerCall;
+    this.rtcSession = rtcSession;
+};
+
+/**
+ *
+ * @param {SessionState} sessionState
+ */
+RtcSessionEventHandler.prototype.onStateChange = function (sessionState) {
+    // unused
+};
+
+RtcSessionEventHandler.prototype.onDestroy = function () {
+    // unused
+};
+
+RtcSessionEventHandler.prototype.onStats = function(strStats) {
+    var sess = this.rtcSession;
+    var peerView = document.querySelector('.stream' + sess.stringSid);
+    if (!peerView) {
+        return;
+    }
+    var statsOverlay = peerView.querySelector('.rtc-stats');
+    if (!statsOverlay) {
+        statsOverlay = document.createElement('pre');
+        statsOverlay.classList.add('rtc-stats');
+        peerView.appendChild(statsOverlay);
+    }
+    statsOverlay.innerHTML = strStats;
+};
+
+RtcSessionEventHandler.prototype.onConnect = function () {
+    this.call.onSessionConnected(makeStreamId(this.rtcSession));
+};
+
+RtcSessionEventHandler.prototype.onRemoteStreamAdded = function (stream) {
+    /* The peer will send a stream
+     to us on that stream object. You can obtain the stream URL via
+     window.URL.createObjectURL(stream) or you can attach the player via the
+     attachToStream() polyfill function
+     stream - the stream object to which a player should be attached
+     */
+    this.call.onRemoteStreamAdded(this.rtcSession, stream);
+};
+
+RtcSessionEventHandler.prototype.onRemoteStreamRemoved = function () {
+    //  The peer's stream is about to be removed.
+    this.call.onRemoteStreamRemoved(this.rtcSession);
+};
+
+RtcSessionEventHandler.prototype.onRemoteMute = function (av) {
+    this.call.onRemoteMute();
+};
+
+/**
+ *  Called when network quality for this session changes.
+ *
+ * @param {Number} q
+ */
+RtcSessionEventHandler.prototype.onPeerNetworkQualityChange = function(q) {
+    this.call.room.trackDataChange();
+};
+
+CallManagerCall.prototype.onNewSession = function(rtcCallSession) {
+    return new RtcSessionEventHandler(this, rtcCallSession);
 };
 
 scope.CallManagerCall = CallManagerCall;

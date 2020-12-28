@@ -6,16 +6,16 @@
 describe("chat.rtf_filter unit test", function() {
     "use strict";
 
-    var assert = chai.assert;
-
-    var sandbox;
     var rtf;
     var megaChat;
+    var assert = chai.assert;
 
     beforeEach(function() {
-        sandbox = sinon.sandbox.create();
         var EMOJI_DATASET_VERSION = 2;
-        megaChat = {
+        megaChat = function() {};
+        makeObservable(megaChat);
+        megaChat = new megaChat();
+        Object.assign(megaChat, {
             'getEmojiDataSet': function(name) {
                 var self = this;
                 assert(name === "categories" || name === "emojis", "Invalid emoji dataset name passed.");
@@ -49,8 +49,7 @@ describe("chat.rtf_filter unit test", function() {
                     return self._emojiDataLoading[name];
                 }
             }
-        };
-        makeObservable(megaChat);
+        });
         megaChat.plugins = {
             // 'chatStats': ChatStats,
             // 'chatdIntegration': ChatdIntegration,
@@ -73,12 +72,12 @@ describe("chat.rtf_filter unit test", function() {
     });
 
     afterEach(function() {
-        sandbox.restore();
+        mStub.restore();
         rtf = null;
     });
 
     var expected = function(expected, got, msg) {
-        if (expected != got) {
+        if (expected !== got) {
             var errorMsg = "Expected: " + expected + "\nGot: \n" + got + "\nError message: " + msg;
             assert.fail(expected, got, errorMsg);
         }
@@ -86,6 +85,18 @@ describe("chat.rtf_filter unit test", function() {
 
 
     it("parser test", function() {
+
+        var punctuationCharacters = '.,/#!$%^&*;:{}=-_~()';
+        var expectedValues = [];
+
+        punctuationCharacters
+        .split('')
+        .forEach(function(char) {
+            expectedValues.push(
+                [char + '```placeholder```', char + '<pre class="rtf-multi">placeholder</pre>'],
+                [char + '`placeholder`', char +  '<pre class="rtf-single">placeholder</pre>']
+            );
+        });
 
         [
             [
@@ -164,7 +175,7 @@ describe("chat.rtf_filter unit test", function() {
                 '```test`dontparse`testok```',
                 '<pre class="rtf-multi">test`dontparse`testok</pre>'
             ]
-        ].forEach(function(expectedVals, k) {
+        ].concat(expectedValues).forEach(function(expectedVals, k) {
             var btkrtf = new BacktickRtfFilter({'rebind': function(){}});
             var found = [];
             var res = btkrtf.processBackticks(expectedVals[0], function(match, html, txt) {

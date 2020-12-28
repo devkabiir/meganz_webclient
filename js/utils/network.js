@@ -39,24 +39,31 @@ function megaUtilsGFSFetch(aData, aStartOffset, aEndOffset, aProgress) {
         };
 
         if (typeof aProgress === 'function') {
-            request.prepare = function(xhr) {
-                xhr.addEventListener('progress', function(ev) {
+            aProgress = (function(aProgress) {
+                return function(ev) {
                     if (ev.lengthComputable) {
-
                         // Calculate percentage downloaded e.g. 49.23
                         var percentComplete = ((ev.loaded / ev.total) * 100);
-                        var bytesLoaded = ev.loaded;
-                        var bytesTotal = ev.total;
 
                         // Pass the percent complete to the callback function
-                        aProgress(percentComplete, bytesLoaded, bytesTotal);
+                        aProgress(percentComplete, ev.loaded, ev.total);
                     }
-                }, false);
+                };
+            })(aProgress);
+
+            request.prepare = function(xhr) {
+                xhr.addEventListener('progress', aProgress, false);
             };
         }
 
-        M.xhr(request).done(function(ev, response) {
+        if (Array.isArray(data.g)) {
+            request = CloudRaidRequest.fetch(data, aStartOffset, aEndOffset, aProgress);
+        }
+        else {
+            request = M.xhr(request);
+        }
 
+        request.then(function(ev, response) {
             data.macs = {};
             data.writer = [];
 
@@ -93,7 +100,7 @@ function megaUtilsGFSFetch(aData, aStartOffset, aEndOffset, aProgress) {
                 }
             });
 
-        }).fail(function() {
+        }).catch(function() {
             promise.reject.apply(promise, arguments);
         });
     };
@@ -122,19 +129,43 @@ function megaUtilsGFSFetch(aData, aStartOffset, aEndOffset, aProgress) {
                 if (typeof res === 'object' && res.g) {
                     res.key = key;
                     res.handle = handle;
-                    if (res.efq) {
-                        dlmanager.efq = true;
+
+                    if (typeof res.g === 'object') {
+                        // API may gives a fake array...
+                        res.g = Object.values(res.g);
+
+                        if (res.g[0] < 0) {
+                            res.e = res.e || res.g[0];
+                        }
                     }
-                    else {
+
+                    if (!res.e) {
                         delete dlmanager.efq;
+                        if (res.efq) {
+                            dlmanager.efq = true;
+                        }
+                        return fetcher(res);
                     }
-                    fetcher(res);
                 }
-                else {
-                    promise.reject(res);
-                }
+
+                promise.reject(res && res.e || res);
             };
             var req = {a: 'g', g: 1, ssl: use_ssl};
+
+            if (window.fetchStreamSupport) {
+                // can handle CloudRAID downloads.
+                req.v = 2;
+            }
+
+            // IF this is an anonymous chat OR a chat that I'm not a part of
+            if (M.chat && megaChatIsReady) {
+                megaChat.eventuallyAddDldTicketToReq(req);
+            }
+
+            if (d && String(apipath).indexOf('staging') > 0) {
+                var s = sessionStorage;
+                req.f = [s.dltfefq | 0, s.dltflimit | 0];
+            }
 
             if (!key) {
                 req.n = handle;
@@ -149,7 +180,7 @@ function megaUtilsGFSFetch(aData, aStartOffset, aEndOffset, aProgress) {
             }
             else {
                 error = 0;
-                api_req(req, {callback: callback}, pfid ? 1 : 0);
+                M.req(req, pfid ? 1 : 0).always(callback);
             }
         }
 

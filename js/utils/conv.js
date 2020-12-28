@@ -69,6 +69,21 @@
     };
 
     /**
+     * Pick one array value not matching with needle
+     * @param {Array} input array
+     * @param {*} needle the
+     * @returns {*} first non-matching needle
+     */
+    array.one = function(input, needle) {
+        for (var i = input.length; i--;) {
+            if (input[i] !== needle) {
+                return input[i];
+            }
+        }
+        return false;
+    };
+
+    /**
      * Pack an array into a serialized string, usually shorter than JSON.stringify()'ed
      * @param {Array} input The input array
      * @param {Boolean} [enc] Encode each value using base64
@@ -174,8 +189,8 @@
      */
     array.filterNonMatching = function(arr, val) {
         "use strict";
-        var arrWithoutVal = clone(arr);
-        arrWithoutVal.splice($.inArray(val, arrWithoutVal), 1);
+        var arrWithoutVal = [].concat(arr);
+        this.remove(arrWithoutVal, val, 1);
         return arrWithoutVal;
     };
 

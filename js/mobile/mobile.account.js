@@ -20,16 +20,19 @@ mobile.account = {
         var $page = $('.mobile.my-account-page');
 
         // Initialise functionality
-        mobile.account.displayAvatarAndNameDetails($page);
-        mobile.account.displayProPlanDetails($page);
-        mobile.account.fetchAndDisplayStorageUsage($page);
+        mobile.account.fetchAccountInformation($page);
         mobile.account.initUpgradeAccountButton($page);
         mobile.account.initAchievementsButton($page);
-        mobile.account.fetchSubscriptionInformation($page);
         mobile.account.initRecoveryKeyButton($page);
         mobile.account.initCancelAccountButton($page);
+        mobile.account.initAddPhoneNumberButton($page);
         mobile.account.initSessionHistoryButton($page);
         mobile.account.fetchAndDisplayTwoFactorAuthStatus($page);
+        mobile.account.initChangePasswordButton($page);
+        mobile.account.initNotificationButton($page);
+
+        // Init the titleMenu for this page.
+        mobile.titleMenu.init();
 
         // Initialise the top menu
         topmenuUI();
@@ -42,99 +45,6 @@ mobile.account = {
     },
 
     /**
-     * Displays the user's avatar, name and email
-     * @param {String} $page The jQuery selector for the current page
-     */
-    displayAvatarAndNameDetails: function($page) {
-
-        'use strict';
-
-        // Cache selectors
-        var $avatarNameBlock = $page.find('.avatar-name-block');
-        var $avatar = $avatarNameBlock.find('.main-avatar');
-        var $userName = $avatarNameBlock.find('.user-name');
-        var $userEmail = $avatarNameBlock.find('.user-email');
-
-        // Generate the avatar from the user handle
-        var avatar = useravatar.contact(u_handle, '', 'div');
-
-        // Show the user's avatar and name
-        $avatarNameBlock.removeClass('hidden');
-        $avatar.safeHTML(avatar);
-        $avatar.find('.avatar').addClass('small-rounded-avatar');
-        $userName.text(u_attr.name);
-        $userEmail.text(u_attr.email);
-    },
-
-    /**
-     * Display the Pro plan details
-     * @param {String} $page The jQuery selector for the current page
-     */
-    displayProPlanDetails: function($page) {
-
-        'use strict';
-
-        // Get the Pro name and icon class
-        var proNum = u_attr.p;
-        var proClassName = proNum >= 1 ? 'pro' + proNum : 'free';
-        var proPlanName = pro.getProPlanName(proNum);
-
-        // Show the Pro name and icon class
-        $page.find('.icon.pro-mini').addClass(proClassName);
-        $page.find('.pro-plan-name').text(proPlanName);
-    },
-
-    /**
-     * Fetch and display the user's storage usage
-     */
-    fetchAndDisplayStorageUsage: function() {
-
-        'use strict';
-
-        // Show loading dialog until API request completes
-        loadingDialog.show();
-
-        // Make API request to fetch the user's storage usage
-        api_req({ a: 'uq', strg: 1 }, {
-            callback: function(result) {
-
-                loadingDialog.hide();
-
-                // If response was successful
-                if (typeof result === 'object') {
-
-                    // jQuery selectors
-                    var $accountUsageBlock = $('.mobile.account-usage-block');
-                    var $usedStorage = $accountUsageBlock.find('.used');
-                    var $totalStorage = $accountUsageBlock.find('.total');
-                    var $percentageUsed = $accountUsageBlock.find('.percentage');
-
-                    // Format percentage used to X.XX%, used space to 'X.X GB' and total space to 'X GB' format
-                    var spaceUsed = result.cstrg;
-                    var spaceTotal = result.mstrg;
-                    var percentageUsed = spaceUsed / spaceTotal * 100;
-                    var percentageUsedText = percentageUsed.toFixed(2);
-                    var spaceUsedText = bytesToSize(spaceUsed, 1);
-                    var spaceTotalText = bytesToSize(spaceTotal, 0);
-
-                    // Display the used and total storage e.g. 0.02% (4.8 GB of 200 GB)
-                    $usedStorage.text(spaceUsedText);
-                    $totalStorage.text(spaceTotalText);
-                    $percentageUsed.text(percentageUsedText);
-
-                    // Colour text red and show a message if over quota, or use orange if close to using all quota
-                    if (percentageUsed >= 100) {
-                        $accountUsageBlock.addClass('over-quota');
-                    }
-                    else if (percentageUsed >= 85) {
-                        $accountUsageBlock.addClass('warning');
-                    }
-                }
-            }
-        });
-    },
-
-    /**
      * Initialise the Upgrade Account button
      * @param {String} $page The jQuery selector for the current page
      */
@@ -142,13 +52,20 @@ mobile.account = {
 
         'use strict';
 
-        // On clicking/tapping the Upgrade Account button
-        $page.find('.account-upgrade-block').off('tap').on('tap', function() {
+        // if this is business dont show
+        if (u_attr && u_attr.b && u_attr.b.s !== -1) {
+            $page.find('.account-upgrade-block').addClass('hidden');
+        }
+        else {
+            var upgradeBtn = $page.find('.account-upgrade-block').removeClass('hidden');
+            // On clicking/tapping the Upgrade Account button
+            upgradeBtn.off('tap').on('tap', function() {
 
-            // Load the Pro page
-            loadSubPage('pro');
-            return false;
-        });
+                // Load the Pro page
+                loadSubPage('pro');
+                return false;
+            });
+        }
     },
 
     /**
@@ -179,24 +96,132 @@ mobile.account = {
     },
 
     /**
-     * Displays the bonus information and achievement status
+     * Displays the Pro, storage and subscription info
      * @param {String} $page The jQuery selector for the current page
      */
-    fetchSubscriptionInformation: function($page) {
+    fetchAccountInformation: function($page) {
 
         'use strict';
 
-        // Show a loading dialog while the data is fetched from the API
-        loadingDialog.show();
-
+        // if this is business no limit for storage and no percentage
+        var $accountUsageBlockExternal = $('.mobile.account-usage-block');
+        if (u_attr && u_attr.b) {
+            $accountUsageBlockExternal.find('.mobile.storage-usage').addClass('hidden');
+            $accountUsageBlockExternal.find('.mobile.storage-usage.business').removeClass('hidden');
+        }
+        else {
+            $accountUsageBlockExternal.find('.mobile.storage-usage').removeClass('hidden');
+            $accountUsageBlockExternal.find('.mobile.storage-usage.business').addClass('hidden');
+        }
         // Fetch all account data from the API
-        M.accountData(function() {
+        M.accountData(
+            function() {
 
-            // Hide the loading dialog after request completes
-            loadingDialog.hide();
+                // Hide the loading dialog after request completes
+                loadingDialog.hide();
 
-            mobile.account.renderCancelSubscriptionButton($page);
-        });
+                // Display Pro account, plan & subscription details
+                mobile.account.displayAvatarAndNameDetails($page);
+                mobile.account.displayProPlanDetails($page);
+                mobile.account.displayStorageUsage($page);
+                mobile.account.renderCancelSubscriptionButton($page);
+            },
+            true,   // Show loading spinner
+            true    // Force clear cache
+        );
+    },
+
+
+    /**
+     * Displays the user's avatar, name and email
+     * @param {String} $page The jQuery selector for the current page
+     */
+    displayAvatarAndNameDetails: function($page) {
+
+        'use strict';
+
+        // Cache selectors
+        var $avatarNameBlock = $page.find('.avatar-name-block');
+        var $avatar = $avatarNameBlock.find('.main-avatar');
+        var $userName = $avatarNameBlock.find('.user-name');
+        var $userEmail = $avatarNameBlock.find('.user-email');
+        var $userPhoneContainer = $avatarNameBlock.find('.user-phone');
+        var $userPhoneNum = $avatarNameBlock.find('.user-phone-number');
+
+        // Generate the avatar from the user handle
+        var avatar = useravatar.contact(u_handle, '', 'div');
+
+        // Show the user's avatar and name
+        $avatarNameBlock.removeClass('hidden');
+        $avatar.safeHTML(avatar);
+        $avatar.find('.avatar').addClass('small-rounded-avatar');
+        $userName.text(u_attr.name);
+        $userEmail.text(u_attr.email);
+
+        // Set the user's phone if they have verified it
+        if (typeof u_attr.smsv !== 'undefined') {
+            $userPhoneContainer.removeClass('hidden');
+            $userPhoneNum.text(u_attr.smsv);
+        }
+    },
+
+    /**
+     * Display the Pro plan details
+     * @param {String} $page The jQuery selector for the current page
+     */
+    displayProPlanDetails: function($page) {
+
+        'use strict';
+
+        // Get the Pro name and icon class
+        var proNum = u_attr.p;
+        var proClassName = proNum >= 1 ? 'pro' + proNum : 'free';
+        var proPlanName = pro.getProPlanName(proNum);
+
+        // Show the Pro name and icon class
+        $('.plan-icon', $page).addClass(proClassName);
+        $('.pro-plan-name', $page).text(proPlanName);
+    },
+
+    /**
+     * Fetch and display the user's storage usage
+     */
+    displayStorageUsage: function() {
+
+        'use strict';
+
+        // jQuery selectors
+        var $accountUsageBlock = $('.mobile.account-usage-block');
+        var $usedStorage = $accountUsageBlock.find('.used');
+        var $totalStorage = $accountUsageBlock.find('.total');
+        var $percentageUsed = $accountUsageBlock.find('.percentage');
+        var $message = $('.over-quota-message', $accountUsageBlock).text(l[16136]).removeClass('odq-red-alert');
+
+        // Format percentage used to X.XX%, used space to 'X.X GB' and total space to 'X GB' format
+        var spaceUsed = M.account.cstrg;
+        var spaceTotal = M.account.mstrg;
+        var percentageUsed = spaceUsed / spaceTotal * 100;
+        var percentageUsedText = Math.round(percentageUsed);
+        var spaceUsedText = bytesToSize(spaceUsed, 2);
+        var spaceTotalText = bytesToSize(spaceTotal, 0);
+
+        // Display the used and total storage e.g. 0.02% (4.8 GB of 200 GB)
+        $usedStorage.text(spaceUsedText);
+        $totalStorage.text(spaceTotalText);
+        $percentageUsed.text(percentageUsedText);
+
+        // Colour text red and show a message if over quota, or use orange if close to using all quota
+        if (percentageUsed >= 100) {
+            $accountUsageBlock.addClass('over-quota');
+            if (u_attr.uspw) {
+                $message.safeHTML(
+                    odqPaywallDialogTexts(u_attr, M.account).fmBannerText)
+                    .addClass('odq-red-alert');
+            }
+        }
+        else if (percentageUsed >= 85) {
+            $accountUsageBlock.addClass('warning');
+        }
     },
 
     /**
@@ -442,6 +467,26 @@ mobile.account = {
     },
 
     /**
+     * Initialise the Add Phone Number button
+     * @param {String} $page The jQuery selector for the current page
+     */
+    initAddPhoneNumberButton: function($page) {
+
+        'use strict';
+
+        // If the SMS Verification Enabled API flag is set and they have not added a phone number yet
+        if (u_attr.flags.smsve === 2 && typeof u_attr.smsv === 'undefined') {
+
+            // Unhide the button and on clicking/tapping the button, load the Add Phone page
+            $page.find('.account-add-phone-block').removeClass('hidden').off('tap').on('tap', function() {
+
+                loadSubPage('sms/add-phone-achievements');
+                return false;
+            });
+        }
+    },
+
+    /**
      * Initialise the Session History button
      * @param {String} $page The jQuery selector for the current page
      */
@@ -461,6 +506,38 @@ mobile.account = {
     },
 
     /**
+     * Initialise the button to change the user's password
+     * @param {String} $page The jQuery selector for the current page
+     */
+    initChangePasswordButton: function($page) {
+
+        'use strict';
+
+        var $buttonBlock = $page.find('.account-change-password-block');
+
+        // On clicking/tapping the button
+        $buttonBlock.off('tap').on('tap', function() {
+
+            // Load the Session History page
+            loadSubPage('fm/account/email-and-pass');
+            return false;
+        });
+    },
+
+    /**
+     * Initialise the notification settings button to navigate the user to the notification settings page.
+     * @param $page
+     */
+    initNotificationButton: function($page) {
+        'use strict';
+
+        $page.find('.account-notifications-block').off('tap').on('tap', function() {
+            loadSubPage('fm/account/notifications');
+            return false;
+        });
+    },
+
+    /**
      * Initialise the Cancel Account button to send the user an account cancellation confirmation email
      * @param {String} $page The jQuery selector for the current page
      */
@@ -468,38 +545,45 @@ mobile.account = {
 
         'use strict';
 
-        // On clicking/tapping the Upgrade Account button
-        $page.find('.acount-cancellation-block').off('tap').on('tap', function() {
+        // if this is business sub-user hide
+        if (u_attr && u_attr.b && !u_attr.b.m) {
+            $page.find('.acount-cancellation-block').addClass('hidden');
+        }
+        else {
+            var cancelBlock = $page.find('.acount-cancellation-block').removeClass('hidden');
+            // On clicking/tapping the Upgrade Account button
+            cancelBlock.off('tap').on('tap', function() {
 
-            // Please confirm that all your data will be deleted
-            var confirmMessage = l[1974];
-            var $cancelAccountOverlay = $('#mobile-ui-error');
+                // Please confirm that all your data will be deleted
+                var confirmMessage = l[1974];
+                var $cancelAccountOverlay = $('#mobile-ui-error');
 
-            // Search through their Pro plan purchase history
-            $(account.purchases).each(function(index, purchaseTransaction) {
+                // Search through their Pro plan purchase history
+                $(account.purchases).each(function(index, purchaseTransaction) {
 
-                // Get payment method name
-                var paymentMethodId = purchaseTransaction[4];
-                var paymentMethod = pro.getPaymentGatewayName(paymentMethodId).name;
+                    // Get payment method name
+                    var paymentMethodId = purchaseTransaction[4];
+                    var paymentMethod = pro.getPaymentGatewayName(paymentMethodId).name;
 
-                // If they have paid with iTunes or Google Play in the past
-                if ((paymentMethod === 'apple') || (paymentMethod === 'google')) {
+                    // If they have paid with iTunes or Google Play in the past
+                    if ((paymentMethod === 'apple') || (paymentMethod === 'google')) {
 
-                    // Update confirmation message to remind them to cancel iTunes or Google Play
-                    confirmMessage += ' ' + l[8854];
-                    return false;
-                }
+                        // Update confirmation message to remind them to cancel iTunes or Google Play
+                        confirmMessage += ' ' + l[8854];
+                        return false;
+                    }
+                });
+
+                // Show a confirm dialog
+                mobile.account.showAccountCancelConfirmDialog($page, confirmMessage);
+
+                // Show close button
+                $cancelAccountOverlay.find('.text-button').removeClass('hidden');
+
+                // Prevent double tap
+                return false;
             });
-
-            // Show a confirm dialog
-            mobile.account.showAccountCancelConfirmDialog($page, confirmMessage);
-
-            // Show close button
-            $cancelAccountOverlay.find('.text-button').removeClass('hidden');
-
-            // Prevent double tap
-            return false;
-        });
+        }
     },
 
     /**
@@ -592,6 +676,7 @@ mobile.account = {
                     $page.removeClass('hidden');
                     $verifyActionPage.addClass('hidden');
                     mobile.showEmailConfirmOverlay();
+                    $('#startholder').addClass('no-scroll');
                 }
                 else {
                     // Oops, something went wrong

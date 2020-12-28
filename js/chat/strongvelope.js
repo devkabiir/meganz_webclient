@@ -35,7 +35,7 @@ var strongvelope = {};
 
     // Size threshold for RSA encrypted sender keys (greater than ... bytes).
     // (1024 bit RSA key --> 128 byte + 2 byte cipher text).
-    var _RSA_ENCRYPTION_THRESHOLD = 128;
+    strongvelope._RSA_ENCRYPTION_THRESHOLD = 128;
 
     /** Version of the protocol implemented. */
     strongvelope.PROTOCOL_VERSION_V1 = 0x01;
@@ -138,8 +138,10 @@ var strongvelope = {};
         PRIVILEGE:          0x0c,
         MESSAGE_IDENTITY:   0x0d,
         MESSAGE_REFERENCE:  0x0e,
-        KEY_BLOB:           0x0f
+        KEY_BLOB:           0x0f,
+        OPENMODE:  0x10
     };
+
     var TLV_TYPES = strongvelope.TLV_TYPES;
 
 
@@ -161,9 +163,18 @@ var strongvelope = {};
         0x0d: 'identity',
         0x0e: 'reference',
         0x0f: 'keyBlob',
+        0x10: 'openMode',
     };
 
-
+    /**
+     * "Enumeration" of chat mode.
+     *
+     */
+    strongvelope.CHAT_MODE = {
+        CLOSED:   0x00,
+        PUBLIC:   0x01
+    };
+    var CHAT_MODE = strongvelope.CHAT_MODE;
     /**
      * "Enumeration" of message types used for the chat message transport.
      *
@@ -182,7 +193,11 @@ var strongvelope = {};
         TRUNCATE:           0x03,
         PRIVILEGE_CHANGE:   0x04,
         TOPIC_CHANGE:       0x05,
-        CALL_END:           0x06
+        CALL_END:           0x06,
+        CALL_STARTED:       0x07,
+        PUBLIC_HANDLE_CREATE:    0x08,
+        PUBLIC_HANDLE_DELETE:    0x09,
+        OPEN_MODE_CLOSED:        0x0a
     };
     var MESSAGE_TYPES = strongvelope.MESSAGE_TYPES;
     var _KEYED_MESSAGES = [MESSAGE_TYPES.GROUP_KEYED,
@@ -274,14 +289,14 @@ var strongvelope = {};
      *     Symmetric encryption key in a binary string.
      * @param nonce {String}
      *     Nonce to decrypt a message with in a binary string.
-     * @returns {String}
-     *     Clear text of message content, `null` if no cipher text is given.
+     * @returns {String|Boolean}
+     *     Clear text of message content, `false` if no cipher text or key is given.
      * @private
      */
     strongvelope._symmetricDecryptMessage = function(cipher, key, nonce) {
 
-        if ((cipher === null) || (typeof cipher === 'undefined')) {
-            return null;
+        if (!cipher || !key || !nonce) {
+            return false;
         }
 
         var keyBytes = asmCrypto.string_to_bytes(key);
@@ -332,7 +347,6 @@ var strongvelope = {};
      * @private
      */
     strongvelope._verifyMessage = function(message, signature, pubKey, chatId) {
-
         if ((signature === null) || (typeof signature === 'undefined')) {
             logger.critical('No signature.');
             return MegaPromise.resolve(false);
@@ -493,6 +507,9 @@ var strongvelope = {};
                         break;
                     case TLV_TYPES.INVITOR:
                         parsedContent[tlvVariable] = base64urlencode(value);
+                        break;
+                    case TLV_TYPES.OPENMODE:
+                        parsedContent[tlvVariable] = true;
                         break;
                     case TLV_TYPES.KEY_BLOB:
                         var pos = 0;
@@ -664,6 +681,28 @@ var strongvelope = {};
         }
     };
 
+    /**
+     * Unpack a key.
+     * @method
+     * @param packedKey {Binary}  encrypted key binary.
+     *
+     * @returns {Object}
+     *        sender;
+     *        key binary.
+     */
+    strongvelope.unpackKey = function(packedKey) {
+
+        var sender = base64urlencode(packedKey.substring(0, USER_HANDLE_SIZE));
+        var senderKey = packedKey.substring(USER_HANDLE_SIZE);
+
+        var result =  {
+            'sender' : sender,
+            'senderKey' : senderKey
+        };
+
+        return result;
+    };
+
 
     /**
      * Manages keys, encryption and message encoding.
@@ -683,6 +722,8 @@ var strongvelope = {};
      * @param {String} [myPubEd25519]
      *     Our public signing key (Ed25519, optional, can be derived upon
      *     instantiation from private key).
+     * @param {Number} [chatMode]
+     * @param {bool|String} [chatUnifiedKey] pass true to generate a new key
      *
      * @property {String} ownHandle
      *     Our own user handle (u_handle).
@@ -692,29 +733,17 @@ var strongvelope = {};
      *     Our private signing key (Ed25519).
      * @property {String} myPubEd25519
      *     Our public signing key (Ed25519).
-     * @property {String} keyId
-     *     ID of our current sender key.
-     * @property {String} previousKeyId
-     *     ID of our previous sender key.
-     * @property {Object.<handle, ParticipantKeys>} participantKeys
-     *     Collection of participant specific key information (including our own,
-     *     @see {@link ParticipantKey} for all (past and present) participants.
-     * @property {Array.<String>} otherParticipants
-     *     An array of all the participants' user handles in the chat, but
-     *     excluding one self.
-     * @property {Array.<String>} includeParticipants
-     *     An array of participants' user handles to include in the chat.
-     * @property {Array.<String>} excludeParticipants
-     *     An array of participants' user handles to exclude from the chat.
+     * @property {String} unifiedKey
+     *     External encryption key.
      */
     strongvelope.ProtocolHandler = function(ownHandle, myPrivCu25519,
-            myPrivEd25519, myPubEd25519) {
+            myPrivEd25519, myPubEd25519, chatMode, chatUnifiedKey) {
 
         this.ownHandle = ownHandle || u_handle;
         this.myPrivCu25519 = myPrivCu25519 || u_privCu25519;
         this.myPrivEd25519 = myPrivEd25519 || u_privEd25519;
         this.myPubEd25519 = myPubEd25519;
-        if (!this.myPubEd25519) {
+        if (!this.myPubEd25519 && chatMode !== CHAT_MODE.PUBLIC) {
             this.myPubEd25519 = crypt.getPubKeyFromPrivKey(this.myPrivEd25519, 'Ed25519');
         }
 
@@ -727,6 +756,49 @@ var strongvelope = {};
         this.participantChange = false;
         this.includeKey = false;
         this.counter = 0;
+
+        if (chatMode === CHAT_MODE.PUBLIC) {
+            this.keyRotation = false;
+        }
+        else {
+            this.keyRotation = true;
+        }
+
+        this.unifiedKey = null;
+
+        this.chatMode = CHAT_MODE.CLOSED;
+        if (typeof chatMode !== 'undefined') {
+            this.chatMode = chatMode;
+        }
+
+        if (this.chatMode === CHAT_MODE.PUBLIC && chatUnifiedKey === true) {
+            this.updateSenderKey();
+        }
+        else if (chatUnifiedKey && chatUnifiedKey !== true) {
+            var parsedKey = strongvelope.unpackKey(base64urldecode(chatUnifiedKey));
+            if (parsedKey) {
+                // at this point keys for the user sending the key should be preloaded by impl. code
+                try {
+                    var decryptedKeys = this._decryptKeysFrom(
+                        parsedKey.senderKey,
+                        parsedKey.sender
+                    );
+
+
+                    if (decryptedKeys) {
+                        this.unifiedKey = decryptedKeys[0];
+                    }
+                    else {
+                        logger.error("Could not get unified key. _decryptKeys.. returned nothing");
+                    }
+                } catch (e) {
+                    logger.error("Could not get unified key: ", e);
+                }
+            }
+            else {
+                logger.error("Could not get unified key. unpackKey.. returned nothing");
+            }
+        }
     };
 
 
@@ -743,9 +815,13 @@ var strongvelope = {};
      */
     strongvelope.ProtocolHandler.prototype._parseAndExtractKeys = function(message) {
         var self = this;
+
         var parsedMessage = ns._parseMessageContent(message.message);
         var result = { parsedMessage: parsedMessage, senderKeys: {}};
 
+        if (this.chatMode === CHAT_MODE.PUBLIC) {
+            return MegaPromise.resolve(result);
+        }
 
         if (parsedMessage === false) {
             logger.error('Can not parse the message content.');
@@ -765,7 +841,7 @@ var strongvelope = {};
 
                 var proxyPromise = new MegaPromise();
 
-                verifyPromise.done(function() {
+                verifyPromise.always(function() {
                     var isOwnMessage = message.userId === self.ownHandle;
                     var myIndex = parsedMessage.recipients.indexOf(self.ownHandle);
 
@@ -773,7 +849,7 @@ var strongvelope = {};
                     // sender key (e. g. for history loading).
                     var keyIndex = isOwnMessage ? 0 : myIndex;
                     var otherHandle =
-                        (isOwnMessage && (parsedMessage.keys[keyIndex].length < _RSA_ENCRYPTION_THRESHOLD))
+                        (isOwnMessage && (parsedMessage.keys[keyIndex].length < strongvelope._RSA_ENCRYPTION_THRESHOLD))
                             ? parsedMessage.recipients[0]
                             : message.userId;
 
@@ -781,24 +857,39 @@ var strongvelope = {};
                         // Decrypt message key(s).
                         var encryptedKey =
                             (isOwnMessage &&
-                            (parsedMessage.keys[keyIndex].length >= _RSA_ENCRYPTION_THRESHOLD)) ?
+                            (parsedMessage.keys[keyIndex].length >= strongvelope._RSA_ENCRYPTION_THRESHOLD)) ?
                                 parsedMessage.ownKey : parsedMessage.keys[keyIndex];
 
-                        var decryptedKeys = self._legacyDecryptKeysFor(encryptedKey,
-                            parsedMessage.nonce,
-                            otherHandle,
-                            isOwnMessage);
 
-                        // Update local sender key cache.
-                        if (!self.participantKeys[message.userId]) {
-                            self.participantKeys[message.userId] = {};
-                        }
+                        // For legacy RSA messages, we need the recipient's keys and since the integrating code is not
+                        // parsing the actual strongvelope message's protocol, it can't know which keys are required,
+                        // so we'd to directly call ChatdIntegration from here.
+                        // Since RSA messages are kinda deprecated now, will leave this like this, but in the future
+                        // we may want to remove this whole legacy decryption code.
+                        // Note: For historical/debugging reasons, please use accounts and chats older then 2016.
+                        crypt.getAllPubKeys(otherHandle).then(function() {
+                            var decryptedKeys = self._legacyDecryptKeysFor(
+                                encryptedKey,
+                                parsedMessage.nonce,
+                                otherHandle,
+                                isOwnMessage
+                            );
 
-                        for (var i = 0; i < decryptedKeys.length; i++) {
-                            result.senderKeys[parsedMessage.keyIds[i]] = decryptedKeys[i];
-                        }
+                            // Update local sender key cache.
+                            if (!self.participantKeys[message.userId]) {
+                                self.participantKeys[message.userId] = {};
+                            }
+
+                            for (var i = 0; i < decryptedKeys.length; i++) {
+                                result.senderKeys[parsedMessage.keyIds[i]] = decryptedKeys[i];
+                            }
+
+                            proxyPromise.resolve(result);
+                        }).catch(function(ex) {
+                            console.error("_legacyDecryptKeysFor failed: ", ex);
+                            proxyPromise.reject();
+                        });
                     }
-                    proxyPromise.resolve(result);
                 })
                 .fail(function(arg) {
                     if (arg !== 0xDEAD) {
@@ -807,7 +898,8 @@ var strongvelope = {};
                             + message.userId + ' on ' + message.ts);
                     }
 
-                    proxyPromise.reject(arg);
+                    // ignore marking this message as "unrerenderable"
+                    // proxyPromise.reject(arg);
                 });
 
                 return proxyPromise;
@@ -918,18 +1010,31 @@ var strongvelope = {};
      *
      * @method
      */
-    strongvelope.ProtocolHandler.prototype.updateSenderKey = function() {
+    strongvelope.ProtocolHandler.prototype.updateSenderKey = function(force) {
 
         this.counter = (this.counter + 1) & 0xffff;
         // Now the new sender key.
+
         var secretKey = new Uint8Array(SECRET_KEY_SIZE);
         asmCrypto.getRandomValues(secretKey);
+        var newKey = asmCrypto.bytes_to_string(secretKey);
+
+        if (this.chatMode === CHAT_MODE.PUBLIC && !force) {
+            if (!this.unifiedKey) {
+                this.getUnifiedKey();
+            }
+            if (!this.unifiedKey) {
+                this.unifiedKey = newKey;
+            }
+            else {
+                newKey = this.unifiedKey;
+            }
+        }
 
         var result = {
             keyId: ns._encodeKeyId(this.counter),
-            senderKey: asmCrypto.bytes_to_string(secretKey)
+            senderKey: newKey
         };
-
         return result;
     };
 
@@ -941,6 +1046,7 @@ var strongvelope = {};
      *       the recipient.
      *
      * @method
+     * @throws Error
      * @param userhandle {String}
      *     Mega user handle for user to send to or receive from.
      * @return {String}
@@ -1042,7 +1148,7 @@ var strongvelope = {};
         var clear = '';
 
         // Check if sender key is encrypted using RSA.
-        if (encryptedKeys.length < _RSA_ENCRYPTION_THRESHOLD) {
+        if (encryptedKeys.length < strongvelope._RSA_ENCRYPTION_THRESHOLD) {
             // Using normal chat keys.
             var receiver = iAmSender ? otherParty : this.ownHandle;
             var cipherBytes = asmCrypto.string_to_bytes(encryptedKeys);
@@ -1079,6 +1185,7 @@ var strongvelope = {};
      *       to be loaded already.
      *
      * @method
+     * @throws Error
      * @param {String} encryptedKeys
      *     Encrypted Key(s).
      * @param {String} otherParty
@@ -1092,7 +1199,7 @@ var strongvelope = {};
         var clear = '';
 
         // Check if sender key is encrypted using RSA.
-        if (encryptedKeys.length < _RSA_ENCRYPTION_THRESHOLD) {
+        if (encryptedKeys.length < strongvelope._RSA_ENCRYPTION_THRESHOLD) {
             // Using normal chat keys.
             var cipherBytes = asmCrypto.string_to_bytes(encryptedKeys);
             var keyBytes = asmCrypto.string_to_bytes(
@@ -1157,36 +1264,42 @@ var strongvelope = {};
                                                                     refs,
                                                                     messageIdentity,
                                                                     withKeyIncluded,
-                                                                    withSelfIncluded) {
+                                                                    withSelfIncluded,
+                                                                    openMode) {
 
         withKeyIncluded = (typeof withKeyIncluded === 'undefined') ? false : withKeyIncluded;
         withSelfIncluded = (typeof withSelfIncluded === 'undefined') ? false : withSelfIncluded;
         var content = "";
         var refids = "";
 
-        for (var i=0;i<refs.length;i++) {
+        for (var i = 0; i < refs.length;i++) {
             refids += refs[i];
         }
 
         var encryptedMessage = ns._symmetricEncryptMessage(
                                messageIdentity + ns.pack16le(refids.length) + refids + to8(message),
                                senderKey);
-
         // Assemble message content.
-        content = tlvstore.toTlvElement(String.fromCharCode(TLV_TYPES.NONCE),
-                                           encryptedMessage.nonce);
-        if (withKeyIncluded) {
-
-            content += tlvstore.toTlvElement(String.fromCharCode(TLV_TYPES.KEY_BLOB),
-                                             this.getKeyBlob(senderKey, trackedParticipants));
-            content += tlvstore.toTlvElement(String.fromCharCode(TLV_TYPES.INVITOR),
-                                                base64urldecode(this.ownHandle));
+        if ((encryptedMessage.nonce !== null) && (encryptedMessage.nonce.length > 0)) {
+            content += tlvstore.toTlvElement(String.fromCharCode(TLV_TYPES.NONCE),
+                                               encryptedMessage.nonce);
         }
         // Only include ciphertext if it's not empty (non-blind message).
         if ((encryptedMessage.ciphertext !== null) && (encryptedMessage.ciphertext.length > 0)) {
             content += tlvstore.toTlvElement(String.fromCharCode(TLV_TYPES.PAYLOAD),
                                              encryptedMessage.ciphertext);
         }
+        if (withKeyIncluded) {
+            content += tlvstore.toTlvElement(String.fromCharCode(TLV_TYPES.KEY_BLOB),
+                                             this.getKeyBlob(senderKey, trackedParticipants));
+        }
+        content += tlvstore.toTlvElement(String.fromCharCode(TLV_TYPES.INVITOR),
+            base64urldecode(this.ownHandle));
+
+        if (openMode) {
+            content += tlvstore.toTlvElement(String.fromCharCode(TLV_TYPES.OPENMODE), "");
+        }
+
         // Sign message.
         content = this._signContent(
             String.fromCharCode(PROTOCOL_VERSION) +
@@ -1231,25 +1344,60 @@ var strongvelope = {};
      *     The type of the message.
      * @param {Array} participants
      *     Array of participants to encrypt the message to.
+     * @param {Boolean} forceUpdate
+     *     Flag to indicate whether it needs to force a key update.
      * @returns {String|Boolean}
      *     Encrypted outgoing message or `false` if something fails.
      */
-    strongvelope.ProtocolHandler.prototype.embeddedEncryptTo = function(message, type, participants) {
+    strongvelope.ProtocolHandler.prototype.embeddedEncryptTo = function(
+        message,
+        type,
+        participants,
+        forceUpdate,
+        openMode
+    ) {
         // this is a fixed id.
-        var newSenderKey = this.updateSenderKey();
+        var newSenderKey = this.updateSenderKey(forceUpdate);
 
         var assembledMessage = null;
         var messageIdentity = ns.generateMessageId();
-        assembledMessage = this._assembleBody(message,
-                                              type,
-                                              newSenderKey.senderKey,
-                                              participants,
-                                              [],
-                                              messageIdentity,
-                                              true,
-                                              true);
+        assembledMessage = this._assembleBody(
+            message,
+            type,
+            newSenderKey.senderKey,
+            participants,
+            [],
+            messageIdentity,
+            openMode ? false : true,
+            openMode ? false : true,
+            openMode
+        );
 
         return assembledMessage;
+    };
+
+    /**
+     * Generate a new encryption key.
+     * @param {Array} refs
+     *     Array of backward reference ids to guarantee the message order is not tempered.
+     * @returns {Array|Boolean}
+     *     Encrypted outgoing key message array or `false` if something fails.
+     */
+    strongvelope.ProtocolHandler.prototype.refreshKey = function(refs) {
+        var encryptedMessages = new Array();
+        // Assemble main message body.
+        var trackedParticipants = new Set(this.otherParticipants);
+        trackedParticipants.add(this.ownHandle);
+        var newSenderKey = this.updateSenderKey();
+        this.keyId = newSenderKey.keyId;
+        this.participantKeys[this.ownHandle][this.keyId] = newSenderKey.senderKey;
+
+        encryptedMessages.push({"type": MESSAGE_TYPES.GROUP_KEYED,
+                                "message": this.getKeyBlob(
+                                                          this.participantKeys[this.ownHandle][this.keyId],
+                                                          trackedParticipants)
+                              });
+        return encryptedMessages;
     };
 
     /**
@@ -1270,43 +1418,55 @@ var strongvelope = {};
      */
     strongvelope.ProtocolHandler.prototype.encryptTo = function(message, refs) {
         var encryptedMessages = new Array();
-
         // Assemble main message body.
         var trackedParticipants = new Set(this.otherParticipants);
         trackedParticipants.add(this.ownHandle);
-        // if the key is rotated , generate a new key and send it out.
-        if ((this.keyId === null) ||
-            (this.participantChange === true)) {
+        var senderKey;
+        if (this.chatMode !== CHAT_MODE.PUBLIC) {
+            // if the key is rotated , generate a new key and send it out.
+            if ((this.keyId === null) ||
+                (this.participantChange === true)) {
 
-            var newSenderKey = this.updateSenderKey();
-            this.keyId = newSenderKey.keyId;
-            this.participantKeys[this.ownHandle][this.keyId] = newSenderKey.senderKey;
+                var newSenderKey = this.updateSenderKey();
+                this.keyId = newSenderKey.keyId;
+                this.participantKeys[this.ownHandle][this.keyId] = newSenderKey.senderKey;
 
-            encryptedMessages.push({"type": MESSAGE_TYPES.GROUP_KEYED,
-                                    "message": this.getKeyBlob(
-                                                              this.participantKeys[this.ownHandle][this.keyId],
-                                                              trackedParticipants)
-                                  });
-            this.includeParticipants.clear();
-            this.excludeParticipants.clear();
-            this.participantChange = false;
+                encryptedMessages.push({
+                    "type": MESSAGE_TYPES.GROUP_KEYED,
+                    "message": this.getKeyBlob(
+                        this.participantKeys[this.ownHandle][this.keyId],
+                        trackedParticipants)
+                });
+                this.includeParticipants.clear();
+                this.excludeParticipants.clear();
+                this.participantChange = false;
+            }
+            // if the key is still pending, it is possible that the key did not deliver to chatd yet, so include the key.
+            else if (this.includeKey && ns.isTempKeyid(this.getKeyId())) {
+                encryptedMessages.push({
+                    "type": MESSAGE_TYPES.GROUP_KEYED,
+                    "message": this.getKeyBlob(
+                        this.participantKeys[this.ownHandle][this.keyId],
+                        trackedParticipants)
+                });
+                this.includeKey = false;
+            }
+            if (!this.participantKeys[this.ownHandle][this.keyId]) {
+                throw new Error('No cached chat key for user!');
+            }
+
+            senderKey = this.participantKeys[this.ownHandle][this.keyId];
         }
-        // if the key is still pending, it is possible that the key did not deliver to chatd yet, so include the key.
-        else if (this.includeKey && ns.isTempKeyid(this.getKeyId())) {
-            encryptedMessages.push({"type": MESSAGE_TYPES.GROUP_KEYED,
-                                    "message": this.getKeyBlob(
-                                                              this.participantKeys[this.ownHandle][this.keyId],
-                                                              trackedParticipants)
-                                  });
-            this.includeKey = false;
+        else {
+            assert(this.unifiedKey, 'public chat with missing unified key found');
+
+            senderKey = this.unifiedKey;
         }
         var assembledMessage = null;
         var messageIdentity = ns.generateMessageId();
 
-        if (!this.participantKeys[this.ownHandle][this.keyId]) {
-            throw new Error('No cached chat key for user!');
-        }
-        var senderKey = this.participantKeys[this.ownHandle][this.keyId];
+
+
         assembledMessage = this._assembleBody(message,
                                               MESSAGE_TYPES.GROUP_FOLLOWUP,
                                               senderKey,
@@ -1337,16 +1497,24 @@ var strongvelope = {};
      *     Encrypted outgoing message.
      */
     strongvelope.ProtocolHandler.prototype.encryptWithKeyId = function(message, keyId, references, messageIdentity) {
-        var keyIdStr = a32_to_str([keyId]);
+        var senderKey;
+        if (this.chatMode === CHAT_MODE.PUBLIC) {
+            senderKey = this.unifiedKey;
+        }
+        else {
+            var keyIdStr = a32_to_str([keyId]);
+            if (!this.participantKeys[this.ownHandle][keyIdStr]) {
+                throw new Error('No cached chat key for user!');
+            }
+            senderKey = this.participantKeys[this.ownHandle][keyIdStr];
+        }
+
         var assembledMessage = null;
         // Assemble main message body.
         var trackedParticipants = new Set(this.otherParticipants);
         trackedParticipants.add(this.ownHandle);
 
-        if (!this.participantKeys[this.ownHandle][keyIdStr]) {
-            throw new Error('No cached chat key for user!');
-        }
-        var senderKey = this.participantKeys[this.ownHandle][keyIdStr];
+
 
         assembledMessage = this._assembleBody(message,
                                               MESSAGE_TYPES.GROUP_FOLLOWUP,
@@ -1432,83 +1600,96 @@ var strongvelope = {};
         var self = this;
         var result = false;
         if (parsedMessage) {
-            if (parsedMessage.type === MESSAGE_TYPES.ALTER_PARTICIPANTS
-                    || parsedMessage.type === MESSAGE_TYPES.TRUNCATE
-                    || parsedMessage.type === MESSAGE_TYPES.PRIVILEGE_CHANGE) {
-                // Sanity checks.
-                if (setutils.intersection(new Set(parsedMessage.includeParticipants),
-                            new Set(parsedMessage.excludeParticipants)).size > 0) {
-                    // There should be not intersection between includeParticipants and excludeParticipants.
+            switch (parsedMessage.type) {
+                case MESSAGE_TYPES.ALTER_PARTICIPANTS:
+                case MESSAGE_TYPES.TRUNCATE:
+                case MESSAGE_TYPES.PRIVILEGE_CHANGE:
+                case MESSAGE_TYPES.PUBLIC_HANDLE_CREATE:
+                case MESSAGE_TYPES.PUBLIC_HANDLE_DELETE:
+                case MESSAGE_TYPES.OPEN_MODE_CLOSED:
 
-                    return false;
-                }
-                result = {
-                    sender: parsedMessage.invitor,
-                    type: parsedMessage.type,
-                    recipients: parsedMessage.recipients,
-                    privilege: parsedMessage.privilege,
-                    includeParticipants: parsedMessage.includeParticipants,
-                    excludeParticipants: parsedMessage.excludeParticipants
-                };
-                if (historicMessage === true) {
-                    return MegaPromise.resolve(result);
-                }
-                // Do group participant update.
-                parsedMessage.includeParticipants.forEach(function (item) {
-                    self.addParticipant(item);
-                });
-                parsedMessage.excludeParticipants.forEach(function (item) {
-                    self.removeParticipant(item);
-                });
-                return MegaPromise.resolve(result);
-            }
-            else if (parsedMessage.type === MESSAGE_TYPES.TOPIC_CHANGE) {
-                var proxyPromise = new MegaPromise();
-                var decryptPromise = this.decryptMessage(parsedMessage, parsedMessage.invitor, null);
-                decryptPromise.fail(function(arg) {
-                    proxyPromise.reject(arg);
-                });
-                decryptPromise.done(function(cleartext) {
-                    if (cleartext === false) {
-                        proxyPromise.reject(false);
-                        return false;
-                    }
-                    var payload = ns._parsePayload(cleartext, parsedMessage.protocolVersion);
-                    // Bail out if payload can not be parsed.
-                    if (payload === false) {
-                        proxyPromise.reject(false);
+                    // Sanity checks.
+                    if (setutils.intersection(new Set(parsedMessage.includeParticipants),
+                            new Set(parsedMessage.excludeParticipants)).size > 0) {
+                        // There should be not intersection between includeParticipants and excludeParticipants.
+
                         return false;
                     }
                     result = {
                         sender: parsedMessage.invitor,
                         type: parsedMessage.type,
-                        payload: payload.plaintext
+                        recipients: parsedMessage.recipients,
+                        privilege: parsedMessage.privilege,
+                        includeParticipants: parsedMessage.includeParticipants,
+                        excludeParticipants: parsedMessage.excludeParticipants
                     };
+                    if (historicMessage === true) {
+                        return MegaPromise.resolve(result);
+                    }
+                    // Do group participant update.
+                    parsedMessage.includeParticipants.forEach(function (item) {
+                        self.addParticipant(item);
+                    });
+                    parsedMessage.excludeParticipants.forEach(function (item) {
+                        self.removeParticipant(item);
+                    });
+                    return MegaPromise.resolve(result);
+
+                case MESSAGE_TYPES.TOPIC_CHANGE:
+                    var proxyPromise = new MegaPromise();
+                    var decryptPromise = this.decryptMessage(parsedMessage, parsedMessage.invitor, null);
+                    decryptPromise.fail(function (arg) {
+                        proxyPromise.reject(arg);
+                    });
+                    decryptPromise.done(function (cleartext) {
+                        if (cleartext === false) {
+                            proxyPromise.reject(false);
+                            return false;
+                        }
+                        var payload = cleartext.length > 0 ? ns._parsePayload(cleartext, parsedMessage.protocolVersion) : '';
+                        // Bail out if payload can not be parsed.
+                        if (payload === false) {
+                            proxyPromise.reject(false);
+                            return false;
+                        }
+                        result = {
+                            sender: parsedMessage.invitor,
+                            type: parsedMessage.type,
+                            payload: payload.plaintext
+                        };
+                        proxyPromise.resolve(result);
+                    });
+                    return proxyPromise;
+                case MESSAGE_TYPES.CALL_STARTED:
+                    return MegaPromise.resolve({
+                        sender: parsedMessage.invitor,
+                        type: parsedMessage.type
+                    });
+
+                case MESSAGE_TYPES.CALL_END:
+                    var proxyPromise = new MegaPromise();
+                    var callId = base64urlencode(parsedMessage.payload.substr(0, 8));
+                    var reason = parsedMessage.payload.substr(8, 1).charCodeAt(0);
+                    var duration = Chatd.unpack32le(parsedMessage.payload.substr(9, 4));
+
+                    var participants = parsedMessage.includeParticipants;
+
+                    result = {
+                        sender: parsedMessage.invitor,
+                        type: parsedMessage.type,
+                        callId: callId,
+                        reason: reason,
+                        duration: duration,
+                        participants: participants
+                    };
+
+
                     proxyPromise.resolve(result);
-                });
-                return proxyPromise;
+                    return proxyPromise;
 
-            }
-            else if (parsedMessage.type === MESSAGE_TYPES.CALL_END) {
-                var proxyPromise = new MegaPromise();
-                var callId = base64urlencode(parsedMessage.payload.substr(0, 8));
-                var reason = parsedMessage.payload.substr(8, 1).charCodeAt(0);
-                var duration = Chatd.unpack32le(parsedMessage.payload.substr(9, 4));
-
-                var participants = parsedMessage.includeParticipants;
-
-                result = {
-                    sender: parsedMessage.invitor,
-                    type: parsedMessage.type,
-                    callId: callId,
-                    reason: reason,
-                    duration: duration,
-                    participants: participants
-                };
-
-
-                proxyPromise.resolve(result);
-                return proxyPromise;
+                default:
+                    logger.critical('Invalid management message.');
+                    break;
             }
         }
         return MegaPromise.reject(false);
@@ -1588,22 +1769,21 @@ var strongvelope = {};
                 logger.info('I am not participating in this chat, cannot read message.');
             }
 
-            if (!senderKey) {
+            if (!senderKey && senderKey !== 0) {
                 proxyPromise.reject(false);
                 return false;
             }
 
             // Decrypt message payload.
-            var cleartext = ns._symmetricDecryptMessage(parsedMessage.payload,
-                senderKey,
-                parsedMessage.nonce);
             try {
-                cleartext = from8(cleartext);
+                var cleartext = ns._symmetricDecryptMessage(parsedMessage.payload, senderKey, parsedMessage.nonce);
+
                 // Bail out if decryption failed.
                 if (cleartext === false) {
                     proxyPromise.reject(false);
                     return false;
                 }
+                cleartext = from8(cleartext);
 
                 var result = {
                     version: parsedMessage.protocolVersion,
@@ -1619,13 +1799,13 @@ var strongvelope = {};
             catch (e) {
                 if (e instanceof URIError) {
                     logger.critical('Could not decrypt message, probably a wrong key/nonce.');
-
                     proxyPromise.reject(e);
-                    return false;
                 }
                 else {
+                    onIdle(function() {
+                        throw e;
+                    });
                     proxyPromise.reject(e);
-                    throw e;
                 }
             }
         });
@@ -1635,45 +1815,61 @@ var strongvelope = {};
 
     strongvelope.ProtocolHandler.prototype.decryptMessage = function(parsedMessage,
             sender, keyId) {
+        var self = this;
+        var senderKey = !keyId && !parsedMessage.keys && self.unifiedKey ? self.unifiedKey : null;
 
-        var senderKey = null;
         // if the message includes keys.
-        if (parsedMessage.keys.length > 0) {
-            var isOwnKey = (sender === this.ownHandle);
-            var myIndex = parsedMessage.recipients.indexOf(this.ownHandle);
-            // If we sent the message, pick first recipient for getting the
-            // sender key (e. g. for history loading).
-            if (myIndex >= 0) {
-                if (parsedMessage.keys && parsedMessage.keys.length === parsedMessage.recipients.length) {
-                    // Decrypt message key(s).
-                    var encryptedKey = parsedMessage.keys[myIndex];
+        if (!senderKey && parsedMessage.openMode && this.unifiedKey) {
+            senderKey = this.unifiedKey;
+        }
+        else if (!senderKey) {
+            if (parsedMessage.keys.length > 0) {
+                var isOwnKey = (sender === this.ownHandle);
+                var myIndex = parsedMessage.recipients.indexOf(this.ownHandle);
+                // If we sent the message, pick first recipient for getting the
+                // sender key (e. g. for history loading).
+                if (myIndex >= 0) {
+                    if (parsedMessage.keys && parsedMessage.keys.length === parsedMessage.recipients.length) {
+                        // Decrypt message key(s).
+                        var encryptedKey = parsedMessage.keys[myIndex];
 
-                    var decryptedKeys = this._decryptKeysFrom(encryptedKey,
-                                                              sender,
-                                                              isOwnKey);
-                    if (decryptedKeys) {
-                        senderKey = decryptedKeys[0];
+                        var decryptedKeys = this._decryptKeysFrom(encryptedKey,
+                                                                  sender,
+                                                                  isOwnKey);
+                        if (decryptedKeys) {
+                            senderKey = decryptedKeys[0];
+
+                            if (self.chatMode === CHAT_MODE.PUBLIC) {
+                                self.unifiedKey = senderKey;
+                            }
+                        }
                     }
                 }
             }
-        }
-        else {
-            var keyidStr = a32_to_str([keyId]);
-            if (!this.participantKeys[sender]) {
-                logger.critical('Message does not have a sender key for :' + sender);
-                return MegaPromise.reject(false);
-            }
-            senderKey = this.participantKeys[sender][keyidStr];
-            if (!senderKey) {
-                logger.critical('Message does not have a sender key for :' + sender + ' with key ID:' + keyId);
-                return MegaPromise.reject(false);
+            else {
+                if (keyId === 0) {
+                    senderKey = self.unifiedKey;
+                }
+                else {
+                    var keyidStr = a32_to_str([keyId]);
+                    if (!this.participantKeys[sender]) {
+                        logger.critical('Message does not have a sender key for :' + sender);
+                        return MegaPromise.reject(false);
+                    }
+                    senderKey = this.participantKeys[sender][keyidStr];
+                }
+
+                if (!senderKey) {
+                    logger.critical('Message does not have a sender key for :' + sender + ' with key ID:' + keyId);
+                    return MegaPromise.reject(false);
+                }
             }
         }
 
         if (parsedMessage) {
             var proxyPromise = new MegaPromise();
 
-            var verifyPromise = ns._verifyMessage(
+            var verifyPromise = self.chatMode === CHAT_MODE.PUBLIC ? MegaPromise.resolve(true) : ns._verifyMessage(
                 String.fromCharCode(parsedMessage.protocolVersion) +
                     String.fromCharCode(parsedMessage.type) + senderKey + parsedMessage.signedContent,
                 parsedMessage.signature,
@@ -1684,28 +1880,29 @@ var strongvelope = {};
             verifyPromise.fail(function(arg) {
                 if (arg !== 0xDEAD) {
                     logger.critical('Signature invalid for message from *** on ***');
-                    logger.error('Signature invalid for message from ' + sender);
+                    logger.error('Signature invalid for message from ' + sender + ', chatId:' + self.chatRoom.chatId);
                 }
-                proxyPromise.reject(false);
             });
 
-            verifyPromise.done(function(arg) {
+            verifyPromise.always(function(arg) {
                 if (!arg) {
                     // signature verification failed.
-                    logger.error('Signature invalid for message from ' + sender);
-                    proxyPromise.reject(false);
-                } else {
+                    logger.error('Signature invalid for message from ' + sender, 'chatId:', self.chatRoom.chatId);
+                }
 
+                try {
                     // Decrypt message payload.
-                    var cleartext = ns._symmetricDecryptMessage(parsedMessage.payload,
-                        senderKey,
-                        parsedMessage.nonce);
+                    var cleartext = ns._symmetricDecryptMessage(parsedMessage.payload, senderKey, parsedMessage.nonce);
+
                     // Bail out if decryption failed.
                     if (cleartext === false) {
-                        logger.warn("Decryption failed [1]: ", sender, keyId);
-                        proxyPromise.reject(false);
+                        throw new Error('Invalid parameters passed to symmetricDecryptMessage');
                     }
                     proxyPromise.resolve(cleartext);
+                }
+                catch (ex) {
+                    logger.warn("Decryption failed [1]: ", sender, keyId, ex);
+                    proxyPromise.reject(false);
                 }
             });
             return proxyPromise;
@@ -1733,7 +1930,6 @@ var strongvelope = {};
      */
     strongvelope.ProtocolHandler.prototype.decryptFrom = function(message,
             sender, keyId, historicMessage) { // jshint maxcomplexity: 11
-
         var protocolVersion = message.charCodeAt(0);
         if (protocolVersion <= PROTOCOL_VERSION_V1) {
             return this.legacyDecryptFrom(message, sender, historicMessage);
@@ -1755,7 +1951,7 @@ var strongvelope = {};
         sender = sender ? sender : parsedMessage.invitor;
 
         // if the message is from chat API
-        if (sender === COMMANDER || keyId === 0) {
+        if (sender === COMMANDER) {
             return this.handleManagementMessage({ userId: sender, message: message}, historicMessage);
         }
 
@@ -1898,8 +2094,7 @@ var strongvelope = {};
      *     Current key Id.
      */
     strongvelope.ProtocolHandler.prototype.getKeyId = function() {
-
-        return str_to_a32(this.keyId)[0];
+        return str_to_a32(this.chatMode === CHAT_MODE.PUBLIC ? 0 : this.keyId)[0];
     };
 
     /**
@@ -1946,6 +2141,29 @@ var strongvelope = {};
     };
 
     /**
+     * Pack a key for a given user.
+     * @method
+     * @param senderKey {Binary}  encryption key to pack
+     * @param destination {String}  user handle
+     *
+     * @returns {String}
+     *        packed key binary.
+     */
+    strongvelope.ProtocolHandler.prototype.packKeyTo = function(senderKey, destination) {
+        var self = this;
+        var packedKey = '';
+        var encryptedKey = self._encryptKeysTo([senderKey], destination);
+
+        if (encryptedKey === false) {
+            // Something went wrong, and we can't encrypt to that destination.
+            return false;
+        }
+
+        packedKey += (base64urldecode(u_handle) + encryptedKey);
+        return packedKey;
+    };
+
+    /**
      * Set participant change to be ture, so it will rotate the key next time it tries to send out a message.
      *
      * @method
@@ -1977,7 +2195,6 @@ var strongvelope = {};
      *       It should be fine as it can tolerate up to 2^16 temporary key Ids.
      */
     strongvelope.ProtocolHandler.prototype.setKeyID = function(keyxId, keyId) {
-
         var tempkeyid = a32_to_str([keyxId]);
         var newkeyid = a32_to_str([keyId]);
 
@@ -1995,22 +2212,29 @@ var strongvelope = {};
      * @param keys {Array}
      *     Key arrary from chatd.
      * @returns {Boolean}
-     *     True if no errors and False if error happened.
+     *     Always True even if there was an error when seeding some/all of the keys
      */
     strongvelope.ProtocolHandler.prototype.seedKeys = function(keys) {
-        for (var i=0; i<keys.length;i++) {
+        for (var i = 0; i < keys.length; i++) {
 
             var keyidStr = a32_to_str([keys[i].keyid]);
             var key = keys[i].key;
             var isOwnKey = (keys[i].userId === this.ownHandle);
 
-            var decryptedKeys = this._decryptKeysFrom(key,
-                                         keys[i].userId,
-                                         isOwnKey);
-            if (!this.participantKeys[keys[i].userId]) {
-                this.participantKeys[keys[i].userId] = {};
-            }
-            this.participantKeys[keys[i].userId][keyidStr] = decryptedKeys[0];
+            tryCatch(function(key, i, isOwnKey, keyidStr) {
+                var decryptedKeys = this._decryptKeysFrom(
+                    key,
+                    keys[i].userId,
+                    isOwnKey
+                );
+                if (!this.participantKeys[keys[i].userId]) {
+                    this.participantKeys[keys[i].userId] = {};
+                }
+                this.participantKeys[keys[i].userId][keyidStr] = decryptedKeys[0];
+
+            }.bind(this), function(e) {
+                console.error('_decryptKeysFrom thrown an error:', e);
+            })(key, i, isOwnKey, keyidStr);
         }
         return true;
     };
@@ -2043,6 +2267,59 @@ var strongvelope = {};
     strongvelope.ProtocolHandler.prototype.setIncludeKey = function(include) {
 
         this.includeKey = include;
+    };
+
+    /**
+     * Return the unified key of the chat.
+     *
+     * @method
+     * @return a base64 encoded string {String}
+     */
+    strongvelope.ProtocolHandler.prototype.getUnifiedKey = function() {
+        var self = this;
+        if (!self.unifiedKey) {
+            var pKeys = Object.keys(self.participantKeys);
+            if (pKeys.length === 0) {
+                return null;
+            }
+            var keys = Object.keys(self.participantKeys[pKeys[0]]);
+            if (keys.length === 0) {
+                return null;
+            }
+            self.unifiedKey = self.participantKeys[pKeys[0]][keys[0]];
+        }
+
+        return self.unifiedKey ? base64urlencode(self.unifiedKey) : null;
+    };
+    /**
+     * switch off open mode.
+     *
+     * @method
+     */
+    strongvelope.ProtocolHandler.prototype.switchOffOpenMode = function() {
+        var self = this;
+        self.unifiedKey = null;
+        self.chatMode = CHAT_MODE.CLOSED;
+        self.keyRotation = true;
+    };
+    /**
+     * Enable key rotation
+     *
+     * @method
+     */
+    strongvelope.ProtocolHandler.prototype.enableKeyRotation = function() {
+
+        this.keyRotation = true;
+    };
+
+    /**
+     * Disable key rotation
+     *
+     * @method
+     */
+    strongvelope.ProtocolHandler.prototype.disableKeyRotation = function() {
+
+        this.keyRotation = false;
     };
 
     /**

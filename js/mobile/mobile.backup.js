@@ -11,10 +11,9 @@ mobile.backup = {
         'use strict';
 
         var $page = $('.mobile.recovery-key-page');
-        var $backButton = $page.find('.fm-icon.back');
 
         // Init functionality
-        mobile.showAndInitBackButton($backButton);
+        mobile.initBackButton($page);
         mobile.backup.showKey($page);
         mobile.backup.initCopyKeyButton($page);
         mobile.backup.initDownloadKeyButton($page);
@@ -71,6 +70,7 @@ mobile.backup = {
                     // If it succeeded, show a toast message
                     if (success) {
                         mobile.showToast(l[8836]);    // Recovery Key copied to clipboard
+                        mBroadcaster.sendMessage('keyexported');
                     }
                     else {
                         // Otherwise tell them to copy manually
@@ -109,16 +109,6 @@ mobile.backup = {
         $downloadToFileButton.removeClass('hidden');
 
         // Add click/tap handler to the button
-        $downloadToFileButton.off('tap').on('tap', function() {
-
-            // Convert the Master/Recovery Key to Base64 and then create a Blob object
-            var recoveryKeyBase64 = a32_to_base64(u_k);
-            var blob = new Blob([recoveryKeyBase64], {
-                type: "text/plain;charset=utf-8"
-            });
-
-            // Use the SaveAs library to pop up a save dialog (file download) for the user
-            saveAs(blob, 'MEGA-RECOVERYKEY.txt');
-        });
+        $downloadToFileButton.rebind('tap', u_savekey);
     }
 };

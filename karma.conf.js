@@ -34,10 +34,7 @@ module.exports = function(config) {
         'js/vendor/jsbn.js',
         'js/vendor/jsbn2.js',
         'js/vendor/nacl-fast.js',
-        'js/vendor/dexie.js',
         // For notifications.
-        'js/vendor/ion.sound.js',
-        'js/vendor/favico.js',
         'js/vendor/notification.js',
         'js/vendor/moment.js',
 
@@ -52,6 +49,7 @@ module.exports = function(config) {
 
         // Shim for ES6 features some browsers may not have (PhantomJS, MSIE).
         'js/vendor/es6-shim.js',
+        'js/vendor/dexie.js',
 
         // == Our code ==
         'secureboot.js',
@@ -100,7 +98,6 @@ module.exports = function(config) {
         'js/crypto.js',
         'js/megaPromise.js',
         'js/idbkvstorage.js',
-        'js/vendor/dexie.js',
         'sjcl.js',
         'js/mDB.js',
         'js/sharedlocalkvstorage.js',
@@ -110,7 +107,6 @@ module.exports = function(config) {
         'js/authring.js',
         'js/mouse.js',
         'js/filedrag.js',
-        'js/mDB.js',
         'js/thumbnail.js',
         'js/vendor/exif.js',
         'js/vendor/smartcrop.js',
@@ -121,15 +117,15 @@ module.exports = function(config) {
         'js/ui/feedbackDialog.js',
         'js/ui/credentialsWarningDialog.js',
         'js/ui/loginRequiredDialog.js',
+        'js/notifyConfig.js',
         'js/notify.js',
         'js/megaNotifications.js',
         'js/vendor/avatar.js',
         'js/vendor/int64.js',
         'js/cms.js',
-        'js/appActivityHandler.js',
         'js/keepAlive.js',
-        // Google Import Contacts
-        'js/gContacts.js',
+        'js/metatags.js',
+        'js/utils/trans.js',
 
         // Transfers
         'js/transfers/meths/filesystem.js',
@@ -142,8 +138,10 @@ module.exports = function(config) {
         'js/transfers/reader.js',
         'js/transfers/upload2.js',
         'js/transfers/zip64.js',
+        'js/transfers/meths.js',
         {pattern: 'aesasm.js', included: false},
         {pattern: 'encrypter.js', included: false},
+
 
         // Our chat code.
         'js/chat/strongvelope.js',
@@ -157,11 +155,11 @@ module.exports = function(config) {
         'js/chat/plugins/callFeedback.js',
         'js/chat/webrtc.js',
         'js/chat/plugins/callManager.js',
+        'js/chat/plugins/geoLocationLinks.js',
         'js/chat/messages.js',
         'js/chat/ui/incomingCallDialog.js',
-
-        // Speedmeter
-        'js/network-testing.js',
+        'js/chat/callNotificationsEngine.js',
+        'js/utils/emoji.js',
 
         {pattern: 'test/chat/transcripts/*.json', included: false},
 
@@ -187,7 +185,7 @@ module.exports = function(config) {
     // Fix up to make it work on the Jenkins server.
     urlRoot: '/base',
     proxies: {
-        '/': '/'
+        '/': './'
     },
 
     // Test results reporter to use.
@@ -219,6 +217,7 @@ module.exports = function(config) {
 
     // JUnit reporter configuration.
     junitReporter: {
+        outputDir: 'coverage/',
         outputFile: 'test-results.xml'
     },
 
@@ -235,57 +234,66 @@ module.exports = function(config) {
     // Enable/disable watching file and executing tests whenever any file changes.
     autoWatch: true,
 
+    client: {
+        mocha: {
+            // Increase default timeout of 2000ms
+            timeout: 4000
+        }
+    },
+
     // Start these browsers, currently available:
     // - Chrome
     // - ChromeCanary
+    // - ChromeHeadless
     // - Firefox
+    // - FirefoxHeadless (Requires version 55+)
+    // - FirefoxNightlyHeadless
+    // - FirefoxDeveloperHeadless
     // - Opera (has to be installed with `npm install karma-opera-launcher`)
     // - Safari (only Mac; has to be installed with `npm install karma-safari-launcher`)
-    // - PhantomJS
-    // - IE (only Windows; has to be installed with `npm install karma-ie-launcher`)
     browsers: [
-        'PhantomJS',
-        'PhantomJS_custom',
         'Firefox',
+        'FirefoxHeadless',
         'Firefox_Extension',
         'Firefox_NoCookies',
         'Firefox_Incognito',
         'Chrome',
+        'ChromeHeadless',
         'Chrome_Incognito',
         'Chrome_Unlimited',
         'Chrome_NoCookies'
     ],
 
     customLaunchers: {
-        'PhantomJS_custom': {
-            base: 'PhantomJS',
-            // debug: true,
-            flags: [
-                // '--debug=true',
-                '--local-storage-path=./test/phantomjs-storage',
-                '--offline-storage-path=./test/phantomjs-storage'
-            ]
-        },
         'Firefox_NoCookies': {
-            base: 'Firefox',
+            base: 'FirefoxHeadless',
+            displayName: 'Firefox Headless (NoCookies)',
             prefs: {
                 'network.cookie.cookieBehavior': 2
             }
         },
         'Firefox_Incognito': {
-            base: 'Firefox',
+            base: 'FirefoxHeadless',
+            displayName: 'Firefox Headless (PBM)',
             flags: ['-private']
         },
         'Chrome_NoCookies': {
-            base: 'Chrome',
-            flags: ['--disable-local-storage', '--disable-databases', '--unlimited-storage']
+            base: 'ChromeHeadless',
+            displayName: 'Chrome Headless (NoCookies)',
+            flags: ['--disable-local-storage', '--disable-databases', '--site-per-process']
+        },
+        'Chrome_Mobile': {
+            base: 'Chrome_NoCookies',
+            displayName: 'Chrome HeadLess (Mobile)',
+            flags: ['--use-mobile-user-agent', '--webview-sandboxed-renderer'],
         },
         'Chrome_Incognito': {
-            base: 'Chrome',
+            base: 'ChromeHeadless',
+            displayName: 'Chrome Headless (Incognito)',
             flags: ['--incognito']
         },
         'Chrome_Unlimited': {
-            base: 'Chrome',
+            base: 'ChromeHeadless',
             flags: ['--unlimited-storage']
         },
         'Firefox_Extension': {

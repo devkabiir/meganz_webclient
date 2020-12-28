@@ -12,7 +12,7 @@ mobile.languageMenu = {
 
         // Main tier 1 languages that we support (based on usage analysis)
         var tierOneLangCodes = [
-            'es', 'en', 'br', 'ct', 'fr', 'de', 'ru', 'tr', 'it', 'ar',
+            'es', 'en', 'br', 'ct', 'fr', 'de', 'ru', 'it', 'ar',
             'nl', 'cn', 'jp', 'kr', 'ro', 'id', 'th', 'vi', 'pl'
         ];
 
@@ -120,7 +120,7 @@ mobile.languageMenu = {
 
                 // Set a language user attribute on the API (This is a private but unencrypted user
                 // attribute so that the API can read it and send emails in the correct language)
-                if (typeof u_attr !== 'undefined') {
+                if (typeof u_attr !== 'undefined' && u_attr) {
                     mega.attr.set(
                         'lang',
                         selectedLangCode,       // E.g. en, es, pt

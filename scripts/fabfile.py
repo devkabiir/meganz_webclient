@@ -5,6 +5,9 @@ Fabfile for deploying the Mega Web Client.
 * To deploy/update the current branch on beta.developers.mega.co.nz:
   fab dev
 
+* To login using specific username on beta.developers.mega.co.nz:
+  fab dev:u=YOUR_USER_NAME
+
 * To deploy/update a specific branch on beta.developers.mega.co.nz:
   fab dev:branch_name=1657-simple-translations
 
@@ -13,6 +16,18 @@ Fabfile for deploying the Mega Web Client.
 
 * To build bundle.js and deploy to a specific branch:
   fab dev:build_bundle=True,branch_name=1657-simple-translations
+
+* To delete previously deployed beta and re-deploy the current branch on beta.developers.mega.co.nz:
+  fab dev:del_exist=True or fab dev:del_exist=1
+
+* To build a test Firefox extension:
+  fab dev:build_firefox_ext=True or fab dev:build_firefox_ext=1
+
+* To build a test Chrome extension:
+  fab dev:build_chrome_ext=True or fab dev:build_chrome_ext=1
+
+* To build both extensions:
+  fab dev:build_firefox_ext=True,build_chrome_ext=True or fab dev:build_firefox_ext=1,build_chrome_ext=1
 
 * To deploy/update a branch on sandbox3.developers.mega.co.nz:
   fab sandbox dev:branch_name=1657-simple-translations
@@ -85,17 +100,31 @@ def _build_chat_bundle(target_dir):
 
 
 @task
-def dev(build_bundle=False, branch_name=''):
+def dev(build_bundle=False, branch_name='', del_exist=False, build_firefox_ext=False, build_chrome_ext=False, fetch_lang=False, u=False):
     """
     Clones a branch and deploys it to beta.developers.mega.co.nz.
     It will then output a test link which can be pasted into a Redmine
     ticket or run in the browser.
 
+    note: Unless specific username is given, this will tries to get local git email address to trackdown username to use on the beta server.
+    Beta server username and email used on gitlab should be match for this to work automaically.
+
     Usage:
         1) Enter your code directory and run: Fab dev
         2) Alternatively to clone any branch run:
            Fab dev:xxx-branch-name
+        3) Delete existing branch on beta and clone new one:
+           Fab dev:del_exist=True
     """
+
+    # If username is given use it, otherwise try to use same username from local git.
+    if u:
+        username = u;
+    else:
+        local_email = local('git config user.email', capture=True)
+        username = local_email.replace('@mega.co.nz', '')
+
+    BETA_DEV_HOST = username + '@beta.developers.mega.co.nz:28999'
 
     # If none other given, use beta.developers server
     if not env.host_string:
@@ -106,8 +135,18 @@ def dev(build_bundle=False, branch_name=''):
     if branch_name == '':
         branch_name = local('git rev-parse --abbrev-ref HEAD', capture=True)
 
+    # If branch name is still empty, something is wrong.
+    if branch_name == '':
+        print('Something went wrong with get current branch name.\n');
+        exit();
+
     # Get the remote path e.g. /var/www/xxx-branch-name
     remote_branch_path = os.path.join(env.target_dir, branch_name)
+
+    # Delete existing branch.
+    if del_exist:
+        print('deleting existing {} branch.\n').format(branch_name)
+        run('rm -rf {}'.format(remote_branch_path))
 
     # Clone the repo into /var/www/xxx-branch-name
     # but not the full git history to save on storage space
@@ -135,6 +174,10 @@ def dev(build_bundle=False, branch_name=''):
                 run('git pull --update-shallow')
                 run('git log -1')
 
+        print('Pulling latest language file from babel.\n')
+        with cd(remote_branch_path):
+            run('./scripts/lang.sh')
+
         # Update version info.
         version = None
         with cd(remote_branch_path):
@@ -153,10 +196,32 @@ def dev(build_bundle=False, branch_name=''):
         boot_html = ('sandbox3' if env.host_string == SANDBOX3_HOST
                      else 'devboot-beta')
 
-        # Provide test link and version info.
-        print('Test link:\n    https://{branch_name}.{host}'
-                '/dont-deploy/sandbox3.html?apipath=prod&jj=1'
-                .format(host=host_name.replace("beta.", ""),
-                        branch_name=branch_name,
-                        boot_html=boot_html))
-        print("Latest version deployed:\n    {}".format(version))
+        # Build the Firefox extension if requested
+        if build_firefox_ext:
+	    with cd('~/deployment/webclient-updatebuild/'):
+                run('BETA_BUILD=1 BETA_WEBCLIENT_PATH=/var/www/' + branch_name + ' php 2b-update-firefox-web-ext.php')
+
+        # Build the Chrome extension if requested
+        if build_chrome_ext:
+	    with cd('~/deployment/webclient-updatebuild/'):
+                run('BETA_BUILD=1 BETA_WEBCLIENT_PATH=/var/www/' + branch_name + ' php 2a-update-chrome.php')   
+		
+        # Provide test link
+        print('Test link: https://{branch_name}.{host}/dont-deploy/sandbox3.html?apipath=prod&jj=1'
+            .format(host=host_name.replace("beta.", ""),
+                branch_name=branch_name,
+                boot_html=boot_html))
+
+        # Provide test link to Firefox ext
+        if build_firefox_ext:
+            print('Firefox ext link: https://{branch_name}.{host}/meganz.xpi'
+                .format(host=host_name.replace("beta.", ""), branch_name=branch_name))
+
+        # Provide test link to Chrome ext
+        if build_chrome_ext:
+            print('Chrome ext link: https://{branch_name}.{host}/chrome-extension.zip'
+                .format(host=host_name.replace("beta.", ""), branch_name=branch_name))
+
+        # Provide commit info
+        print("Latest commit deployed: {}".format(version))
+

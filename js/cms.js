@@ -1,31 +1,39 @@
 (function(window) {
+    'use strict';
+
     /** Our trusted public keys {{{ */
     var signPubKey = {
         "__global": [
-            "O1B2FzarfqzPUDKdOiPJvfEnx3QAc+xHW16CEItjtgg=",
-            "rRHOm8BpMsYsSnSlk1AD2xxm9vKIFd\/tMoKxc35FTXQ=",
-            "yUSKtdxceRbOL6efsWzHviXpggxjYQQ2qedmER7gwA0="      // Hugo's
-        ],
-        "sync": [
-            "J0K5p5rZjOjxli\/uioSP1yneQtoW2QTl3zXN\/Q3H3Mc="
+            "rRHOm8BpMsYsSnSlk1AD2xxm9vKIFd\/tMoKxc35FTXQ=", // Elroy v2
+            "WJbsItfJfXhGZlq6D1tz\/Wy\/AVjmvQoK7ZgBSOrrCQE=", // Guy v2
+            "nJ0DVETXN6Fgd+nK70bsngaPlbM9zedn14Exh\/fAoyU=", // Shaun v2
+            "WpDw5Q4L/7AfEMsGeW79BAheALabCdK3uYNNZB+Bq5o=", // Elroy v3
+            "TJi9yWiE3tj15ER3W2kLcV4uVuE2GftUm54XQQLPTGg=", // Guy v3
+            "nX9lIbNNyZPnnMr7aFMENHlescfDbp+ZmUIpGTcDp0w=", // Shaun v3
+            "c/1i2Cq85V8n1I3tixV4bjLTRn9ZqYqtOVhxavHKoYM=", // Mark v3
+            "PuXh6QXVRVVKPPdeLfYgG0VNxG6mUn2XioNCnxHzq1A=" // Harry v3
         ]
     };
     /** }}} */
 
+    var CMS = {scope: ''};
     var IMAGE_PLACEHOLDER = staticpath + "/images/img_loader@2x.png";
-    var isReady = false;
+    var isReady = true;
 
-    mBroadcaster.once('startMega', function() {
-        for (var sub in signPubKey) {
-            if (!signPubKey.hasOwnProperty(sub)) {
-                continue;
+    if (!is_litesite) {
+        isReady = false;
+        mBroadcaster.once('startMega', function() {
+            for (var sub in signPubKey) {
+                if (!signPubKey.hasOwnProperty(sub)) {
+                    continue;
+                }
+                for (var l = 0; l < signPubKey[sub].length; ++l) {
+                    signPubKey[sub][l] = asmCrypto.base64_to_bytes(signPubKey[sub][l]);
+                }
             }
-            for (var l = 0; l < signPubKey[sub].length; ++l) {
-                signPubKey[sub][l] = asmCrypto.base64_to_bytes(signPubKey[sub][l]);
-            }
-        }
-        isReady = true;
-    });
+            isReady = true;
+        });
+    }
 
     var cmsRetries = 1; // how many times to we keep retyring to ping the CMS before using the snapshot?
     var fetching = {};
@@ -63,23 +71,20 @@
     }
 
     function parse_pack(bytes) {
-        var mime;
         var type;
         var nameLen;
         var name;
         var content;
-        var e = 0;
         var binary = new Uint8Array(bytes);
         var hash = {};
 
-
         for (var i = 0; i < bytes.byteLength;) {
-            size = readLength(bytes, i);
+            var size = readLength(bytes, i);
             i += 4; /* 4 bytes */
 
             type = binary[i++];
             nameLen = binary[i++];
-            name = ab_to_str(bytes.slice(i, nameLen + i));
+            name = CMS.escape(ab_to_str(bytes.slice(i, nameLen + i)));
 
             i += nameLen;
 
@@ -87,10 +92,7 @@
 
             switch (type) {
             case 3:
-                hash[name] = {
-                    html: ab_to_str(content).replace(/(?:{|%7B)cmspath(?:%7D|})/g, CMS.getUrl()),
-                    mime: type
-                };
+                    hash[name] = {html: CMS.parse(content, false), mime: type};
                 break;
 
             case 2:
@@ -110,7 +112,10 @@
     }
 
     function verify_cms_content(content, signature, objectId) {
-        var hash  = asmCrypto.SHA256.bytes(content);
+        if (is_litesite) {
+            return true;
+        }
+        var hash = asmCrypto.SHA256.bytes(content);
         signature = asmCrypto.string_to_bytes(ab_to_str(signature));
         var i;
 
@@ -141,6 +146,33 @@
         return false;
     }
 
+
+    function parse_cms_content(content, imgLoad) {
+        if (content && typeof content !== 'string') {
+            content = ab_to_str(content);
+        }
+
+        return String(content)
+            .replace(/\s+/g, ' ')
+            .replace(
+                /((?:{|%7B)cmspath(?:%7D|}))\/(unsigned\/)?([\dA-Za-z]+)/g,
+                function(matches, cmspath, unsigned, filename) {
+                    return imgLoad === false ? filename : CMS.img(filename);
+                })
+            .replace(/<a[^>]+>/g, function(m) {
+                if (m.indexOf('href=&quot;') > 0) {
+                    m = m.replace(/&quot;/g, '"');
+                }
+                if (/href=["']\w+:/.test(m)) {
+                    m = m.replace('>', ' target="_blank" rel="noopener noreferrer">');
+                }
+                if (/href=["'][#/]/.test(m)) {
+                    m = m.replace('>', ' class="clickurl">');
+                }
+                return m;
+            });
+    }
+
     function process_cms_response(bytes, next, as, id) {
         var viewer = new Uint8Array(bytes);
 
@@ -151,7 +183,6 @@
         }
 
         var signature = bytes.slice(3, 67); // 64 bytes, signature
-        var version = viewer[0];
         var mime = viewer[1];
         var label = ab_to_str(bytes.slice(67, viewer[2] + 67));
         var content = bytes.slice(viewer[2] + 67);
@@ -163,8 +194,7 @@
         if (verify_cms_content(content, signature, id)) {
             switch (mime) {
             case 3: // html
-                content = ab_to_str(content).replace(/(?:{|%7B)cmspath(?:%7D|})/g, CMS.getUrl());
-                next(false, { html: content, mime: mime});
+                    next(false, {html: CMS.parse(content), mime: mime});
                 return loaded(id);
 
             case 1:
@@ -264,6 +294,7 @@
         if (!id) {
             throw new Error("Calling CMS.doRequest without an ID");
         }
+        id = CMS.escape(id);
 
         if (typeof CMS_Cache === "object" && CMS_Cache[id]) {
             for (var i in fetching[id]) {
@@ -294,7 +325,7 @@
             delete fetching[id];
             cmsBackoff = 0; /* reset backoff */
         };
-        var url = CMS.getUrl() + id;
+        var url = cmsStaticPath + CMS.scope + '/' + id;
         q.open("GET", url);
         q.responseType = 'arraybuffer';
         q.send();
@@ -331,9 +362,8 @@
     var curCallback;
     var reRendered = {};
 
-    var CMS = {
-        watch: function(type, callback)
-        {
+    Object.assign(CMS, {
+        watch: function(type, callback) {
             curType = type;
             curCallback = callback;
         },
@@ -353,8 +383,28 @@
             }
         },
 
-        html: function(html) {
-            return html.replace(/(?:{|%7B)cmspath(?:%7D|})/g, CMS.getUrl());
+        escape: function(content, mode) {
+            mode = mode || 'strict';
+            content = String(content || '');
+
+            if (mode === 'html') {
+                content = escapeHTML(content);
+            }
+            else if (mode === 'strict') {
+                content = content.replace(/[^\w.-]/g, '');
+            }
+            else if (mode === 'regex') {
+                content = content.replace(/\W/g, "\\$&");
+            }
+            else {
+                content = parseFloat(content) || '';
+            }
+            return String(content || "\u26A0");
+        },
+
+        parse: function(content, imgLoad) {
+            // @todo unify both functions once this file is properly refactored
+            return parse_cms_content(content, imgLoad);
         },
 
         isLoading: function() {
@@ -382,28 +432,20 @@
 
         loaded: loaded,
 
-        /**
-         *  Load unsigned images (HTTP images) instead
-         *  of letting the CMS loading the signed images.
-         *  We assume it's secure enough because the content that references
-         *  the images are signed.
-         *
-         *  @param {String} id  64 digits to represent 256 bits.
-         *  @returns {String} URL
-         */
-        img2: function insecureImageLoading(id) {
-            return this.getUrl() + "/unsigned/" + id;
-        },
-
         img: function(id) {
+            id = CMS.escape(id);
+            var imgPlaceHolder = IMAGE_PLACEHOLDER + "#" + id;
             if (!assets[id]) {
                 this.get(id, function(err, obj) {
-                    $('*[data-img=loading_' + id + ']').attr({'id': '', 'src': obj.url});
-                    $('*[src="' + IMAGE_PLACEHOLDER + "#" + id + '"]').attr({'id': '', 'src': obj.url});
-                    assets[id] = obj.url;
+                    var url = CMS.escape(obj.url, 'html');
+                    if (url && !err) {
+                        $('*[data-img=loading_' + id + '], *[src="' + imgPlaceHolder + '"]')
+                            .attr({'id': '', 'src': url});
+                    }
+                    assets[id] = url;
                 });
             }
-            return assets[id] ? assets[id] : IMAGE_PLACEHOLDER + "#" + id;
+            return CMS.escape(assets[id] || imgPlaceHolder, 'html');
         },
 
         index: function(index, callback) {
@@ -436,17 +478,19 @@
         },
 
         get: function(id, next, cache, as) {
-            if (id instanceof Array) {
+            if (d > 1) {
+                console.debug('CMS.get(%s)', id, [id]);
+            }
+            if (Array.isArray(id)) {
                 var step = steps(id.length, next);
-                for (var i in id) {
-                    if (id.hasOwnProperty(i)) {
-                        this.get(id[i], step(i), cache, as);
-                    }
+                for (var i = 0; i < id.length; ++i) {
+                    this.get(id[i], step(i), cache, as);
                 }
                 return;
             }
             var isNew = false;
             next = next || function() {};
+            id = CMS.escape(id);
 
             if (cache) {
                 next = cacheCallback(id, next);
@@ -454,7 +498,6 @@
                     return next(cmsCache[id][0], cmsCache[id][1]);
                 }
             }
-
 
             if (typeof fetching[id] === "undefined") {
                 isNew = true;
@@ -465,10 +508,6 @@
             if (isNew) {
                 doRequest(id);
             }
-        },
-
-        getUrl: function() {
-            return localStorage.cms || "https://cms2.mega.nz/";
         },
 
         on: function(id, callback)
@@ -494,27 +533,58 @@
                 html = html.replace(IMAGE_PLACEHOLDER + "' data-img='loading_" + id, assets[id], 'g');
             }
             return html;
+        },
+
+        fillStats: function($page, muser, dactive, bfiles, mcountries) {
+            // Locale of million and biliion will comes
+            $('.register-count .num', $page).text(muser + 'M+');
+            $('.daily-active .num', $page).text(dactive + 'M+');
+            $('.files-count .num', $page).text(bfiles + 'B+');
+            $('.mega-countries .num', $page).text(mcountries + '+');
+        },
+
+        dynamicStatsCount: function($page) {
+            if (this.statsCache && new Date() - this.statsCache.statsTime < 36e5) {
+                this.fillStats(
+                    $page,
+                    this.statsCache.muser,
+                    this.statsCache.dactive,
+                    this.statsCache.bfiles,
+                    this.statsCache.mcountries
+                );
+            }
+            else {
+                loadingDialog.show();
+
+                api_req({a: "dailystats"}, {
+                    callback: function(res) {
+
+                        loadingDialog.hide();
+
+                        var muser = 175;
+                        var dactive = 10;
+                        var bfiles = 75;
+                        var mcountries = 200;
+
+                        if (typeof res === 'object') {
+                            muser = res.confirmedusers.total / 1000000 | 0;
+                            bfiles = res.files.total / 1000000000 | 0;
+                        }
+
+                        CMS.fillStats($page, muser, dactive, bfiles, mcountries);
+                        CMS.statsCache = {
+                            muser: muser,
+                            dactive: dactive,
+                            bfiles: bfiles,
+                            mcountries: mcountries,
+                            statsTime: new Date()
+                        };
+                    }
+                });
+            }
         }
-    };
+    });
 
     /* Make it public */
-    window.CMS = CMS;
-
+    Object.defineProperty(window, 'CMS', {value: CMS});
 })(this);
-
-CMS.on('corporate', function()
-{
-    $('.new-left-menu-link').rebind('click', function() {
-        loadSubPage('corporate/' + $(this).attr('id'));
-        $('.old .fmholder').animate({ scrollTop: 0 }, 0);
-    });
-    var ctype = getSitePath().substr(11);
-    if ($('#' + ctype).length === 1) {
-        $('.new-right-content-block').addClass('hidden');
-        $('.new-right-content-block.' + ctype).removeClass('hidden');
-        $('.new-left-menu-link').removeClass('active');
-        $('#' + ctype).addClass('active');
-    } else {
-        $('.new-left-menu-link:first').trigger('click');
-    }
-});

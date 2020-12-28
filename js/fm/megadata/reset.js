@@ -11,6 +11,7 @@ MegaData.prototype.reset = function() {
     this.tree = Object.create(null);
     this.c.shares = Object.create(null);
     this.c.contacts = Object.create(null);
+    this.cfInflightR = Object.create(null);
     this.filterLabel = Object.create(null);
     this.filterTreePanel = Object.create(null);
 
@@ -18,30 +19,14 @@ MegaData.prototype.reset = function() {
     this.chd = Object.create(null);
     this.chc = Object.create(null);
 
+    this.suba = Object.create(null);
     if (typeof MegaDataMap !== 'undefined') {
         this.u = new MegaDataMap();
-        this.u.addChangeListener(function() {
-            if (fminitialized) {
-                if (
-                    typeof $.sortTreePanel !== 'undefined' &&
-                    typeof $.sortTreePanel.contacts !== 'undefined' &&
-                    $.sortTreePanel.contacts.by === 'status'
-                ) {
-                    M.contacts(); // we need to resort
-                }
-                else if (M.currentdirid && M.u[M.currentdirid]) {
-                    M.contacts(); // we need to resort
-                }
-                if (getSitePath() === "/fm/contacts") {
-                    // re-render the contact view page if the presence had changed
-                    M.openFolder('contacts', true);
-                }
-            }
-        });
     }
 
     this.nn = false;
     this.sn = false;
+    this.cf = false;
     this.filter = false;
     this.sortfn = false;
     this.sortd = false;
@@ -50,6 +35,7 @@ MegaData.prototype.reset = function() {
     this.RubbishID = undefined;
     this.InboxID = undefined;
     this.viewmode = 0; // 0 list view, 1 block view
+    this.currentCustomView = false;
 
     var tree$tmpl = document.getElementById('template-tree-item');
     this.tree$tmpl = tree$tmpl && tree$tmpl.firstElementChild.cloneNode(true) || document.createElement('li');

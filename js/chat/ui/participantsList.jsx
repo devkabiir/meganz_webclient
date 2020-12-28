@@ -1,84 +1,98 @@
-var React = require("react");
-var ReactDOM = require("react-dom");
-var MegaRenderMixin = require('./../../stores/mixins.js').MegaRenderMixin;
-var ButtonsUI = require('./../../ui/buttons.jsx');
-var ModalDialogsUI = require('./../../ui/modalDialogs.jsx');
+import React from 'react';
+import {MegaRenderMixin} from './../../stores/mixins.js';
+
 var DropdownsUI = require('./../../ui/dropdowns.jsx');
 var ContactsUI = require('./../ui/contacts.jsx');
 var PerfectScrollbar = require('./../../ui/perfectScrollbar.jsx').PerfectScrollbar;
 
-
-var ParticipantsList = React.createClass({
-    mixins: [MegaRenderMixin],
-    getDefaultProps: function() {
-        return {
-            'requiresUpdateOnResize': true,
-            'contactCardHeight': 36
-
-        }
-    },
-    getInitialState: function() {
-        return {
+class ParticipantsList extends MegaRenderMixin {
+    static defaultProps = {
+        'requiresUpdateOnResize': true,
+        'contactCardHeight': 36
+    };
+    constructor(props) {
+        super(props);
+        this.state = {
             'scrollPositionY': 0,
-            'scrollHeight': 36*4
+            'scrollHeight': 36 * 4
         };
-    },
-    onUserScroll: function() {
-        var scrollPosY = this.refs.contactsListScroll.getScrollPositionY();
+
+        this.doResizesOnComponentUpdate = SoonFc(10, function() {
+            var self = this;
+            if (!self.isMounted()) {
+                return;
+            }
+            var fitHeight = self.contactsListScroll.getContentHeight();
+            if (!fitHeight) {
+                // not visible at the moment.
+                return null;
+            }
+
+            var $node = $(self.findDOMNode());
+            var $parentContainer = $node.closest('.chat-right-pad');
+            var maxHeight = $parentContainer.outerHeight(true) -
+                $('.chat-right-head', $parentContainer).outerHeight(true) - 72;
+
+            if (fitHeight  < $('.buttons-block', $parentContainer).outerHeight(true)) {
+                fitHeight = Math.max(fitHeight /* margin! */, 53);
+            }
+            else if (maxHeight < fitHeight) {
+                fitHeight = Math.max(maxHeight, 53);
+            }
+            fitHeight = Math.min(self.calculateListHeight($parentContainer), fitHeight);
+
+            var $contactsList = $('.chat-contacts-list', $parentContainer);
+
+            if ($contactsList.height() !== fitHeight) {
+                $('.chat-contacts-list', $parentContainer).height(
+                    fitHeight
+                );
+                self.contactsListScroll.reinitialise();
+            }
+
+
+            if (self.state.scrollHeight !== fitHeight) {
+                self.setState({'scrollHeight': fitHeight});
+            }
+            self.onUserScroll();
+        });
+    }
+    onUserScroll() {
+        if (!this.contactsListScroll) {
+            return;
+        }
+
+        var scrollPosY = this.contactsListScroll.getScrollPositionY();
         if (this.state.scrollPositionY !== scrollPosY) {
             this.setState({
                 'scrollPositionY': scrollPosY
             });
         }
-    },
-    componentDidUpdate: function() {
+    }
+    calculateListHeight($parentContainer) {
+        var room = this.props.chatRoom;
+        return ($parentContainer ? $parentContainer : $('.conversationsApp'))
+            .outerHeight() - 3 /* 3 accordion headers */ * 48 - 10 /* some padding */ - (
+            room.type === "public" && room.observers > 0 ? 48 : 0 /* Observers row */
+        ) - (
+            room.isReadOnly() ? 12 : 0 /* is readonly row */
+        );
+    }
+    componentDidUpdate() {
         var self = this;
+
         if (!self.isMounted()) {
             return;
         }
 
-        var $node = $(self.findDOMNode());
 
-        var scrollHeight;
-        if (!self.refs.contactsListScroll) {
+        if (!self.contactsListScroll) {
             return null;
         }
 
-        var fitHeight = scrollHeight = self.refs.contactsListScroll.getContentHeight();
-        if (fitHeight === 0) {
-            // not visible at the moment.
-            return null;
-        }
-
-        var $parentContainer = $node.closest('.chat-right-pad');
-        var maxHeight = (
-            $parentContainer.outerHeight(true) - $('.buttons-block', $parentContainer).outerHeight(true) -
-                $('.chat-right-head', $parentContainer).outerHeight(true) - 72
-        );
-
-        if (fitHeight  < $('.buttons-block', $parentContainer).outerHeight(true)) {
-            fitHeight = Math.max(fitHeight /* margin! */, 53);
-        }
-        else if (maxHeight < fitHeight) {
-            fitHeight = Math.max(maxHeight, 53);
-        }
-
-        var $contactsList = $('.chat-contacts-list', $parentContainer);
-
-        if ($contactsList.height() !== fitHeight + 4) {
-            $('.chat-contacts-list', $parentContainer).height(
-                fitHeight + 4
-            );
-            self.refs.contactsListScroll.eventuallyReinitialise(true);
-        }
-
-
-        if (self.state.scrollHeight !== fitHeight) {
-            self.setState({'scrollHeight': fitHeight});
-        }
-        self.onUserScroll();
-    },
-    render: function() {
+        self.doResizesOnComponentUpdate();
+    }
+    render() {
         var self = this;
         var room = this.props.chatRoom;
 
@@ -86,56 +100,63 @@ var ParticipantsList = React.createClass({
             // destroyed
             return null;
         }
-        var contactHandle;
-        var contact;
-        var contacts = room.getParticipantsExceptMe();
-        if (contacts && contacts.length > 0) {
-            contactHandle = contacts[0];
-            contact = M.u[contactHandle];
-        }
-        else {
-            contact = {};
-        }
+
+        var contacts = room.stateIsLeftOrLeaving() ? [] : room.getParticipantsExceptMe();
+        var contactListStyles = {};
 
 
-        return <div className="chat-contacts-list">
+        // dont wait for render to finish to set height, otherwise there would be a minor flickering in the right
+        // pane
+        contactListStyles.height = Math.min(
+            this.calculateListHeight(), contacts.length * this.props.contactCardHeight
+        );
+
+
+        return <div className="chat-contacts-list" style={contactListStyles}>
             <PerfectScrollbar
                 chatRoom={room}
                 members={room.members}
-                ref="contactsListScroll"
-                onUserScroll={self.onUserScroll}
+                ref={function(ref) {
+                    self.contactsListScroll = ref;
+                }}
+                disableCheckingVisibility={true}
+                onUserScroll={SoonFc(self.onUserScroll.bind(self), 76)}
                 requiresUpdateOnResize={true}
+                onAnimationEnd={function() {
+                    self.safeForceUpdate();
+                }}
+                isVisible={self.props.chatRoom.isCurrentlyActive}
             >
                 <ParticipantsListInner
-                    chatRoom={room} members={room.members}
+                    chatRoom={room}
+                    members={room.members}
                     scrollPositionY={self.state.scrollPositionY}
                     scrollHeight={self.state.scrollHeight}
+                    disableCheckingVisibility={true}
                 />
             </PerfectScrollbar>
         </div>
     }
-});
+};
 
 
 
-var ParticipantsListInner = React.createClass({
-    mixins: [MegaRenderMixin],
-    getDefaultProps: function() {
-        return {
-            'requiresUpdateOnResize': true,
-            'contactCardHeight': 32,
-            'scrollPositionY': 0,
-            'scrollHeight': 32*4
 
-        }
-    },
-    getInitialState: function() {
-        return {
-        };
-    },
-    render: function() {
-        var self = this;
+class ParticipantsListInner extends MegaRenderMixin {
+    static defaultProps = {
+        'requiresUpdateOnResize': true,
+        'contactCardHeight': 32,
+        'scrollPositionY': 0,
+        'scrollHeight': 128,
+        'chatRoom': undefined
+    }
+    render() {
         var room = this.props.chatRoom;
+        var contactCardHeight = this.props.contactCardHeight;
+        var scrollPositionY = this.props.scrollPositionY;
+        var scrollHeight = this.props.scrollHeight;
+
+        const {FULL, OPERATOR, READONLY} = ChatRoom.MembersSet.PRIVILEGE_STATE;
 
         if (!room) {
             // destroyed
@@ -145,189 +166,145 @@ var ParticipantsListInner = React.createClass({
             // save some memory/DOM
             return false;
         }
-        var contactHandle;
-        var contact;
         var contacts = room.getParticipantsExceptMe();
-        if (contacts && contacts.length > 0) {
-            contactHandle = contacts[0];
-            contact = M.u[contactHandle];
-        }
-        else {
-            contact = {};
-        }
-
-        var myPresence = room.megaChat.userPresenceToCssClass(M.u[u_handle].presence);
 
         var contactsList = [];
 
+        const firstVisibleUserNum = Math.floor(scrollPositionY / contactCardHeight);
+        const visibleUsers = Math.ceil(scrollHeight / contactCardHeight);
+        const lastVisibleUserNum = firstVisibleUserNum + visibleUsers;
 
-        contacts = room.type === "group" ?
-            (
-                room.members && Object.keys(room.members).length > 0 ? Object.keys(room.members) :
-                    room.getParticipantsExceptMe()
-            )   :
-            room.getParticipantsExceptMe();
-        if (contacts.indexOf(u_handle) >= 0) {
-            array.remove(contacts, u_handle, true);
-        }
-        var firstVisibleUserNum = Math.floor(self.props.scrollPositionY/self.props.contactCardHeight);
-        var visibleUsers = Math.ceil(self.props.scrollHeight/self.props.contactCardHeight);
-        var lastVisibleUserNum = firstVisibleUserNum + visibleUsers;
-
+        // const firstVisibleUserNum = 0;
+        // const lastVisibleUserNum = contacts.length;
         var contactListInnerStyles = {
-            'height': contacts.length * self.props.contactCardHeight
+            'height': contacts.length * contactCardHeight
         };
 
         // slice and only add a specific number of contacts to the list
 
 
-        if (room.type === "group" && !room.stateIsLeftOrLeaving()) {
-            contacts.unshift(
-                u_handle
-            );
-            contactListInnerStyles.height += self.props.contactCardHeight;
+        if ((room.type === "group" || room.type === "public") && !room.stateIsLeftOrLeaving()
+            && room.members.hasOwnProperty(u_handle)) {
+            contacts.unshift(u_handle);
+            contactListInnerStyles.height += contactCardHeight;
         }
 
-        var i = 0;
-        contacts.forEach(function(contactHash) {
+        var onRemoveClicked = (contactHash) => {
+            room.trigger('onRemoveUserRequest', [contactHash]);
+        };
+
+        var onSetPrivClicked = (contactHash, priv) => {
+            if (room.members[contactHash] !== priv) {
+                room.trigger('alterUserPrivilege', [contactHash, priv]);
+            }
+        };
+
+        for (var i = 0; i < contacts.length; i++) {
+            var contactHash = contacts[i];
             var contact = M.u[contactHash];
-            if (contact) {
-                if (i < firstVisibleUserNum || i > lastVisibleUserNum) {
-                    i++;
-                    return;
+
+            if (!contact) {
+                continue;
+            }
+            if (i < firstVisibleUserNum || i > lastVisibleUserNum) {
+                continue;
+            }
+            var dropdowns = [];
+
+            var dropdownIconClasses = "small-icon tiny-icon icons-sprite grey-dots";
+            var dropdownRemoveButton = [];
+
+            if (room.type === "public" || room.type === "group" && room.members) {
+
+                if (room.iAmOperator() && contactHash !== u_handle) {
+                    dropdownRemoveButton.push(
+                        <DropdownsUI.DropdownItem className="red"
+                            key="remove" icon="rounded-stop" label={l[8867]}
+                            onClick={onRemoveClicked.bind(this, contactHash)}/>
+                    );
                 }
-                var dropdowns = [];
-                var privilege = null;
 
-                var dropdownIconClasses = "small-icon tiny-icon icons-sprite grey-dots";
+                if (room.iAmOperator() || contactHash === u_handle) {
+                    // operator
+                    dropdowns.push(
+                        <div key="setPermLabel" className="dropdown-items-info">
+                            {l[8868]}
+                        </div>
+                    );
 
-                if (room.type === "group" && room.members) {
-                    var dropdownRemoveButton = [];
+                    dropdowns.push(
+                        <DropdownsUI.DropdownItem
+                            key="privOperator" icon="gentleman"
+                            label={l[8875]}
+                            className={"tick-item " + (room.members[contactHash] === FULL ? "active" : "")}
+                            disabled={contactHash === u_handle}
+                            onClick={onSetPrivClicked.bind(this, contactHash, FULL)} />
+                    );
 
-                    if (room.iAmOperator() && contactHash !== u_handle) {
-                        dropdownRemoveButton.push(
-                            <DropdownsUI.DropdownItem className="red"
-                                key="remove" icon="rounded-stop" label={__(l[8867])} onClick={() => {
-                                $(room).trigger('onRemoveUserRequest', [contactHash]);
-                            }}/>
-                       );
-                    }
+                    dropdowns.push(
+                        <DropdownsUI.DropdownItem
+                            key="privFullAcc" icon="conversation-icon"
+                            className={"tick-item " + (room.members[contactHash] === OPERATOR ? "active" : "")}
+                            disabled={contactHash === u_handle}
+                            label={l[8874]} onClick={onSetPrivClicked.bind(this, contactHash, OPERATOR)} />
+                    );
 
+                    dropdowns.push(
+                        <DropdownsUI.DropdownItem
+                            key="privReadOnly" icon="eye-icon"
+                            className={"tick-item " + (room.members[contactHash] === READONLY ? "active" : "")}
+                            disabled={contactHash === u_handle}
+                            label={l[8873]} onClick={onSetPrivClicked.bind(this, contactHash, READONLY)}/>
+                    );
 
-                    if (room.iAmOperator() || contactHash === u_handle) {
-                        // operator
+                }
 
-                        dropdowns.push(
-                            <div key="setPermLabel" className="dropdown-items-info">
-                                {__(l[8868])}
-                            </div>
-                        );
-
-                        dropdowns.push(
-                            <DropdownsUI.DropdownItem
-                                key="privOperator" icon="gentleman"
-                                label={__(l[8875])}
-                                className={"tick-item " + (room.members[contactHash] === 3 ? "active" : "")}
-                                disabled={contactHash === u_handle}
-                                onClick={() => {
-                                    if (room.members[contactHash] !== 3) {
-                                        $(room).trigger('alterUserPrivilege', [contactHash, 3]);
-                                    }
-                                }}/>
-                        );
-
-                        dropdowns.push(
-                            <DropdownsUI.DropdownItem
-                                key="privFullAcc" icon="conversation-icon"
-                                className={"tick-item " + (room.members[contactHash] === 2 ? "active" : "")}
-                                disabled={contactHash === u_handle}
-                                label={__(l[8874])} onClick={() => {
-                                if (room.members[contactHash] !== 2) {
-                                    $(room).trigger('alterUserPrivilege', [contactHash, 2]);
-                                }
-                            }}/>
-                        );
-
-                        dropdowns.push(
-                            <DropdownsUI.DropdownItem
-                                key="privReadOnly" icon="eye-icon"
-                                className={"tick-item " + (room.members[contactHash] === 0 ? "active" : "")}
-                                disabled={contactHash === u_handle}
-                                label={__(l[8873])} onClick={() => {
-                                if (room.members[contactHash] !== 0) {
-                                    $(room).trigger('alterUserPrivilege', [contactHash, 0]);
-                                }
-                            }}/>
-                        );
-
-                    }
-                    else if (room.members[u_handle] === 2) {
-                        // full access
-
-                    }
-                    else if (room.members[u_handle] === 1) {
-                        // read write
-                        // should not happen.
-
-                    }
-                    else if (room.isReadOnly()) {
-                        // read only
-                    }
-                    else {
-                        // should not happen.
-                    }
-
-
-
-                    // other user privilege
-                    if (room.members[contactHash] === 3) {
+                // other user privilege
+                switch (room.members[contactHash]) {
+                    case FULL:
                         dropdownIconClasses = "small-icon gentleman";
-                    }
-                    else if (room.members[contactHash] === 2) {
+                        break;
+                    case OPERATOR:
                         dropdownIconClasses = "small-icon conversation-icon";
-                    } else if (room.members[contactHash] === 0) {
+                        break;
+                    case READONLY:
                         dropdownIconClasses = "small-icon eye-icon";
-                    }
-                    else {
-                        // should not happen.
-                    }
-
+                        break;
+                    default:
+                        break;
                 }
 
                 contactsList.push(
                     <ContactsUI.ContactCard
                         key={contact.u}
                         contact={contact}
-                        megaChat={room.megaChat}
+                        chatRoom={room}
                         className="right-chat-contact-card"
                         dropdownPositionMy="left top"
                         dropdownPositionAt="left top"
                         dropdowns={dropdowns}
-                        dropdownDisabled={contactHash === u_handle}
-                        dropdownButtonClasses={
-                            room.type == "group" ? "button icon-dropdown" : "default-white-button tiny-button"
-                        }
+                        dropdownDisabled={contactHash === u_handle || anonymouschat}
+                        dropdownButtonClasses="button icon-dropdown"
                         dropdownRemoveButton={dropdownRemoveButton}
                         dropdownIconClasses={dropdownIconClasses}
+                        noLoading={true}
+                        isInCall={room.uniqueCallParts && room.uniqueCallParts[contactHash]}
                         style={{
-                            width: 249,
+                            width: 234,
                             position: 'absolute',
-                            top: i * self.props.contactCardHeight
+                            top: i * contactCardHeight
                         }}
                     />
                 );
-
-                i++;
             }
-        });
+        }
 
-
-
-        return <div className="chat-contacts-list-inner" style={contactListInnerStyles}>
+        return (
+            <div className="chat-contacts-list-inner default-bg" style={contactListInnerStyles}>
                 {contactsList}
-            </div>;
+            </div>
+        );
     }
-});
-module.exports = {
-    ParticipantsList,
-};
+}
+
+export {ParticipantsList};

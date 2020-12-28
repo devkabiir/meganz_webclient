@@ -96,6 +96,7 @@ MegaData.prototype.putToTransferTable = function(node, ttl) {
 
     var state = '';
     var pauseTxt = '';
+    var isFailed = false;
     if (isPaused) {
         state = 'transfer-paused';
         pauseTxt = l[1651];
@@ -104,6 +105,9 @@ MegaData.prototype.putToTransferTable = function(node, ttl) {
         pauseTxt = '';
     }
 
+    else if (node.failed || node.dl_failed) {
+        isFailed = true;
+    }
     var flashhtml = '';
     if (dlMethod === FlashIO) {
         flashhtml = '<object width="1" height="1" id="dlswf_'
@@ -117,16 +121,32 @@ MegaData.prototype.putToTransferTable = function(node, ttl) {
             + '</object>';
     }
 
+    var dowloadedSize = node.loaded || 0;
+    var rightRotate = '';
+    var leftRotate = '';
+
+    if (dowloadedSize > 0 && node.s > 0) {
+        var deg = 360 * dowloadedSize / node.s;
+        if (deg <= 180) {
+            rightRotate = 'style="transform: rotate(' + deg + 'deg);"';
+        }
+        else {
+            rightRotate = 'style="transform: rotate(180deg);"';
+            leftRotate = 'style="transform: rotate(' + (deg - 180) + 'deg);"';
+        }
+    }
+
     this.addToTransferTable(gid, ttl,
         '<tr id="dl_' + htmlentities(handle) + '" class="transfer-queued transfer-download ' + state + '">'
         + '<td><div class="transfer-type download">'
-        + '<ul><li class="right-c"><p><span></span></p></li><li class="left-c"><p><span></span></p></li></ul>'
+        + '<ul><li class="right-c"><p ' + rightRotate + '>'
+        + '<span></span></p></li><li class="left-c"><p ' + leftRotate + '><span></span></p></li></ul>'
         + '</div>' + flashhtml + '</td>'
         + '<td><span class="transfer-filetype-icon ' + fileIcon(node) + '"></span>'
         + '<span class="tranfer-filetype-txt">' + htmlentities(node.name) + '</span></td>'
-        + '<td>' + filetype(node.name) + '</td>'
+        + '<td>' + filetype(node) + '</td>'
         + '<td class="transfer-size">' + bytesToSize(node.s) + '</td>'
-        + '<td><span class="downloaded-size">' + bytesToSize(0) + '</span></td>'
+        + '<td><span class="downloaded-size">' + bytesToSize(dowloadedSize) + '</span></td>'
         + '<td><span class="eta"></span><span class="speed">' + pauseTxt + '</span></td>'
         + '<td><span class="transfer-status">' + l[7227] + '</span></td>'
         + '<td class="grid-url-field"><a class="grid-url-arrow"></a>'
@@ -137,12 +157,21 @@ MegaData.prototype.putToTransferTable = function(node, ttl) {
     if (isPaused) {
         fm_tfspause('dl_' + handle);
     }
+    if (isFailed) {
+        M.dlerror(node, node.lasterror || l[135]);
+    }
     if (ttl) {
         ttl.left--;
     }
 };
 
-MegaData.prototype.addDownload = function (n, z, preview) {
+MegaData.prototype.addDownload = function(n, z, preview) {
+    "use strict";
+
+    if (M.isInvalidUserStatus()) {
+        return;
+    }
+
     var args = toArray.apply(null, arguments);
     // fetch all nodes needed by M.getNodesSync
     dbfetch.coll(n)
@@ -170,9 +199,6 @@ MegaData.prototype.addDownloadSync = function(n, z, preview) {
     // if in folder link and logged-in and download using mSync is set to 0
     if (folderlink && u_type) {
         if (fmconfig.dlThroughMEGAsync === 0) {
-            if (typeof fmconfig.tpp === 'undefined') {
-                mega.ui.tpp.setEnabled(1);
-            }
             return webdl();
         }
     }
@@ -191,43 +217,59 @@ MegaData.prototype.addDownloadSync = function(n, z, preview) {
             };
             var files = [];
 
-            var addNode = function(node) {
-                if (!node.a && node.k) {
-                    var item = {
-                        t: node.t,
-                        h: node.h,
-                        p: node.p,
-                        n: base64urlencode(M.getSafeName(node.name))
-                    };
-                    if (!node.t) {
-                        item.s = node.s;
-                        item.ts = node.mtime || node.ts;
-                        item.k = a32_to_base64(node.k);
-                    }
-                    files.push(item);
-                }
+            try {
 
-                if (node.t) {
-                    foreach(M.getNodesSync(node.h, false, false, true));
-                }
-            };
-
-            var foreach = function(nodes) {
-                for (var i = 0; i < nodes.length; i++) {
-                    var node = M.d[nodes[i]];
+                var addNodeToArray = function(arr, node) {
                     if (!node) {
-                        if (nodes[i].h && nodes[i].name) {
-                            node = nodes[i];
-                            addNode(node);
+                        return;
+                    }
+                    if (!node.a && node.k) {
+                        if (!node.t) {
+                            arr.push({
+                                t: node.t,
+                                h: node.h,
+                                p: node.p,
+                                n: base64urlencode(to8(M.getSafeName(node.name))),
+                                s: node.s,
+                                ts: node.mtime || node.ts,
+                                k: a32_to_base64(node.k)
+                            });
+                        }
+                        else {
+                            arr.push({
+                                t: node.t,
+                                h: node.h,
+                                p: node.p,
+                                n: base64urlencode(to8(M.getSafeName(node.name)))
+                            });
                         }
                     }
-                    else {
-                        addNode(node);
+                };
+
+                var recursivelyLoadNodes = function(arr, nodes) {
+                    if (!nodes) {
+                        return;
                     }
-                }
-            };
-            try {
-                foreach(n);
+                    for (var k = 0; k < nodes.length; k++) {
+                        if (typeof nodes[k] === 'string') {
+                            addNodeToArray(files, M.d[nodes[k]]);
+                            if (M.d[nodes[k]].t) {
+                                if (M.c[nodes[k]]) {
+                                    recursivelyLoadNodes(arr, Object.keys(M.c[nodes[k]]));
+                                }
+                            }
+                        }
+                        else { // it's object
+                            addNodeToArray(files, nodes[k]);
+                            if (nodes[k].t) {
+                                recursivelyLoadNodes(arr, Object.keys(M.c[nodes[k].h]));
+                            }
+                        }
+                    }
+                };
+
+                recursivelyLoadNodes(files, n);
+
             }
             catch (exx) {
                 if (d) {
@@ -316,7 +358,6 @@ MegaData.prototype.addWebDownload = function(n, z, preview, zipname) {
         else {
             zipname = (zipname || ('Archive-' + Math.random().toString(16).slice(-4))) + '.zip';
         }
-        mega.ui.tpp.setTotal(1, 'dl');
     }
     else {
         z = false;
@@ -324,6 +365,10 @@ MegaData.prototype.addWebDownload = function(n, z, preview, zipname) {
     if (!$.totalDL) {
         $.totalDL = 0;
     }
+    // a variable to store the current download batch size. as $.totalDL wont be cleared on failure
+    // due to MaxDownloadSize exceeding (and it should not be cleared). We need only to subtract the
+    // current batch size.
+    var currDownloadSize = 0;
 
     var p = '';
     var pauseTxt = '';
@@ -348,8 +393,9 @@ MegaData.prototype.addWebDownload = function(n, z, preview, zipname) {
         }
         path = paths[nodes[k]] || '';
         $.totalDL += n.s;
+        currDownloadSize += n.s;
 
-        var $tr = $('.transfer-table #dl_' + htmlentities(n.h));
+        var $tr = !z && $('.transfer-table #dl_' + htmlentities(n.h));
         if ($tr.length) {
             if (!$tr.hasClass('transfer-completed')) {
                 if ($tr.hasClass('transfer-error') && !entries.length) {
@@ -394,6 +440,8 @@ MegaData.prototype.addWebDownload = function(n, z, preview, zipname) {
         if (d) {
             console.log('Downloads exceed max size', entries.length, entries);
         }
+        // subtract the current batch size from the stored total
+        $.totalDL -= currDownloadSize;
         if (!fmconfig.dlThroughMEGAsync) {
             var msgMsg = l[18213]; // 'Download size exceeds the maximum size supported by the browser. '
             //    + 'You can use MEGASync to proceed with the download.'; // 18213
@@ -415,6 +463,7 @@ MegaData.prototype.addWebDownload = function(n, z, preview, zipname) {
         }
     }
 
+    var tempEntry = !z && new Array(entries.length);
     for (var e = 0; e < entries.length; e++) {
         n = entries[e].node;
 
@@ -423,8 +472,17 @@ MegaData.prototype.addWebDownload = function(n, z, preview, zipname) {
 
         if (!z) {
             this.putToTransferTable(n, ttl);
-            mega.ui.tpp.setTotal(1, 'dl');
+            tempEntry[e] = entries[e].entry;
         }
+    }
+    if (z) {
+        mega.tpw.addDownloadUpload(mega.tpw.DOWNLOAD, entries[0].entry, zipsize);
+    }
+    else {
+        if (!preview) {
+            mega.tpw.addDownloadUpload(mega.tpw.DOWNLOAD, tempEntry);
+        }
+        tempEntry = null;
     }
 
     var flashhtml = '';
@@ -456,6 +514,7 @@ MegaData.prototype.addWebDownload = function(n, z, preview, zipname) {
         }
 
         api_req({a: 'log', e: 99655, m: 'ZipIO Download started.'});
+        mBroadcaster.sendMessage('trk:event', 'download', 'started', 'zip');
     }
 
     if (!preview) {
@@ -485,25 +544,12 @@ MegaData.prototype.onDownloadAdded = function(added, isPaused, isZIP, zipSize) {
         $('.transfer-clear-completed').removeClass('disabled');
         $('.transfer-clear-all-icon').removeClass('disabled');
 
-        M.onFileManagerReady(function() {
-            // mega.ui.tpp.setTotal(1, 'dl');
-            mega.ui.tpp.started('dl');
-            if (typeof fdl_queue_var !== 'undefined' && Object(fdl_queue_var).ph) {
-                var gid = dlmanager.getGID(fdl_queue_var);
-
-                if (dlQueue.isPaused(gid) && !dlmanager.isOverQuota) {
-                    mega.ui.tpp.pause(gid, 'dl');
-                }
-                else if (dlmanager.isOverQuota) {
-                    mega.ui.tpp.hide();
-                }
-            }
-        });
     }
 };
 
 MegaData.prototype.dlprogress = function(id, perc, bl, bt, kbps, dl_queue_num, force) {
     var st;
+    var original_id = id;
 
     if (dl_queue[dl_queue_num].zipid) {
         id = 'zip_' + dl_queue[dl_queue_num].zipid;
@@ -511,7 +557,7 @@ MegaData.prototype.dlprogress = function(id, perc, bl, bt, kbps, dl_queue_num, f
         var ts = 0;
         for (var i in dl_queue) {
             if (dl_queue[i].zipid == dl_queue[dl_queue_num].zipid) {
-                if (!st) {
+                if (!st || st > dl_queue[i].st) {
                     st = dl_queue[i].st;
                 }
                 ts += dl_queue[i].size;
@@ -529,11 +575,6 @@ MegaData.prototype.dlprogress = function(id, perc, bl, bt, kbps, dl_queue_num, f
         st = dl_queue[dl_queue_num].st;
     }
 
-    // var failed = parseInt($('#' + id).data('failed') || "0");
-    // failed not long ago
-
-    // if (failed+30000 > NOW()) return;
-
     if (!bl) {
         return false;
     }
@@ -544,6 +585,9 @@ MegaData.prototype.dlprogress = function(id, perc, bl, bt, kbps, dl_queue_num, f
         if (!force && (perc != 100 || $.transferprogress[id])) {
             return false;
         }
+    }
+    if (!dl_queue[dl_queue_num].preview) {
+        mega.tpw.updateDownloadUpload(mega.tpw.DOWNLOAD, original_id, perc, bl, bt, kbps, dl_queue_num, st);
     }
 
     var $tr = $('.transfer-table #' + id);
@@ -607,31 +651,15 @@ MegaData.prototype.dlprogress = function(id, perc, bl, bt, kbps, dl_queue_num, f
             else {
                 $tr.find('.eta').addClass('unknown').text('');
             }
-            $tr.find('.downloaded-size').html(bytesToSize(bl, 1, 1));
+            $('.downloaded-size', $tr).text(bytesToSize(bl, 1));
             if (bps > 0) {
                 $tr.removeClass('transfer-error');
-                $tr.find('.speed').html(bytesToSize(bps, 1, 1) + '/s').removeClass('unknown');
+                $('.speed', $tr).text(bytesToSpeed(bps, 1)).removeClass('unknown');
             }
             else {
                 $tr.find('.speed').addClass('unknown').text('');
             }
 
-            if (page.substr(0, 2) !== 'fm') {
-                $('.widget-block').removeClass('hidden');
-                $('.widget-block').show();
-                if (!ulmanager.isUploading) {
-                    $('.widget-circle').attr('class', 'widget-circle percents-' + perc);
-                }
-                $('.widget-icon.downloading').removeClass('hidden');
-                $('.widget-speed-block.dlspeed').text(bytesToSize(bps, 1) + '/s');
-                $('.widget-block').addClass('active');
-            }
-            else {
-                if (mega.ui.tpp.shouldProcessData()) {
-                    mega.ui.tpp.setTransfered(id, bl, 'dl', dl_queue[dl_queue_num], bps);
-                    mega.ui.tpp.updateBlock('dl');
-                }
-            }
             delay('percent_megatitle', percent_megatitle, 50);
         }
     }
@@ -643,6 +671,8 @@ MegaData.prototype.dlcomplete = function(dl) {
     if (dl.hasResumeSupport) {
         dlmanager.remResumeInfo(dl).dump();
     }
+
+    mega.tpw.finishDownloadUpload(mega.tpw.DOWNLOAD, dl);
 
     var slideshowid = slideshow_handle();
     if (slideshowid == id && !previews[slideshowid]) {
@@ -656,6 +686,7 @@ MegaData.prototype.dlcomplete = function(dl) {
         id = 'zip_' + z;
 
         api_req({a: 'log', e: 99656, m: 'ZipIO Download completed.'});
+        mBroadcaster.sendMessage('trk:event', 'download', 'completed', 'zip');
     }
     else {
         id = 'dl_' + id;
@@ -677,25 +708,7 @@ MegaData.prototype.dlcomplete = function(dl) {
             .addClass('safari-downloaded')
             .text('Save File');
     }
-    if (dlMethod == FileSystemAPI) {
-        setTimeout(fm_chromebar, 250, $.dlheight);
-        setTimeout(fm_chromebar, 500, $.dlheight);
-        setTimeout(fm_chromebar, 1000, $.dlheight);
-    }
-    if (page.substr(0, 2) !== 'fm') {
-        var a = dl_queue.filter(isQueueActive).length;
-        if (a < 2 && !ulmanager.isUploading) {
-            $('.widget-block').fadeOut('slow', function(e) {
-                $('.widget-block').addClass('hidden').css({opacity: 1});
-            });
-        }
-        else if (a < 2) {
-            $('.widget-icon.downloading').addClass('hidden');
-        }
-        else {
-            $('.widget-circle').attr('class', 'widget-circle percents-0');
-        }
-    }
+
     if ($.transferprogress && $.transferprogress[id]) {
         if (!$.transferprogress['dlc']) {
             $.transferprogress['dlc'] = 0;
@@ -706,13 +719,11 @@ MegaData.prototype.dlcomplete = function(dl) {
 
     delay('tfscomplete', function() {
         M.resetUploadDownload();
-        mega.ui.tpp.setIndex(1, 'dl');
         $.tresizer();
     });
 };
 
 MegaData.prototype.dlbeforecomplete = function() {
-    $.dlheight = $('body').height();
 };
 
 MegaData.prototype.dlerror = function(dl, error) {
@@ -731,9 +742,9 @@ MegaData.prototype.dlerror = function(dl, error) {
                 api_req({a: 'log', e: 99615, m: 'PRO user got EOVERQUOTA'});
             }
         }
-        else if (error !== EAGAIN) {
-            srvlog('onDownloadError :: ' + error + ' [' + hostname(dl.url) + '] ' + (dl.zipid ? 'isZIP' : ''));
-        }
+        // else if (error !== EAGAIN) {
+        //     srvlog('onDownloadError :: ' + error + ' [' + hostname(dl.url) + '] ' + (dl.zipid ? 'isZIP' : ''));
+        // }
     }
 
     switch (error) {
@@ -744,9 +755,11 @@ MegaData.prototype.dlerror = function(dl, error) {
             errorstr = l[19];
             break;
         case EBLOCKED:
+            errorstr = l[20705];
+            break;
         case ETOOMANY:
         case EACCESS:
-            errorstr = l[23];
+            errorstr = l[20228];
             break;
         case ENOENT:
             errorstr = l[22];
@@ -755,7 +768,7 @@ MegaData.prototype.dlerror = function(dl, error) {
             errorstr = l[24];
             break;
         case EOVERQUOTA:
-            errorstr = l[1673];
+            errorstr = l[20666];
             break;
         // case EAGAIN:               errorstr = l[233]; break;
         // case ETEMPUNAVAIL:         errorstr = l[233]; break;
@@ -763,14 +776,7 @@ MegaData.prototype.dlerror = function(dl, error) {
             errorstr = l[x = 233];
             break;
     }
-
-    if (error === ETEMPUNAVAIL) {
-        eventlog(99698, true);
-    }
-
-    // Hide TPP
-    mega.ui.tpp.hide();
-    mega.ui.tpp.reset('dl');
+    mega.tpw.errorDownloadUpload(mega.tpw.DOWNLOAD, dl, errorstr);
 
     var slideshowid = slideshow_handle();
     if (slideshowid === dl.id && !previews[slideshowid]) {
@@ -792,13 +798,14 @@ MegaData.prototype.dlerror = function(dl, error) {
              */
             if (page === 'download') {
                 if (error === EOVERQUOTA) {
-                    $('.download.eta-block span').text('');
+                    $('.download.eta-block .span').text('');
                     $('.download.speed-block span').text('');
-                    $('.download .pause-transfer').addClass('active');
-                    $('.download.file-info').addClass('overquota');
+                    $('.download .pause-transfer').removeClass('hidden').addClass('active')
+                        .find('span').text(l[1649]);
+                    $('.download.top-bar').addClass('overquota');
                 }
                 else {
-                    $('.download.file-info').removeClass('overquota');
+                    $('.download.top-bar').removeClass('overquota');
                 }
             }
             else {
@@ -835,10 +842,7 @@ MegaData.prototype.dlstart = function(dl) {
     if (typeof dl_queue[dl.pos] === 'object') {
         fm_tfsupdate(); // this will call $.transferHeader()
         this.dlprogress(id, 0, 0, 0, 0, dl.pos);
-        if (mega.ui.tpp.getTime('dl') === 0) {
-            mega.ui.tpp.setTime(Date.now(), 'dl');
-        }
-        mega.ui.tpp.start(dl, 'dl');
+
     }
 };
 
@@ -987,6 +991,15 @@ MegaData.prototype.addToTransferTable = function(gid, ttl, elem) {
                 addToTransferTable(gid, elem);
             }
         }
+        else {
+            // Keep inserting uploads as long downloads are overquota...
+            // XXX: Check whether there is a noticeable performance degradation...
+
+            if (document.querySelector('.transfer-table tr.transfer-download .transfer-status.overquota')) {
+                fit = true;
+                addToTransferTable(gid, elem);
+            }
+        }
 
         if (!fit) {
             M.tfsdomqueue[gid] = elem;
@@ -997,6 +1010,11 @@ MegaData.prototype.addToTransferTable = function(gid, ttl, elem) {
 var __ul_id = 8000;
 MegaData.prototype.addUpload = function(u, ignoreWarning, emptyFolders, target) {
     'use strict'; /* jshint -W074 */
+
+    if (M.isInvalidUserStatus()) {
+        return;
+    }
+
     var flag = 'ulMegaSyncAD';
 
     if (u.length > 999 && !ignoreWarning && !localStorage[flag]) {
@@ -1063,6 +1081,7 @@ MegaData.prototype.addUpload = function(u, ignoreWarning, emptyFolders, target) 
     var ttl = this.getTransferTableLengths();
 
     target = target || this.currentdirid;
+    target = M.isCustomView(target).nodeID || target;
 
     if (String(target).startsWith('chat')) {
         toChat = true;
@@ -1095,7 +1114,7 @@ MegaData.prototype.addUpload = function(u, ignoreWarning, emptyFolders, target) 
             f.id = ul_id;
 
             var gid = 'ul_' + ul_id;
-            this.addToTransferTable(gid, ttl,
+            var template = (
                 '<tr id="' + gid + '" class="transfer-queued transfer-upload ' + pause + '">'
                 + '<td><div class="transfer-type upload">'
                 + '<ul><li class="right-c"><p><span></span></p></li>'
@@ -1112,11 +1131,21 @@ MegaData.prototype.addUpload = function(u, ignoreWarning, emptyFolders, target) 
                 + '<a class="clear-transfer-icon"></a></td>'
                 + '<td><span class="row-number"></span></td>'
                 + '</tr>');
+            this.addToTransferTable(gid, ttl || f, template);
 
-            ul_queue.push(f);
-            ttl.left--;
+            if (typeof f._replaces === 'number') {
+                // We need to create a version for a pending upload, hold it up until it finishes.
+                ulmanager.holdUntilUploadFinished(f, f._replaces, true);
+                delete f._replaces;
+            }
+            else {
+                ul_queue.push(f);
+            }
+
+            if (ttl) {
+                ttl.left--;
+            }
             added++;
-            mega.ui.tpp.setTotal(1, 'ul');
 
             // When dragging files to create an ephemeral, uldl_hold is set at the time of showing the terms dialog.
             if (!ephemeral && uldl_hold) {
@@ -1127,6 +1156,12 @@ MegaData.prototype.addUpload = function(u, ignoreWarning, emptyFolders, target) 
                 f.chatid = target;
             }
         }
+        // unfortunately, looping again in reversed order
+        // for (var ur = 0; ur < u.length; ur++) {
+        //    mega.tpw.addDownloadUpload(mega.tpw.UPLOAD, u[ur]);
+        // }
+        mega.tpw.addDownloadUpload(mega.tpw.UPLOAD, u);
+
         if (!added) {
             ulmanager.logger.warn('Nothing added to upload.');
             return;
@@ -1151,7 +1186,6 @@ MegaData.prototype.addUpload = function(u, ignoreWarning, emptyFolders, target) 
             $('.transfer-clear-all-icon').removeClass('disabled');
 
             M.onFileManagerReady(function() {
-                mega.ui.tpp.started('ul');
 
                 if (ulmanager.ulOverStorageQuota) {
                     ulmanager.ulShowOverStorageQuotaDialog();
@@ -1188,8 +1222,7 @@ MegaData.prototype.addUpload = function(u, ignoreWarning, emptyFolders, target) 
     var files = [];
 
     if (toChat) {
-        // onChat = 'My chat files/' + (M.getNameByHandle(target.substr(5)) || target.substr(5));
-        toChat = 'My chat files';
+        toChat = M.myChatFilesFolder.name;
         paths[toChat] = null;
         files = u;
     }
@@ -1301,9 +1334,12 @@ MegaData.prototype.addUpload = function(u, ignoreWarning, emptyFolders, target) 
             }
             else {
                 u = Array.prototype.concat.apply([], Object.values(queue).concat(files));
-                M.createFolders(paths, toChat ? M.RootID : target).always(function(res) {
+                M.createFolders(paths, toChat ? M.cf.p || M.RootID : target).always(function(res) {
                     if (d && res !== paths) {
                         ulmanager.logger.debug('Failed to create paths hierarchy...', res);
+                    }
+                    if (res[toChat]) {
+                        M.myChatFilesFolder.set(res[toChat]).dump('cf');
                     }
                     makeDirPromise.resolve();
                 });
@@ -1370,9 +1406,49 @@ MegaData.prototype.addUpload = function(u, ignoreWarning, emptyFolders, target) 
     });
 };
 
+/**
+ * Create new file on the cloud
+ * @param {String} fileName a string with the file name to create.
+ * @param {String} dest The handle where the file will be created.
+ * @return {MegaPromise} megaPromise to be resolved/rejected once the operation is finished.
+ */
+MegaData.prototype.addNewFile = function(fileName, dest) {
+    'use strict';
+    // eslint-disable-next-line local-rules/hints
+    var addFilePromise = new MegaPromise();
+    dest = dest || M.currentdirid || M.RootID;
+    dest = dest.replace('public-links/', '').replace('out-shares/', '');
+
+    if ([8, 11].indexOf(String(dest).length) === -1) {
+        return addFilePromise.reject(EACCESS);
+    }
+    if (!fileName) {
+        return addFilePromise.reject('File Name is empty');
+    }
+    if (M.c[dest]) {
+        // Check if a node (file or folder) with the same name already exists.
+        for (var handle in M.c[dest]) {
+            if (M.d[handle] && M.d[handle].name === name) {
+                return addFilePromise.reject('A node with the same name already exists');
+            }
+        }
+    }
+
+    var nFile = new File([''], fileName, { type: "text/plain" });
+    nFile.target = dest;
+    nFile.id = ++__ul_id;
+    nFile.path = '';
+    nFile.isCreateFile = true;
+    nFile.promiseToInvoke = addFilePromise;
+
+
+    ul_queue.push(nFile);
+    return addFilePromise;
+};
+
+// eslint-disable-next-line complexity
 MegaData.prototype.ulprogress = function(ul, perc, bl, bt, bps) {
     'use strict';
-
     var id = ul.id;
     var domElement = ul.domElement;
 
@@ -1383,7 +1459,8 @@ MegaData.prototype.ulprogress = function(ul, perc, bl, bt, bps) {
         $tr.find('.transfer-status').text('');
         $tr.removeClass('transfer-initiliazing transfer-queued');
         $tr.addClass('transfer-started');
-        $('.transfer-table').prepend($tr);
+        // eslint-disable-next-line local-rules/jquery-replacements
+        $($tr.closest('table')).prepend($tr);
 
         domElement = ul.domElement = document.getElementById('ul_' + id);
         if (!domElement) {
@@ -1392,75 +1469,77 @@ MegaData.prototype.ulprogress = function(ul, perc, bl, bt, bps) {
         }
 
         domElement._elmStatus = domElement.querySelector('.transfer-status');
-        domElement._elmSentSize = document.querySelector('.uploaded-size');
+        domElement._elmSentSize = domElement.querySelector('.uploaded-size');
         domElement._elmRProgress = domElement.querySelector('.right-c p');
         domElement._elmLProgress = domElement.querySelector('.left-c p');
-        domElement._elmTimeLeft = document.querySelector('.eta');
-        domElement._elmSpeed = document.querySelector('.speed');
+        domElement._elmTimeLeft = domElement.querySelector('.eta');
+        domElement._elmSpeed = domElement.querySelector('.speed');
     }
 
     if (!bl || !ul.starttime || uldl_hold) {
         return false;
     }
+
     $.transferprogress['ul_' + id] = [bl, bt, bps];
-
-    var retime = bps > 1000 ? (bt - bl) / bps : -1;
-    var transferDeg = 360 * perc / 100;
-
-    if (transferDeg <= 180) {
-        domElement._elmRProgress.style.transform = 'rotate(' + transferDeg + 'deg)';
-    }
-    else {
-        domElement._elmRProgress.style.transform = 'rotate(180deg)';
-        domElement._elmLProgress.style.transform = 'rotate(' + (transferDeg - 180) + 'deg)';
-    }
-    domElement._elmStatus.textContent = perc + '%';
-
-    if (perc > 99) {
-        domElement._elmSentSize.textContent = bytesToSize(bt, 2);
-    }
-    else {
-        domElement._elmSentSize.textContent = bytesToSize(bl, 1, -1);
-    }
-
-    if (retime > 0) {
-        if (!domElement._elmTimeLeft.textContent) {
-            domElement._elmTimeLeft.classList.remove('unknown');
-        }
-        domElement._elmTimeLeft.textContent = secondsToTime(retime);
-    }
-    else {
-        domElement._elmTimeLeft.classList.add('unknown');
-        domElement._elmTimeLeft.textContent = '';
-    }
-
-    if (bps > 0) {
-        if (ul._gotTransferError) {
-            ul._gotTransferError = false;
-            domElement.classList.remove('transfer-error');
-        }
-        if (!domElement._elmSpeed.textContent) {
-            domElement._elmSpeed.classList.remove('unknown');
-        }
-        domElement._elmSpeed.textContent = bytesToSize(bps, 1) + '/s';
-    }
-    else {
-        domElement._elmSpeed.classList.add('unknown');
-        domElement._elmSpeed.textContent = '';
-    }
-
-    if (mega.ui.tpp.shouldProcessData()) {
-        mega.ui.tpp.setTransfered(id, bl, 'ul', ul, bps);
-        mega.ui.tpp.updateBlock('ul');
-    }
     delay('percent_megatitle', percent_megatitle, 50);
 
-    if (page.substr(0, 2) !== 'fm') {
-        $('.widget-circle').attr('class', 'widget-circle percents-' + perc);
-        $('.widget-icon.uploading').removeClass('hidden');
-        $('.widget-speed-block.ulspeed').text(bytesToSize(bps, 1) + '/s');
-        $('.widget-block').removeClass('hidden').addClass('active').show();
+    if (domElement._elmRProgress) {
+        var transferDeg = 360 * perc / 100;
+        if (transferDeg <= 180) {
+            domElement._elmRProgress.style.transform = 'rotate(' + transferDeg + 'deg)';
+        }
+        else {
+            domElement._elmRProgress.style.transform = 'rotate(180deg)';
+            domElement._elmLProgress.style.transform = 'rotate(' + (transferDeg - 180) + 'deg)';
+        }
     }
+
+    if (domElement._elmStatus) {
+        domElement._elmStatus.textContent = perc + '%';
+    }
+
+    if (domElement._elmSentSize) {
+        if (perc > 99) {
+            domElement._elmSentSize.textContent = bytesToSize(bt, 2);
+        }
+        else {
+            domElement._elmSentSize.textContent = bytesToSize(bl, 1, -1);
+        }
+    }
+
+    if (domElement._elmTimeLeft) {
+        var retime = bps > 1000 ? (bt - bl) / bps : -1;
+        if (retime > 0) {
+            if (!domElement._elmTimeLeft.textContent) {
+                domElement._elmTimeLeft.classList.remove('unknown');
+            }
+            domElement._elmTimeLeft.textContent = secondsToTime(retime);
+        }
+        else {
+            domElement._elmTimeLeft.classList.add('unknown');
+            domElement._elmTimeLeft.textContent = '';
+        }
+    }
+
+    if (domElement._elmSpeed) {
+        if (bps > 0) {
+            if (!domElement._elmSpeed.textContent) {
+                domElement._elmSpeed.classList.remove('unknown');
+            }
+            domElement._elmSpeed.textContent = bytesToSpeed(bps, 1);
+        }
+        else {
+            domElement._elmSpeed.classList.add('unknown');
+            domElement._elmSpeed.textContent = '';
+        }
+    }
+
+    if (ul._gotTransferError && bps > 0) {
+        ul._gotTransferError = false;
+        domElement.classList.remove('transfer-error');
+    }
+
+    mega.tpw.updateDownloadUpload(mega.tpw.UPLOAD, id, perc, bl, bt, bps, ul.pos, ul.starttime);
 };
 
 // Handle upload error
@@ -1478,7 +1557,7 @@ MegaData.prototype.ulerror = function(ul, error) {
             mega.megadrop.overQuota();
         }
         else {
-            M.showOverStorageQuota(100, 1, 2, {custom: 1});
+            M.showOverStorageQuota(-1);
         }
     }
     else if (error === EGOINGOVERQUOTA) {
@@ -1490,12 +1569,13 @@ MegaData.prototype.ulerror = function(ul, error) {
 
     if (ul) {
         var id = ul.id;
+        var target = ul.target;
 
-        this.ulfinalize(ul, api_strerror(error));
+        var errStr = api_strerror(error);
 
-        // Hide TPP
-        mega.ui.tpp.hide();
-        mega.ui.tpp.reset('ul');
+        this.ulfinalize(ul, errStr);
+        mega.tpw.errorDownloadUpload(mega.tpw.UPLOAD, ul, errStr, overquota);
+
 
         if (ul.owner) {
             ul.owner.destroy();
@@ -1504,6 +1584,7 @@ MegaData.prototype.ulerror = function(ul, error) {
             oDestroy(ul);
         }
         mBroadcaster.sendMessage('upload:error', id, error);
+        mBroadcaster.sendMessage('trk:event', 'upload', 'error', 'code', error);
 
         if (error === EOVERQUOTA) {
             if (mBroadcaster.hasListener('upload:error')) {
@@ -1512,7 +1593,6 @@ MegaData.prototype.ulerror = function(ul, error) {
                         mBroadcaster.sendMessage('upload:error', ul.id, error);
                     });
             }
-            mega.ui.tpp.hide();
             ulmanager.abort(null);
             $("tr[id^='ul_']").addClass('transfer-error')
                 .removeClass('transfer-completed').find('.transfer-status').text(l[1010]);
@@ -1528,30 +1608,55 @@ MegaData.prototype.ulerror = function(ul, error) {
             }
 
             // Inform user that upload MEGAdrop is not available anymore
-            if (page.substr(0, 8) === 'megadrop' && error === ENOENT || error === EACCESS) {
+            if ((error === ENOENT || error === EACCESS) && page.substr(0, 8) === 'megadrop') {
                 mBroadcaster.sendMessage('MEGAdrop:disabled');
+            }
+
+            // Target is not exist on M.d anymore, target is deleted.
+            if (error === EACCESS && !M.d[target]) {
+                ulmanager.ulClearTargetDeleted(target);
             }
         }
     }
     else if (!overquota) {
-        msgDialog('warninga', l[135], l[47], api_strerror(error));
+        if (error === ESHAREROVERQUOTA) {
+            msgDialog('warninga', l[135], l[8435]);
+        }
+        else {
+            msgDialog('warninga', l[135], l[47], api_strerror(error));
+        }
     }
 };
 
 MegaData.prototype.ulcomplete = function(ul, h, faid) {
     'use strict';
 
+    // If there is no start time, initialise the upload and set percentage to 100, e.g. with deduplicated uploads
+    if (h && typeof ul.starttime === 'undefined') {
+        M.ulstart(ul);
+        M.ulprogress(ul, 100, ul.size, ul.size, 0);
+    }
+
     mBroadcaster.sendMessage('upload:completion', ul.id, h || -0xBADF, faid, ul.chatid);
+    mBroadcaster.sendMessage('trk:event', 'upload', 'completed');
 
     if (ul.skipfile) {
         showToast('megasync', l[372] + ' "' + ul.name + '" (' + l[1668] + ')');
     }
 
-    this.ulfinalize(ul, ul.skipfile ? l[1668] : l[1418]);
+    mega.tpw.finishDownloadUpload(mega.tpw.UPLOAD, ul, h);
+
+    this.ulfinalize(ul, ul.skipfile ? l[1668] : l[1418], h);
 };
 
-MegaData.prototype.ulfinalize = function(ul, status) {
+MegaData.prototype.ulfinalize = function(ul, status, h) {
     'use strict';
+    if (ul.promiseToInvoke) {
+        ul.promiseToInvoke.resolve(h);
+        ul_queue[ul.pos] = Object.freeze({});
+        percent_megatitle();
+        return;
+    }
 
     var id = ul.id;
     var $tr = $('#ul_' + id);
@@ -1560,25 +1665,8 @@ MegaData.prototype.ulfinalize = function(ul, status) {
     $tr.find('.left-c p, .right-c p').css('transform', 'rotate(180deg)');
     $tr.find('.transfer-status').text(status);
     $tr.find('.eta, .speed').text('').removeClass('unknown');
-    $tr.find('.uploaded-size').html($tr.find('.transfer-size').text());
-
-
+    $('.uploaded-size', $tr).text(bytesToSize(ul.size, 2));
     ul_queue[ul.pos] = Object.freeze({});
-
-    if (page.substr(0, 2) !== 'fm') {
-        var a = ul_queue.filter(isQueueActive).length;
-        if (a < 2 && !ulmanager.isDownloading) {
-            $('.widget-block').fadeOut('slow', function(e) {
-                $('.widget-block').addClass('hidden').css({opacity: 1});
-            });
-        }
-        else if (a < 2) {
-            $('.widget-icon.uploading').addClass('hidden');
-        }
-        else {
-            $('.widget-circle').attr('class', 'widget-circle percents-0');
-        }
-    }
 
     if ($.transferprogress && $.transferprogress['ul_' + id]) {
         if (!$.transferprogress['ulc']) {
@@ -1590,12 +1678,15 @@ MegaData.prototype.ulfinalize = function(ul, status) {
 
     // If MEGAdrop windows exists and upload
     if (id && mega.megadrop.isInit()) {
-        mega.megadrop.onItemCompletion('#ul_' + id);
+        var gid = 'ul_' + id;
+        if (is_mobile) {
+            gid = 'md_' + gid;
+        }
+        mega.megadrop.onItemCompletion('#' + gid);
     }
 
     delay('tfscomplete', function() {
         M.resetUploadDownload();
-        mega.ui.tpp.setIndex(1, 'ul');
         $.tresizer();
     });
 };
@@ -1611,17 +1702,12 @@ MegaData.prototype.ulstart = function(ul) {
         $.transferprogress = Object.create(null);
     }
 
-    $('.transfer-table #ul_' + id)
-        .addClass('transfer-initiliazing')
-        .find('.transfer-status').text(l[1042]);
+    $('.transfer-status', $('#ul_' + id).addClass('transfer-initiliazing')).text(l[1042]);
 
     ul.starttime = new Date().getTime();
     fm_tfsupdate();// this will call $.transferHeader()
     this.ulprogress(ul, 0, 0, 0);
-    if (mega.ui.tpp.getTime('ul') === 0) {
-        mega.ui.tpp.setTime(Date.now(), 'ul');
-    }
-    mega.ui.tpp.start(ul, 'ul');
+    mBroadcaster.sendMessage('trk:event', 'upload', 'started');
 };
 
 MegaData.prototype.openTransfersPanel = function openTransfersPanel() {
@@ -1797,7 +1883,7 @@ MegaData.prototype.openTransfersPanel = function openTransfersPanel() {
 MegaData.prototype.showTransferToast = function showTransferToast(t_type, t_length, isPaused) {
     'use strict';
 
-    if ((M.currentdirid !== 'transfers' && fmconfig.tpp === false) || slideshowid) {
+    if (window.slideshowid) {
         var $toast;
         var $second_toast;
         var timer = 0;
@@ -1828,6 +1914,11 @@ MegaData.prototype.showTransferToast = function showTransferToast(t_type, t_leng
         }
 
         $toast.find('.toast-col:first-child span').safeHTML(nt_txt);
+
+        if (!u_type) {
+            // If not logged in, do not display the "Show me" button in the toast information
+            $('.toast-button', $toast).addClass('hidden');
+        }
 
         if ($second_toast.hasClass('visible')) {
             $second_toast.addClass('second');
@@ -1872,38 +1963,34 @@ MegaData.prototype.hideTransferToast = function hideTransferToast($toast) {
 };
 
 // report a transient upload error
-function onUploadError(ul, errorstr, reason, xhr) {
+function onUploadError(ul, errorstr, reason, xhr, isOverQuota) {
     'use strict';
+
+    if (!ul || !ul.id) {
+        return;
+    }
 
     if (d) {
         ulmanager.logger.error('onUploadError', ul.id, ul.name, errorstr, reason, hostname(ul.posturl));
     }
 
+    mega.tpw.errorDownloadUpload(mega.tpw.UPLOAD, { id: ul.id }, errorstr, isOverQuota);
+
     ul._gotTransferError = true;
-    $('.transfer-table #ul_' + ul.id).addClass('transfer-error');
-    $('.transfer-table #ul_' + ul.id + ' .transfer-status').text(errorstr);
+    $('#ul_' + ul.id).addClass('transfer-error');
+    $('#ul_' + ul.id + ' .transfer-status').text(errorstr);
 }
 
 
-function fm_chromebar(height) {
-    if (window.navigator.userAgent.toLowerCase().indexOf('mac') >= 0 || localStorage.chromeDialog == 1) {
-        return false;
-    }
-    var h = height - $('body').height();
-    if ((h > 33) && (h < 41)) {
-        setTimeout(fm_chromebarcatchclick, 500, $('body').height());
-        chromeDialog();
-    }
-}
+function resetOverQuotaTransfers(ids) {
+    $('#' + ids.join(',#'))
+        .addClass('transfer-queued')
+        .find('.transfer-status')
+        .removeClass('overquota')
+        .text(l[7227]);
 
-function fm_chromebarcatchclick(height) {
-    if ($('body').height() != height) {
-        chromeDialog(1);
-        return false;
-    }
-    setTimeout(fm_chromebarcatchclick, 200, height);
+    mega && mega.tpw && mega.tpw.resetErrorsAndQuotasUI(mega.tpw.DOWNLOAD);
 }
-
 
 function fm_tfsorderupd() {
     'use strict';
@@ -1928,49 +2015,54 @@ function fm_tfsorderupd() {
 
 function fm_tfspause(gid, overquota) {
     'use strict';
+    var transferType;
     if (ASSERT(typeof gid === 'string' && "zdu".indexOf(gid[0]) !== -1, 'Ivalid GID to pause')) {
         if (gid[0] === 'u') {
             ulQueue.pause(gid);
+            transferType = mega.tpw.UPLOAD;
         }
         else {
             dlQueue.pause(gid);
+            transferType = mega.tpw.DOWNLOAD;
         }
 
         if (page === 'download') {
             if (overquota === true) {
-                setTransferStatus(gid, l[1673]);
-                $('.download.file-info').addClass('overquota');
+                setTransferStatus(gid, l[20666]);
+                $('.download.top-bar').addClass('overquota');
             }
-            $('.download .pause-transfer span').text(l[9118]);
-            $('.download.scroll-block').addClass('paused-transfer');
-            $('.download.eta-block span').text('');
+            $('.download .pause-transfer').removeClass('hidden').addClass('active')
+                .find('span').text(l[1649]);
+            $('.download.top-bar').addClass('paused-transfer');
+            $('.download.eta-block .dark-numbers').text('');
+            $('.download.eta-block .light-txt').text(l[1651]);
             $('.download.speed-block .dark-numbers').text('');
-            $('.download.speed-block .light-txt').text(l[1651]).addClass('small');
+            $('.download.speed-block .light-txt').safeHTML('&mdash; ' + l['23062.k']);
         }
         else {
-            var $tr = $('.transfer-table tr#' + gid);
+            var $tr = $('#' + gid);
 
             if ($tr.hasClass('transfer-started')) {
                 $tr.find('.eta').text('').addClass('unknown');
-                $tr.find('.speed').text(l[1651]).addClass('unknown');
             }
+            $tr.find('.speed').text(l[1651]).addClass('unknown');
             $tr.addClass('transfer-paused');
             $tr.removeClass('transfer-started');
 
             if (overquota === true) {
                 $tr.addClass('transfer-error');
                 $tr.find('.transfer-status').addClass('overquota').text(l[1673]);
+
+                mega.tpw.errorDownloadUpload(transferType, { id: gid.split('_').pop() }, l[1673], overquota);
             }
             else {
                 $tr.addClass('transfer-queued');
                 $tr.removeClass('transfer-error');
                 $tr.find('.transfer-status').text(l[7227]);
+                mega.tpw.pauseDownloadUpload(transferType, { id: gid.split('_').pop() });
             }
 
-            if (fminitialized) {
-                // FIXME: do not rely on cached DOM nodes and just queue the paused state for transfers
-                mega.ui.tpp.pause(gid, gid[0] === 'u' ? 'ul' : 'dl');
-            }
+
         }
         return true;
     }
@@ -1981,22 +2073,22 @@ function fm_tfsresume(gid) {
     'use strict';
     if (ASSERT(typeof gid === 'string' && "zdu".indexOf(gid[0]) !== -1, 'Invalid GID to resume')) {
         if (gid[0] === 'u') {
-            ulQueue.resume(gid);
+            mega.tpw.resumeDownloadUpload(mega.tpw.UPLOAD, { id: gid.split('_').pop() });
 
-            if (page !== 'download') {
-                mega.ui.tpp.resume(gid, 'ul');
-            }
+            ulQueue.resume(gid);
         }
         else {
-            var $tr = $('.transfer-table tr#' + gid);
+            mega.tpw.resumeDownloadUpload(mega.tpw.DOWNLOAD, { id: gid.split('_').pop() });
+
+            var $tr = $('#' + gid);
 
             if (page === 'download'
-                && $('.download.file-info').hasClass('overquota')
+                && $('.download.top-bar').hasClass('overquota')
                 || $tr.find('.transfer-status').hasClass('overquota')) {
 
                 if (page === 'download') {
-                    $('.download .pause-transfer').addClass('active');
-                    $('.download.scroll-block').addClass('paused-transfer');
+                    $('.download .pause-transfer').removeClass('hidden').addClass('active');
+                    $('.download.top-bar').addClass('paused-transfer');
                 }
 
                 if (dlmanager.isOverFreeQuota) {
@@ -2007,27 +2099,27 @@ function fm_tfsresume(gid) {
             }
             dlQueue.resume(gid);
 
-            if (page !== 'download') {
-                mega.ui.tpp.resume(gid, 'dl');
-            }
-
             if (page === 'download') {
-                $('.download .pause-transfer span').text(l[9112]);
-                $('.download.scroll-block').removeClass('paused-transfer');
-                $('.download.speed-block .light-txt').text('').removeClass('small');
+                $('.download .pause-transfer').removeClass('active').find('span').text(l[9112]);
+                $('.download.top-bar').removeClass('paused-transfer');
+                $('.download.speed-block .light-txt').safeHTML('&mdash; ' + l['23062.k']);
             }
             else {
                 $tr.removeClass('transfer-paused');
 
-                if (!$('.transfer-table tr.transfer-started, .transfer-table tr.transfer-initiliazing').length) {
-
-                    $tr.addClass('transfer-initiliazing')
-                        .find('.transfer-status').text(l[1042]);
+                if ($('tr.transfer-started, tr.transfer-initiliazing', $tr.closest('table')).length) {
+                    $('.speed, .eta', $tr).removeClass('unknown').text('');
                 }
                 else {
-                    $tr.find('.speed, .eta').removeClass('unknown').text('');
+                    $('.transfer-status', $tr.addClass('transfer-initiliazing')).text(l[1042]);
                 }
             }
+        }
+
+        if (uldl_hold) {
+            dlQueue.resume();
+            ulQueue.resume();
+            uldl_hold = false;
         }
         return true;
     }
@@ -2225,7 +2317,4 @@ function fm_tfsupdate() {
     tfse.domUploadBlock.textContent = u || '';
     tfse.domDownloadBlock.textContent = i || '';
 
-    if (!i && !u) {
-        mega.ui.tpp.hide();
-    }
 }

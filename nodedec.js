@@ -145,7 +145,7 @@ function crypto_decryptnode(n) {
         }
         else if (n.k[11] == ':' && u_handle === n.k.substr(0, 11)) {
             id = u_handle;
-            p = u_handle.length+1;
+            p = 12; // save calculation.  u_handle.length+1;
         } else {
             // do we have a suitable sharekey?
             for (p = 8; (p = n.k.indexOf(':', p)) >= 0; ) {
@@ -272,9 +272,13 @@ function crypto_makeattr(n, nn) {
     else if (n.mtime) ar.t = n.mtime;
 
     if (typeof n.name != 'undefined') ar.n = n.name;
-    if (typeof n.fav != 'undefined') ar.fav = n.fav;
-    if (typeof n.lbl != 'undefined') ar.lbl = n.lbl;
     if (typeof n.f != 'undefined') ar.f = n.f;
+    if (n.fav | 0) {
+        ar.fav = n.fav | 0;
+    }
+    if (n.lbl | 0) {
+        ar.lbl = n.lbl | 0;
+    }
     if (typeof n.rr !== 'undefined') {
         ar.rr = n.rr;
     }
@@ -346,12 +350,18 @@ function crypto_procattr(n, key) {
             }
 
             if (typeof o.fav != 'undefined') {
-                n.fav = o.fav;
+                n.fav = o.fav | 0;
+                if (!n.fav) {
+                    delete n.fav;
+                }
                 delete o.fav;
             }
 
             if (typeof o.lbl != 'undefined') {
-                n.lbl = o.lbl;
+                n.lbl = o.lbl | 0;
+                if (!n.lbl) {
+                    delete n.lbl;
+                }
                 delete o.lbl;
             }
 
@@ -528,7 +538,6 @@ function base64urlencode(data) {
     return (r ? enc.slice(0, r - 3) : enc);
 }
 
-// b64 is also used by mega.js fetchfchunked()!
 var b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=";
 var b64a = b64.split('');
 
@@ -774,6 +783,9 @@ function MegaNode(node) {
         return Object(node || null);
     }
     Object.assign(this, node);
+
+    // XXX: While setPrototypeOf() did seem faster, it does increases mem usage by ~1GB for 1M-nodes account..(v8 bug?)
+    // return Object.setPrototypeOf(node, MegaNode.prototype);
 }
 
 MegaNode.prototype = Object.create(null, {

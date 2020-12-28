@@ -1,4 +1,3 @@
-var M = null; // global MegaData instance
 var newnodes = [];
 var currsn;     // current *network* sn (not to be confused with the IndexedDB/memory state)
 var fminitialized = false;
@@ -33,27 +32,88 @@ MegaLogger.rootLogger = new MegaLogger(
 
 if (typeof loadingDialog === 'undefined') {
     var loadingDialog = Object.create(null);
-    loadingDialog.show = function() {
+
+    // New subject value to specify loading dialog subject.
+    // Loading dialog with subject will not disappear until it hided with the subject
+    $.loadingSubject = Object.create(null);
+
+    loadingDialog.nest = 0;
+    /**
+     * Show overlay and loading spinner
+     * @param {String} subject Subject of overlay
+     * @param {String} label Loading text label with description
+     * @returns {void}
+     */
+    loadingDialog.show = function(subject, label) {
+        'use strict';
+
+        var $overlay;
+        var $spinner;
+
+        subject = subject || 'common';
+
         if (!this.quiet) {
-            $('.dark-overlay').removeClass('hidden');
-            $('.loading-spinner:not(.manual-management)').removeClass('hidden').addClass('active');
+            $overlay = $('.dark-overlay:not(.mobile)', 'body');
+            $spinner = $('.loading-spinner:not(.manual-management)', 'body');
+
+            if (label) {
+                $overlay.addClass('white');
+                $('.status-txt', $spinner).text(label).addClass('loading');
+            }
+
+            $overlay.removeClass('hidden');
+            $spinner.removeClass('hidden').addClass('active');
             this.active = true;
+
+            // Prevent scrolling for mobile web
+            if (is_mobile && $overlay.length && $spinner.length) {
+                document.getElementById('loading-overlay').addEventListener('touchmove', function(e){
+                    e.preventDefault();
+                }, {passive: false});
+
+                document.getElementById('loading-spinner').addEventListener('touchmove', function(e){
+                    e.preventDefault();
+                }, {passive: false});
+            }
+        }
+
+        $.loadingSubject[subject] = 1;
+    };
+    loadingDialog.hide = function(subject) {
+        'use strict';
+
+        var $overlay;
+        var $spinner;
+
+        subject = subject || 'common';
+
+        delete $.loadingSubject[subject];
+
+        if (!loadingInitDialog.active && (Object.keys($.loadingSubject).length === 0 || subject === 'force')) {
+            $overlay = $('.dark-overlay:not(.mobile)', 'body');
+            $spinner = $('.loading-spinner:not(.manual-management)', 'body');
+
+            $overlay.removeClass('white').addClass('hidden');
+            $spinner.removeClass('active').addClass('hidden');
+            $('.status-txt.loading', $spinner).removeClass('loading');
+
+            this.nest = 0;
+            this.active = false;
+            $.loadingSubject = Object.create(null);
         }
     };
-    loadingDialog.hide = function() {
-        $('.dark-overlay').addClass('hidden');
-        $('.loading-spinner:not(.manual-management)').addClass('hidden').removeClass('active');
-        this.active = false;
-    };
-    loadingDialog.nest = 0;
     loadingDialog.pshow = function() {
+        'use strict';
+
         if (!this.nest++) {
-            this.show();
+            this.show('--dont-mess-with-me');
         }
     };
     loadingDialog.phide = function() {
+        'use strict';
+
         if (--this.nest < 1) {
-            this.hide();
+            this.hide('--dont-mess-with-me');
             this.nest = 0;
         }
         return !this.nest;
@@ -119,6 +179,12 @@ if (typeof loadingInitDialog === 'undefined') {
         }
         if (progress) {
             $('.loader-percents').width(progress + '%');
+
+            if (progress > 99) {
+                onIdle(function() {
+                    loadingInitDialog.step3();
+                });
+            }
         }
         this.progress = true;
     };
@@ -138,7 +204,9 @@ if (typeof loadingInitDialog === 'undefined') {
         this.progress = false;
         $('.light-overlay').addClass('hidden');
         $('body').removeClass('loading');
-        $('.loading-spinner:not(.manual-management)').addClass('hidden').removeClass('init active');
+        if ($.loadingSubject && Object.keys($.loadingSubject).length === 0) {
+            $('.loading-spinner:not(.manual-management)').addClass('hidden').removeClass('init active');
+        }
         $('.loading-info li').removeClass('loading loaded');
         $('.loader-progressbar').removeClass('active');
         $('.loader-percents').width('0%').removeAttr('style');
@@ -157,6 +225,7 @@ var scloadtnodes = false;                // if `t` packet requires nodes in memo
 var scinflight = false;                  // don't run more than one execsc() "thread"
 var sccount = 0;                         // number of actionpackets processed at connection loss
 var scfetches = Object.create(null);     // holds pending nodes to be retrieved from fmdb
+var scfsubtree = Object.create(null);    // fetch entire subtree as needed by some action-packets
 var scwaitnodes = Object.create(null);   // supplements scfetches per scqi index
 var nodesinflight = Object.create(null); // number of nodes being processed in the worker for scqi
 var sc_history = [];                     // array holding the history of action-packets
@@ -166,7 +235,7 @@ var nodes_scqi_order = 0;                // variable to count the node arrival o
 function sc_fqueue(handle, packet) {
     "use strict";
 
-    if (handle && !M.c[handle]) {
+    if (handle && (!M.c[handle] || scfsubtree[handle])) {
         if (scwaitnodes[packet.scqi]) {
             scwaitnodes[packet.scqi]++;
         }
@@ -224,7 +293,9 @@ function sc_fetcher() {
 
     var queue   = scfetches;
     var handles = Object.keys(queue);
+    var fsubtree = scfsubtree;
     scfetches = Object.create(null);
+    scfsubtree = Object.create(null);
 
     if (!handles.length) {
         return onIdle(resumesc);
@@ -265,21 +336,29 @@ function sc_fetcher() {
 
             dbfetch.geta(bunch, new MegaPromise())
                 .always(function() {
-                    // Retrieve all file versions, if any, and then finish the bunch processing
-                    // FIXME: this is only needed for (redundant!) `d` packets...
-                    var versions = Object.create(null);
+                    // Retrieve all needed subtrees and file versions if any, and then finish the batch processing
+                    var subtree = Object.create(null);
 
                     for (var i = bunch.length; i--;) {
                         var h = bunch[i];
 
-                        if (M.d[h] && !M.d[h].t && M.d[h].tvf) {
-                            versions[h] = 1;
+                        if (M.d[h]) {
+                            if (M.d[h].t) {
+                                if (fsubtree[h]) {
+                                    // entire subtree
+                                    subtree[h] = 1;
+                                }
+                            }
+                            else if (M.d[h].tvf) {
+                                // file versions
+                                subtree[h] = 1;
+                            }
                         }
                     }
-                    versions = Object.keys(versions);
+                    subtree = Object.keys(subtree);
 
-                    if (versions.length) {
-                        dbfetch.tree(versions, -1, new MegaPromise()).always(finish);
+                    if (subtree.length) {
+                        dbfetch.tree(subtree, -1, new MegaPromise()).always(finish);
                     }
                     else {
                         finish();
@@ -287,6 +366,26 @@ function sc_fetcher() {
                 });
         }
     })();
+}
+
+/**
+ * function to start fetching nodes needed for the action packets
+ * @param {Number} scni         id of action packe in scq
+ */
+function startNodesFetching(scni) {
+    "use strict";
+    if (!--nodesinflight[scni]) {
+        delete nodesinflight[scni];
+
+        if (scloadtnodes && scq[scni] && scq[scni][0] && sc_fqueuet(scni)) {
+            // fetch required nodes from db
+            sc_fetcher();
+        }
+        else {
+            // resume processing, if appropriate and needed
+            resumesc();
+        }
+    }
 }
 
 // enqueue parsed actionpacket
@@ -313,11 +412,13 @@ function sc_packet(a) {
         scloadtnodes = true;
 
         switch (a.a) {
+            case 'd':
+                scfsubtree[a.n] = 1;
+            /* falls through */
             case 's':
             case 's2':
             case 'fa':
             case 'u':
-            case 'd':
                 sc_fqueue(a.n, a);
             /* fall-through */
             case 'ph':
@@ -388,6 +489,10 @@ function sc_packet(a) {
                 console.warn("Failed to decrypt RSA share key for " + a.n + ": " + a.k);
             }
         }
+    }
+
+    if (a.a === 't') {
+        startNodesFetching(scqhead);
     }
 
     // other packet types do not warrant the worker detour
@@ -461,7 +566,7 @@ function sc_node(n) {
         nodesinflight[scqhead]++;
     }
     else {
-        nodesinflight[scqhead] = 1;
+        nodesinflight[scqhead] = 2;
         nodes_scqi_order = 0; // reset the order var
     }
 
@@ -472,6 +577,8 @@ function sc_node(n) {
 
 // inter-actionpacket state, gets reset in getsc()
 var scsharesuiupd;
+var scpubliclinksuiupd;
+var scContactsSharesUIUpdate;
 var loadavatars = [];
 var scinshare = Object.create(null);
 
@@ -512,9 +619,12 @@ scparser.$helper.c = function(a) {
     if (megaChatIsReady) {
         $.each(a.u, function(k, v) {
             if (v.c !== 0) {
+                // load all keys.
                 crypt.getPubRSA(v.u);
+                crypt.getPubCu25519(v.u);
+                crypt.getPubEd25519(v.u);
             }
-            megaChat[v.c == 0 ? "processRemovedUser" : "processNewUser"](v.u);
+            megaChat[v.c === 0 || (v.c === 2 && v.c !== u_handle) ? "processRemovedUser" : "processNewUser"](v.u);
         });
     }
 };
@@ -738,6 +848,7 @@ scparser.$add('s', {
             onIdle(sharedUInode.bind(null, a.n));
         }
         scsharesuiupd = true;
+        scContactsSharesUIUpdate = a.o ? a.o : false;
     },
     l: function(a) {
         // share modification
@@ -762,6 +873,7 @@ scparser.$add('s', {
             // a full share contains .h param
             onIdle(sharedUInode.bind(null, a.h));
         }
+        scsharesuiupd = true;
     }
 });
 
@@ -856,15 +968,33 @@ scparser.$add('t', function(a, scnodes) {
             delete scnodes[i].i;
             delete scnodes[i].scni;
             delete scnodes[i].arrivalOrder;
+
             M.addNode(scnodes[i]);
             ufsc.feednode(scnodes[i]);
+
+            var h = scnodes[i].h;
+
+            if (!$.moveNodeShares || !$.moveNodeShares[h]) {
+                continue;
+            }
+
+            for (var su in $.moveNodeShares[h]) {
+                if ($.moveNodeShares[h][su]) {
+                    M.nodeShare(h, $.moveNodeShares[h][su], true);
+                    if (su === 'EXP') {
+                        scpubliclinksuiupd = true;
+                    }
+                    else {
+                        scsharesuiupd = true;
+                    }
+                }
+            }
+
+            delete $.moveNodeShares[h];
         }
     }
-    ufsc.save(rootNode);
 
-    if (!pfid && u_type) {
-        M.checkStorageQuota();
-    }
+    ufsc.save(rootNode);
 
     if (d) {
         // f2 if set must be empty since the nodes must have been processed through workers.
@@ -887,6 +1017,7 @@ scparser.$add('opc', {
         processOPC([a]);
 
         if (fminitialized) {
+            M.syncPendingContacts(a);
             M.drawSentContactRequests([a]);
         }
     }
@@ -898,6 +1029,7 @@ scparser.$add('ipc', {
         processIPC([a]);
 
         if (fminitialized) {
+            M.syncPendingContacts(a);
             M.drawReceivedContactRequests([a]);
         }
 
@@ -914,10 +1046,13 @@ scparser.$add('ph', {
         if (typeof a.up !== 'undefined' && typeof a.down !== 'undefined') {
             notify.notifyFromActionPacket(a);
         }
+        scpubliclinksuiupd = true;
     },
     l: function(a) {
         // exported link
         processPH([a]);
+
+        scpubliclinksuiupd = true;
     }
 });
 
@@ -971,8 +1106,21 @@ scparser.$add('ua', {
 
             for (var j = 0; j < attrs.length; j++) {
                 var attributeName = attrs[j];
-
                 mega.attr.uaPacketParser(attributeName, actionPacketUserId, false, a.v && a.v[j]);
+            }
+
+            // in case of business master
+            // first, am i a master?
+            if (u_attr && u_attr.b && u_attr.b.m) {
+                // then, do i have this user as sub-user?
+                if ((M.suba && M.suba[actionPacketUserId]) || u_attr.b.bu === actionPacketUserId) {
+                    M.require('businessAcc_js', 'businessAccUI_js').done(
+                        function () {
+                            var business = new BusinessAccount();
+                            business.updateSubUserInfo(actionPacketUserId, attrs);
+                        }
+                    );
+                }
             }
         }
     },
@@ -1001,6 +1149,32 @@ scparser.$add('ua', {
                     mega.attr.uaPacketParser(attributeName, actionPacketUserId, true, version);
                 }
             }
+            // in case of business master
+            // first, am i a master?
+            if (u_attr && u_attr.b && u_attr.b.m) {
+                // then, do i have this user as sub-user?
+                if ((M.suba && M.suba[actionPacketUserId]) || u_attr.b.bu === actionPacketUserId) {
+                    M.require('businessAcc_js', 'businessAccUI_js').done(
+                        function () {
+                            var business = new BusinessAccount();
+                            business.updateSubUserInfo(actionPacketUserId, attrs);
+                        }
+                    );
+                }
+            }
+        }
+    }
+});
+
+scparser.$add('sd', {
+    b: function() {
+        "use strict";
+
+        if (fminitialized && page === 'fm/account/security') {
+            // need to wait until session history is refreshed.
+            setTimeout(function() {
+                accountUI.security.session.update(true);
+            }, 3000);
         }
     }
 });
@@ -1126,6 +1300,27 @@ scparser.$add('d', function(a) {
     if (fileDeletion) {
         topVersion = fileversioning.getTopNodeSync(a.n);
     }
+
+    // This is node move
+    if (a.m) {
+        $.moveNodeShares = !$.moveNodeShares ? {} : $.moveNodeShares;
+        (function _checkMoveNodeShare(h) {
+            // XXX: are or should we ensure all needed nodes are loaded into memory (?)
+            var n = M.d[h] || false;
+
+            if (n.shares) {
+                $.moveNodeShares[h] = n.shares;
+            }
+            if (n.t) {
+                for (var childHandle in M.c[h]) {
+                    if (M.c[h][childHandle]) {
+                        _checkMoveNodeShare(childHandle);
+                    }
+                }
+            }
+        })(a.n);
+    }
+
     // node deletion
     M.delNode(a.n);
 
@@ -1135,10 +1330,6 @@ scparser.$add('d', function(a) {
     }
     if (!pfid) {
         scparser.$notify(a);
-
-        if (fminitialized && u_type) {
-            M.checkStorageQuota(ulmanager.ulOverStorageQuota ? 2000 : 0);
-        }
     }
     if (!is_mobile) {
         if (fileDeletion && !a.v) {// this is a deletion of file.
@@ -1150,11 +1341,20 @@ scparser.$add('d', function(a) {
             }
         }
     }
+
+    // Remove all upload in queue that target deleted node
+    if (fminitialized && ul_queue.length > 0) {
+        ulmanager.ulClearTargetDeleted(a.n);
+    }
 });
 
 scparser.$add('la', function() {
+
+    'use strict';
+
     // last seen/acknowledged notification sn
-    notify.countAndShowNewNotifications();
+    notify.markAllNotificationsAsSeen(true);
+
 });
 
 scparser.$add('usc', function() {
@@ -1183,6 +1383,18 @@ scparser.$add('psts', function(a) {
     onIdle(function() {
         watchdog.notify('psts', (a.r === 's' && a.p) | 0);
     });
+
+    // If user is on FM, update account status with this packet.
+    if (fminitialized) {
+        onIdle(function() {
+            if (page.indexOf('fm/account') === 0) {
+                accountUI();
+            }
+            else {
+                M.accountData();
+            }
+        });
+    }
 });
 
 // Payment reminder
@@ -1191,30 +1403,42 @@ scparser.$add('pses', function(a) {
     notify.notifyFromActionPacket(a);
 });
 
-scparser.$add('mcc', function(a) {
+scparser.mcpc = scparser.mcc = function (a) {
     // MEGAchat
-    if (!megaChatIsDisabled) {
-        if (megaChatIsReady) {
-            $(window).trigger('onChatdChatUpdatedActionPacket', a);
+    if (megaChatIsReady) {
+        megaChat._queuedMccPackets.push(a);
+    }
+    else if (Array.isArray(loadfm.chatmcf)) {
+        // Merge if exists.
+        // This can happen in case some data came from fmdb, but there were still queued ap's (mcpc for
+        // added/removed participants). If this doesn't merge the chatmcf entry, this would end up removing the
+        // 'ck', since mcpc doesn't contain 'ck' properties and the chat would render useless (no key).
+        var i = loadfm.chatmcf.length;
+        while (i--) {
+            var entry = loadfm.chatmcf[i];
+            if (entry.id === a.id) {
+                delete a.a;
+                Object.assign(entry, a);
+                a = entry;
+                break;
+            }
         }
-        else if (typeof ChatdIntegration !== 'undefined') {
-            ChatdIntegration._queuedChats[a.id] = a;
-        }
-        else if (Array.isArray(loadfm.chatmcf)) {
+        if (i < 0) {
             loadfm.chatmcf.push(a);
         }
-        else {
-            srvlog('@lp unable to parse mcc packet');
-        }
     }
+    else {
+        console.error('unable to parse mcc packet');
+    }
+
     if (fmdb) {
         delete a.a;
         fmdb.add('mcf', {id: a.id, d: a});
     }
-});
+};
 
 // MEGAchat archive/unarchive
-scparser.$add('mcfc', function(a) {
+scparser.mcfc = scparser.mcfpc = function(a) {
     'use strict';
 
     if (window.megaChatIsReady) {
@@ -1228,7 +1452,8 @@ scparser.$add('mcfc', function(a) {
         loadfm.chatmcfc = {};
     }
     loadfm.chatmcfc[a.id] = a.f;
-});
+};
+
 
 scparser.$add('_sn', function(a) {
     // sn update?
@@ -1245,12 +1470,25 @@ scparser.$add('_sn', function(a) {
 
     // reset state
     scinshare = Object.create(null);
+
+    if (megaChatIsReady) {
+        megaChat.onSnActionPacketReceived();
+    }
 });
 
 scparser.$add('_fm', function() {
     // completed initial processing, enable UI
     crypto_fixmissingkeys(missingkeys);
     loadfm_done();
+});
+
+// sub-user status change in business account
+scparser.$add('ssc', process_businessAccountSubUsers_SC);
+
+// business account change which requires reload (such as payment against expired account)
+scparser.$add('ub', function() {
+    "use strict";
+    fm_fullreload(null, 'ub-business');
 });
 
 scparser.$notify = function(a) {
@@ -1312,9 +1550,7 @@ scparser.$finalize = function() {
                 loadavatars = [];
             }
 
-            if (M.viewmode) {
-                delay('thumbnails', fm_thumbnails, 3200);
-            }
+            delay('thumbnails', fm_thumbnails, 3200);
 
             if ($.dialog === 'properties') {
                 delay($.dialog, propertiesDialog.bind(this, 3));
@@ -1323,13 +1559,39 @@ scparser.$finalize = function() {
             if (scsharesuiupd) {
                 onIdle(function() {
                     M.buildtree({h: 'shares'}, M.buildtree.FORCE_REBUILD);
+                    M.buildtree({h: 'out-shares'}, M.buildtree.FORCE_REBUILD);
 
-                    if (M.currentrootid === 'shares') {
+                    if (M.currentrootid === 'shares' || M.currentrootid === 'out-shares') {
                         M.openFolder(M.currentdirid, true);
+                    }
+
+                    if ($.dialog === 'share') {
+                        // Re-render the content of access list in share dialog
+                        renderShareDialogAccessList();
                     }
                 });
 
                 scsharesuiupd = false;
+            }
+
+            if (scpubliclinksuiupd) {
+                onIdle(function() {
+                    M.buildtree({h: 'public-links'}, M.buildtree.FORCE_REBUILD);
+
+                    if (M.currentrootid === 'public-links') {
+                        M.openFolder(M.currentdirid, true);
+                    }
+                });
+
+                scpubliclinksuiupd = false;
+            }
+
+            if (scContactsSharesUIUpdate === M.currentdirid) {
+                onIdle(function() {
+                    M.openFolder(M.currentdirid, true);
+                });
+
+                scContactsSharesUIUpdate = false;
             }
 
             sccount = 0;
@@ -1375,6 +1637,13 @@ function execsc() {
         delete scq[scqtail++];
         delete a.scqi;
 
+        var idtag = a.i;
+        if (a.i !== requesti && M.scAckQueue[a.i] === requesti) {
+            // An API request triggered locally wanting to get notified when the associated packet is processed.
+            delete M.scAckQueue[a.i];
+            a.i = requesti;
+        }
+
         if (d) {
             console.info('Received SC command "' + a.a + '"' + (a.i === requesti ? ' (triggered locally)' : ''), a);
         }
@@ -1394,7 +1663,7 @@ function execsc() {
         }
 
         if (a.a === 's' || a.a === 's2') {
-            mBroadcaster.sendMessage('share-packet.' + a.n, a);
+            mBroadcaster.sendMessage('share-packet.' + idtag, a);
         }
 
         tickcount++;
@@ -1525,10 +1794,12 @@ function initworkerpool() {
 // if it isn't up, reload directly
 // the server-side treecache is wiped (otherwise, we could run into
 // an endless loop)
-function fm_forcerefresh() {
+function fm_forcerefresh(light) {
     "use strict";
 
-    localStorage.force = 1;
+    if (light !== true) {
+        localStorage.force = 1;
+    }
 
     if (fmdb && !fmdb.crashed) {
         execsc = function() {}; // stop further SC processing
@@ -1598,7 +1869,13 @@ function fm_fullreload(q, logMsg) {
     // without restarting them.
     // until then - it's the sledgehammer method; can't be anything
     // more surgical :(
-    localStorage.force = 1;
+    if (logMsg === 'ETOOMANY' && mega.loadReport.mode < 2 && !sessionStorage.lightTreeReload) {
+        sessionStorage.lightTreeReload = 1;
+    }
+    else {
+        localStorage.force = 1;
+        delete sessionStorage.lightTreeReload;
+    }
 
     // done reload callback
     var step = 1;
@@ -1689,13 +1966,9 @@ function emplacenode(node, noc) {
 
         if (node.hash) {
             if (!M.h[node.hash]) {
-                M.h[node.hash] = node.h + ' ';
+                M.h[node.hash] = Object.create(null);
             }
-            else {
-                if (M.h[node.hash].indexOf(node.h) < 0) {
-                    M.h[node.hash] += node.h + ' ';
-                }
-            }
+            M.h[node.hash][node.h] = 1;
         }
     }
     else if (node.t > 1 && node.t < 5) {
@@ -1816,23 +2089,16 @@ function worker_procmsg(ev) {
 
         if (ev.data.scni >= 0) {
             // enqueue processed node
-            if (!scq[ev.data.scni]) {
-                scq[ev.data.scni] = [null, []];
+            if (scq[ev.data.scni]) {
+                scq[ev.data.scni][1][ev.data.arrivalOrder] = ev.data;
             }
-            scq[ev.data.scni][1][ev.data.arrivalOrder] = ev.data;
-
-            if (!--nodesinflight[ev.data.scni]) {
-                delete nodesinflight[ev.data.scni];
-
-                if (scloadtnodes && scq[ev.data.scni][0] && sc_fqueuet(ev.data.scni)) {
-                    // fetch required nodes from db
-                    sc_fetcher();
-                }
-                else {
-                    // resume processing, if appropriate and needed
-                    resumesc();
-                }
+            else {
+                var initArray = [];
+                initArray[ev.data.arrivalOrder] = ev.data;
+                scq[ev.data.scni] = [null, initArray];
             }
+
+            startNodesFetching(ev.data.scni);
         }
         else {
             // maintain special incoming shares index
@@ -1844,21 +2110,21 @@ function worker_procmsg(ev) {
                 }
             }
 
-            if (fmdb) {
+            if (ufsc.cache && ev.data.p) {
+                ufsc.feednode(ev.data);
+            }
+            else if (fmdb) {
                 fmdb.add('f', {
                     h : ev.data.h,
                     p : ev.data.p,
                     s : ev.data.s >= 0 ? ev.data.s : -ev.data.t,
+                    t : ev.data.t ? 1262304e3 - ev.data.ts : ev.data.ts,
                     c : ev.data.hash || '',
                     d : ev.data
                 });
             }
 
             emplacenode(ev.data);
-
-            if (ufsc.cache) {
-                ufsc.feednode(ev.data);
-            }
         }
     }
     else if (ev.data[0] === 'console') {
@@ -1891,7 +2157,8 @@ function worker_procmsg(ev) {
                 }
             }
 
-            loadfm_callback(residualfm);
+            window.loadingInitDialog.step3();
+            setTimeout(loadfm_callback, 300, residualfm);
             residualfm = false;
         }
     }
@@ -1908,6 +2175,9 @@ var mclp;
 function loadfm(force) {
     "use strict";
 
+    if (anonymouschat) {
+        return;
+    }
     if (force) {
         localStorage.force = true;
         loadfm.loaded = false;
@@ -1941,13 +2211,14 @@ function loadfm(force) {
             else {
                 fmdb = FMDB(u_handle, {
                     // channel 0: transactional by _sn update
-                    f      : '&h, p, s, c',    // nodes - handle, parent, size (negative size: type), checksum
+                    f      : '&h, p, s, c, t', // nodes - handle, parent, size (negative size: type), checksum
                     s      : '&o_t',           // shares - origin/target; both incoming & outgoing
                     ok     : '&h',             // ownerkeys for outgoing shares - handle
                     mk     : '&h',             // missing node keys - handle
                     u      : '&u',             // users - handle
                     ph     : '&h',             // exported links - handle
                     tree   : '&h',             // tree folders - handle
+                    suba   : '&s_ac',          // sub_accounts of master business account
                     opc    : '&p',             // outgoing pending contact - id
                     ipc    : '&p',             // incoming pending contact - id
                     ps     : '&h_p',           // pending share - handle/id
@@ -1958,12 +2229,7 @@ function loadfm(force) {
                     pup    : '&p',             // public upload page - handle
 
                     // channel 1: non-transactional (maintained by IndexedDBKVStorage)
-                    chatqueuedmsgs : '&k', // queued chat messages - k
-                    pta: '&k' // persisted type messages - k
-                }, {
-                    chatqueuedmsgs : 1,
-                    pta: 1
-                });
+                }, {});
 
                 fmdb.init(fetchfm, localStorage.force);
             }
@@ -1990,7 +2256,7 @@ function fetchfm(sn) {
     }
     else {
         // activate/prefetch attribute cache at this early stage
-        promise = attribCache.prefillMemCache(fmdb);
+        promise = attribCache.load();
     }
 
     promise.always(function() {
@@ -2024,126 +2290,153 @@ function fetchfm(sn) {
 
 function dbfetchfm() {
     "use strict";
-
-    var i;
+    var tables = {
+        tree: function(r) {
+            for (var i = r.length; i--;) {
+                ufsc.addTreeNode(r[i], true);
+            }
+            if (d) {
+                console.debug('processed %d tree nodes.', r.length);
+            }
+        },
+        opc: processOPC,
+        ipc: processIPC,
+        ps: function(r) {
+            processPS(r, true);
+            r = r.map(function(n) {
+                return n.h;
+            });
+            return dbfetch.geta(r);
+        },
+        puf: function _(r) {
+            mega.megadrop.pufProcessDb(r);
+            r = r.map(function(n) {
+                return n.h;
+            });
+            return dbfetch.geta(r);
+        },
+        suba: process_suba,
+        pup: mega.megadrop.pupProcessDb,
+        mcf: 1
+    };
+    var tableProc = function(t) {
+        return function(r) {
+            if (tables[t] === 1) {
+                if (r.length > 0) {
+                    // only set chatmcf is there is anything returned
+                    // if not, this would force the chat to do a 'mcf' call
+                    loadfm.chatmcf = r;
+                }
+                else {
+                    loadfm.chatmcf = -1;
+                }
+            }
+            else {
+                return tables[t](r, true);
+            }
+        };
+    };
+    var checkSettled = function(r) {
+        for (var i = r.length; i--;) {
+            if (r[i].status !== 'fulfilled') {
+                throw new Error(r[i].reason);
+            }
+        }
+    };
 
     loadingInitDialog.step2();
 
-    fmdb.get('ok').always(function get_ok(r) {
-        process_ok(r, true);
+    if (d) {
+        console.time('dbfetchfm');
+    }
 
-        var promise;
-        if (mBroadcaster.crossTab.master && !localStorage.fmall) {
-            promise = dbfetch.root();
-
-            mega.fcv_db = 1;
-        }
-        else {
-            // fetch the whole cloud on slave tabs..
-            promise = dbfetch.chunked(0);
-
-            mega.fcv_db = 2;
-        }
-
-        promise.always(function get_f(folders) {
-            loadfm.onDemandFolders = folders;
+    Promise.allSettled([fmdb.get('ok'), dbfetch.init()])
+        .then(function(r) {
+            checkSettled(r);
+            process_ok(r[0].value, true);
 
             mega.loadReport.recvNodes     = Date.now() - mega.loadReport.stepTimeStamp;
             mega.loadReport.stepTimeStamp = Date.now();
 
-            fmdb.get('mk').always(function get_mk(r) {
-                crypto_missingkeysfromdb(r);
+            return Promise.allSettled([fmdb.get('mk'), fmdb.get('u'), fmdb.get('s')]);
+        })
+        .then(function(r) {
+            var promises = [];
 
-                mega.loadReport.pn1 = Date.now() - mega.loadReport.stepTimeStamp;
+            checkSettled(r);
+            crypto_missingkeysfromdb(r[0].value);
+            mega.loadReport.pn1 = Date.now() - mega.loadReport.stepTimeStamp;
 
-                fmdb.get('u').always(function get_u(r) {
-                    process_u(r, true);
+            process_u(r[1].value, true);
+            mega.loadReport.pn2 = Date.now() - mega.loadReport.stepTimeStamp;
+            // @todo deprecate those pn1-pn5 ...
+            mega.loadReport.pn3 = Date.now() - mega.loadReport.stepTimeStamp;
 
-                    mega.loadReport.pn2 = Date.now() - mega.loadReport.stepTimeStamp;
+            r = r[2].value;
+            for (var i = r.length; i--;) {
+                if (r[i].su) {
+                    // this is an inbound share
+                    M.c.shares[r[i].t] = r[i];
 
-                    fmdb.get('s').always(function get_s(r) {
-                        var promises = [];
+                    if (r[i].sk) {
+                        crypto_setsharekey(r[i].t, base64_to_a32(r[i].sk), true);
+                    }
+                }
+                else {
+                    // this is an outbound share
+                    promises.push(M.nodeShare(r[i].h, r[i], true));
+                }
+            }
+            mega.loadReport.pn4 = Date.now() - mega.loadReport.stepTimeStamp;
 
-                        mega.loadReport.pn3 = Date.now() - mega.loadReport.stepTimeStamp;
+            if (promises.length) {
+                // handle all outbound shares through a single promise.
+                // if an ENOENT happens, this won't halt the process...
+                promises = [MegaPromise.allDone(promises)];
+            }
 
-                        for (i = r.length; i--;) {
-                            if (r[i].su) {
-                                // this is an inbound share
-                                M.c.shares[r[i].t] = r[i];
-                                if (r[i].sk) {
-                                    crypto_setsharekey(r[i].t, base64_to_a32(r[i].sk), true);
-                                }
-                            }
-                            else {
-                                // this is an outbound share
-                                promises.push(M.nodeShare(r[i].h, r[i], true));
-                            }
-                        }
+            for (var j = 0, it = Object.keys(tables); j < it.length; ++j) {
+                var t = it[j];
+                promises.push(fmdb.get(t).then(tableProc(t)).catch(dump));
+            }
+            mega.loadReport.pn5 = Date.now() - mega.loadReport.stepTimeStamp;
 
-                        mega.loadReport.pn4 = Date.now() - mega.loadReport.stepTimeStamp;
+            return Promise.allSettled(promises);
+        })
+        .then(function(r) {
+            checkSettled(r);
 
-                        var tables = {
-                            opc: processOPC,
-                            ipc: processIPC,
-                            ps: processPS,
-                            puf: mega.megadrop.pufProcessDb,
-                            pup: mega.megadrop.pupProcessDb,
-                            tree: function(r) {
-                                for (var i = r.length; i--;) {
-                                    ufsc.addTreeNode(r[i], true);
-                                }
-                            },
-                            mcf: 1
-                        };
+            if (d) {
+                console.info('All settled, %d operations completed to load from DB.', r.length);
+                console.timeEnd('dbfetchfm');
+            }
 
-                        // Prevent MEGAdrop tables being created for mobile
-                        if (is_mobile) {
-                            delete tables.pup;
-                        }
+            mega.loadReport.mode = 1;
+            mega.loadReport.procNodeCount = Object.keys(M.d || {}).length;
+            mega.loadReport.procNodes = Date.now() - mega.loadReport.stepTimeStamp;
+            mega.loadReport.stepTimeStamp = Date.now();
 
-                        Object.keys(tables).forEach(function(t) {
-                            promise = fmdb.get(t);
-                            promise.always(function(r) {
-                                if (tables[t] === 1) {
-                                    if (r.length > 0) {
-                                        // only set chatmcf is there is anything returned
-                                        // if not, this would force the chat to do a 'mcf' call
-                                        loadfm.chatmcf = r;
-                                    }
-                                }
-                                else {
-                                    tables[t](r, true);
-                                }
-                            });
-                            promises.push(promise);
-                        });
-                        mega.loadReport.pn5 = Date.now() - mega.loadReport.stepTimeStamp;
+            if (!mBroadcaster.crossTab.master && window.fmdb) {
+                // on a secondary tab, prevent writing to DB once we have read its contents
+                fmdb.crashed = 666;
+            }
+            console.assert(window.fmdb, 'check what is going on here...');
 
-                        MegaPromise.allDone(promises).always(function dbfetchfm_done() {
+            if (ufsc) {
+                if (d && $.len(ufsc.cache || {})) {
+                    console.warn('found non-flushed ufs-cache entries...', [ufsc.cache], ufsc);
+                }
+                delete ufsc.cache;
+            }
 
-                            mega.loadReport.mode = 1;
-                            mega.loadReport.procNodeCount = Object.keys(M.d || {}).length;
-                            mega.loadReport.procNodes     = Date.now() - mega.loadReport.stepTimeStamp;
-                            mega.loadReport.stepTimeStamp = Date.now();
-
-                            if (!mBroadcaster.crossTab.master) {
-                                // on a secondary tab, prevent writing to DB once we have read its contents
-                                // XXX: TypeError: Cannot create property 'crashed' on boolean 'false'
-                                // ^^^ how does `fmdb` get set to `false` here ?! :-/
-                                if (fmdb) {
-                                    fmdb.crashed = 666;
-                                }
-                            }
-
-                            // fetch & process new actionpackets
-                            loadingInitDialog.step3();
-                            getsc(true);
-                        });
-                    });
-                });
-            });
+            // fetch & process new actionpackets
+            window.loadingInitDialog.step3();
+            getsc(true);
+        })
+        .catch(function(ex) {
+            console.error(ex);
+            siteLoadError(ex, 'dbfetchfm');
         });
-    });
 }
 
 // returns tree type h is in
@@ -2405,8 +2698,7 @@ function doShare(nodeId, targets, dontShowShareDialog) {
             shareAccessRightsLevel: accessRights
         })
             .always(function (pubKey, result) {
-
-                var sharePromise = new MegaPromise();
+                var sharePromise;
 
                 // parse [api-result, user-data-ctx]
                 var ctx = result[1];
@@ -2523,12 +2815,12 @@ function process_f(f, cb, updateVersioning) {
             M.addNode(n);
             ufsc.addNode(n);
         }
-
-        if (cb) {
-            cb(newmissingkeys && M.checkNewMissingKeys());
-        }
     }
-    else if (cb) cb();
+
+    // TODO: This function is no longer asynchronous, remove the callback dependency (?)
+    if (typeof cb === 'function') {
+        cb();
+    }
 }
 
 /**
@@ -2657,6 +2949,11 @@ function processPH(publicHandles) {
         if (value.d) {
             M.delNodeShare(nodeId, 'EXP');
 
+            if (fminitialized && M.currentdirid === 'public-links') {
+                removeUInode(nodeId, value.p);
+                selectionManager.remove_from_selection(nodeId);
+            }
+
             if (UiExportLink) {
                 UiExportLink.removeExportLinkIcon(nodeId);
             }
@@ -2666,7 +2963,6 @@ function processPH(publicHandles) {
             delete share.a;
             delete share.i;
             delete share.n;
-            share.ts = timeNow;
             share.u = 'EXP';
             share.r = 0;
 
@@ -2689,6 +2985,10 @@ function processPH(publicHandles) {
         // Update the public link icon for mobile
         if (is_mobile) {
             mobile.cloud.updateLinkStatus(nodeId);
+        }
+
+        if (fminitialized && M.recentsRender) {
+            M.recentsRender.nodeChanged(nodeId);
         }
     }
 }
@@ -2745,10 +3045,10 @@ function processPS(pendingShares, ignoreDB) {
                             id: M.opc[pendingContactId].m,
                             name: contactName
                         }]);
-                    addToMultiInputDropDownList('.add-contact-multiple-input', {
-                        id: M.opc[pendingContactId].m,
-                        name: contactName
-                    });
+                    addToMultiInputDropDownList('.add-contact-multiple-input', [{
+                            id: M.opc[pendingContactId].m,
+                            name: contactName
+                        }]);
                 }
             }
             else {
@@ -2792,6 +3092,11 @@ function processUPCI(ap) {
                 $('.fm-empty-contacts .fm-empty-cloud-txt').text(l[6196]);
                 $('.button.link-button.accept-all').addClass('hidden');
                 $('.fm-empty-contacts').removeClass('hidden');
+                $('.contacts-tab-lnk.ipc').removeClass('filled').find('span').text('');
+            }
+            else if (M.currentdirid === 'ipc') {
+                $('.contacts-tab-lnk.ipc').addClass('filled').find('span').text(Object.keys(M.ipc).length);
+                $('.button.link-button.accept-all').removeClass('hidden');
             }
             else if (M.currentdirid === 'ipc') {
                 updateIpcRequests();
@@ -2846,52 +3151,165 @@ function processUPCO(ap) {
     }
 }
 
-/*
- * process_u
+/**
+ * Updates contact/user data in global variable M.u, local dB and taking care of items in share and add contacts
+ * dialogs dropdown
  *
- * Updates contact/s data in global variable M.u, local dB and
- * taking care of items in share and add contacts dialogs dropdown
- *
- * .c param is contact level i.e. [0-(inactive/deleted), 1-(active), 2-(owner)]
- *
- * @param {Object} u Users informations
+ * @param {Object} users Information about users (properties defined in js/fm/megadata.js)
  */
-function process_u(u, ignoreDB) {
+function process_u(users, ignoreDB) {
     "use strict";
 
-    for (var i = 0; i < u.length; i++) {
-        if (u[i].c === 1) {
-            u[i].h = u[i].u;
-            u[i].t = 1;
-            u[i].p = 'contacts';
-            M.addNode(u[i], ignoreDB);
+    // If nicknames private encrypted attribute is set.
+    if (nicknames.cache === false && Object(u_attr).hasOwnProperty('*!>alias')) {
+        nicknames.decryptAndCacheNicknames(u_attr['*!>alias']);
+    }
 
-            var contactName = M.getNameByHandle(u[i].h);
+    for (var i = 0; i < users.length; i++) {
+
+        var userEmail = users[i].m;
+        var userHandle = users[i].u;
+        var userStatus = users[i].c;
+
+        // If this user had a nickname in the past, don't delete it if they are now added as a contact
+        // Or if the nickname is set in the initial 'ug' API request, then set it
+        users[i].nickname = userHandle in M.u && M.u[userHandle].nickname || nicknames.cache[userHandle] || '';
+
+        if (userStatus === 1) {
+            users[i].h = userHandle;
+            users[i].t = 1;
+            users[i].p = 'contacts';
+
+            M.addNode(users[i], ignoreDB);
+
+            var contactName = M.getNameByHandle(userHandle);
 
             // Update token.input plugin
-            addToMultiInputDropDownList('.share-multiple-input', [{id: u[i].m, name: contactName}]);
-            addToMultiInputDropDownList('.add-contact-multiple-input', [{id: u[i].m, name: contactName}]);
+            addToMultiInputDropDownList('.share-multiple-input', [{id: userEmail, name: contactName}]);
+            addToMultiInputDropDownList('.add-contact-multiple-input', [{id: userEmail, name: contactName}]);
         }
-        else if (M.d[u[i].u]) {
-            M.delNode(u[i].u, ignoreDB);
+        else if (M.d[userHandle]) {
+            M.delNode(userHandle, ignoreDB);
 
             // Update token.input plugin
-            removeFromMultiInputDDL('.share-multiple-input', {id: u[i].m, name: u[i].m});
-            removeFromMultiInputDDL('.add-contact-multiple-input', {id: u[i].m, name: u[i].m});
+            removeFromMultiInputDDL('.share-multiple-input', {id: userEmail, name: userEmail});
+            removeFromMultiInputDDL('.add-contact-multiple-input', {id: userEmail, name: userEmail});
         }
 
         // Update user attributes M.u
-        M.addUser(u[i], ignoreDB);
+        M.addUser(users[i], ignoreDB);
 
-        if (u[i].c === 1) {
-            // sync data objs M.u <-> M.d
-            M.d[u[i].u] = M.u[u[i].u];
+        // If a contact, sync data objs M.d and M.u
+        if (userStatus === 1) {
+            M.d[userHandle] = M.u[userHandle];
         }
     }
+}
 
-    /*if (M.currentdirid === 'dashboard') {
-        delay('dashboard:updcontacts', dashboardUI.updateContactsWidget);
-     }*/
+/**
+ * a function to parse the JSON object received holding information about sub-accounts of a business account.
+ * This object will exist only in business accounts.
+ * @param {String[]} suba    the object to parse, it must contain an array of sub-accounts ids (can be empty)
+ * @param {Boolean} ignoreDB if we want to skip DB updating
+ */
+function process_suba(suba, ignoreDB) {
+    "use strict";
+    if (!suba || !suba.length) {
+        return;
+    }
+    M.require('businessAcc_js', 'businessAccUI_js').done(function () {
+
+        // the response is an array of users's handles (Masters). this means at least it will contain
+        // the current user handle.
+        // later-on we need to iterate on all of them. For now we dont know how to treat sub-masters yet
+        // --> we will target only current users's subs
+        var bAccount = new BusinessAccount();
+        // if (!suba || !suba[u_handle]) {
+        //    return;
+        // }
+        // suba = suba[u_handle];
+        if (suba.length) {
+            for (var k = 0; k < suba.length; k++) {
+                bAccount.parseSUBA(suba[k], ignoreDB);
+            }
+        }
+        // else {
+        //    bAccount.parseSUBA(null, true); // dummy call to flag that this is a master B-account
+        // }
+    });
+}
+
+/**
+ * A function to precess the action packets received related to business account sub-users
+ * @param {Object} packet
+ */
+function process_businessAccountSubUsers_SC(packet) {
+    "use strict";
+    // we dont process these action packets on mobile
+    if (is_mobile) {
+        return;
+    }
+    if (!packet) { // no packet
+        return;
+    }
+    if (!M.suba) { // no sub-users in memory
+        return;
+    }
+    if (!packet.a) { // no packet type/operation
+        return;
+    }
+    if (!packet.u) { // no user handle
+        return;
+    }
+
+    var subUser = M.suba[packet.u];
+    if (!subUser) { // sub-user not found --> it's new one
+        subUser = Object.create(null);
+        subUser.u = packet.u;
+    }
+
+    var valChanged = false;
+
+    if ('s' in packet && packet.s !== subUser.s) { // new status
+        subUser.s = packet.s;
+        valChanged = true;
+    }
+    if (packet.e && packet.e !== subUser.e) { // new email
+        subUser.e = packet.e;
+        valChanged = true;
+    }
+    if (packet.firstname && packet.firstname !== subUser.firstname) { // new first-name
+        subUser.firstname = packet.firstname;
+        valChanged = true;
+    }
+    if (packet.lastname && packet.lastname !== subUser.lastname) { // new last-name
+        subUser.lastname = packet.lastname;
+        valChanged = true;
+    }
+    if (packet.position && packet.position !== subUser.position) { // new position
+        subUser.position = packet.position;
+        valChanged = true;
+    }
+    if (packet.idnum && packet.idnum !== subUser.idnum) { // new id number
+        subUser.idnum = packet.idnum;
+        valChanged = true;
+    }
+    if (packet.phonenum && packet.phonenum !== subUser.phonenum) { // new phone number
+        subUser.phonenum = packet.phonenum;
+        valChanged = true;
+    }
+    if (packet.location && packet.location !== subUser.location) { // new location
+        subUser.location = packet.location;
+        valChanged = true;
+    }
+    if (valChanged) {
+        M.require('businessAcc_js', 'businessAccUI_js').done(
+            function() {
+                var bAccount = new BusinessAccount();
+                bAccount.parseSUBA(subUser, false, true);
+            }
+        );
+    }
 }
 
 function process_ok(ok, ignoreDB) {
@@ -2908,66 +3326,69 @@ function process_ok(ok, ignoreDB) {
     }
 }
 
+
 function processMCF(mcfResponse, ignoreDB) {
+    'use strict';
 
-    if (typeof ChatdIntegration !== 'undefined') {
-        ChatdIntegration.requiresUpdate = true;
-    }
-
-    if (mcfResponse === EEXPIRED) {
+    if (mcfResponse === EEXPIRED || mcfResponse === EINTERNAL) {
         return;
     }
 
-    // reopen chats from the MCF response.
-    if (typeof mcfResponse !== 'undefined' && typeof mcfResponse.length !== 'undefined' && mcfResponse.forEach) {
-        mcfResponse.forEach(function (chatRoomInfo) {
-            if (chatRoomInfo.active === 0) {
-                // skip non active chats for now...
-                return;
-            }
+    // Process mcf response from API (i.e. gettree) or indexedDB
+    if (Array.isArray(mcfResponse)) {
+        for (var i = mcfResponse.length; i--;) {
+            var chatRoomInfo = mcfResponse[i];
 
-            if (chatRoomInfo.n) {
-                for (var i = 0; i < chatRoomInfo.n.length; i++) {
-                    var member = chatRoomInfo.n[i];
-                    // was removed from the chat.
-                    if (member.u === u_handle && member.p === -1) {
-                        return;
-                    }
-                }
-            }
             if (fmdb && !pfkey && !ignoreDB) {
-                fmdb.add('mcf', { id : chatRoomInfo.id, d : chatRoomInfo });
+                fmdb.add('mcf', {id: chatRoomInfo.id, d: chatRoomInfo});
             }
 
-            if (typeof ChatdIntegration !== 'undefined') {
-                ChatdIntegration._queuedChats[chatRoomInfo.id] = chatRoomInfo;
+            if (typeof Chat !== 'undefined') {
+                Chat.mcf[chatRoomInfo.id] = chatRoomInfo;
             }
-        });
-
-        if (typeof ChatdIntegration !== 'undefined') {
-            ChatdIntegration.deviceId = mcfResponse.d;
-
-            ChatdIntegration.mcfHasFinishedPromise.resolve(mcfResponse);
         }
     }
-    else if (typeof ChatdIntegration !== 'undefined') {
-        ChatdIntegration.mcfHasFinishedPromise.reject(mcfResponse);
+    else if (d) {
+        console.error('Unexpected mcf response.', mcfResponse);
     }
 }
 
-function folderreqerr()
-{
+function folderreqerr(c, e) {
+    'use strict';
+
+    var title = l[1043];
+    var message = null;
+
     loadingDialog.hide();
     loadingInitDialog.hide();
 
     loadfm.loaded = false;
     loadfm.loading = false;
 
+    if (typeof e === 'object' && e.err < 0) {
+        if (e.u === 7) {
+            message = l[23242];
+
+            if (e.l !== 2) {
+                message = l[23243];
+            }
+        }
+        else {
+            e = e.err;
+        }
+    }
+
     // If desktop site show "Folder link unavailable" dialog
     if (!is_mobile) {
-        var title = l[1043];
-        var message = l[1044] + '<ul><li>' + l[1045] + '</li><li>' + l[247] + '</li><li>' + l[1046] + '</li>';
+        if (parseInt(e) === EARGS) {
+            title = l[20198];
+            message = l[20199];
+        }
+        else if (!message) {
+            message = l[1044] + '<ul><li>' + l[1045] + '</li><li>' + l[247] + '</li><li>' + l[1046] + '</li>';
+        }
 
+        parsepage(pages['placeholder']);
         msgDialog('warninga', title, message, false, function() {
 
             // If the user is logged-in, he'll be redirected to the cloud
@@ -2979,44 +3400,72 @@ function folderreqerr()
     }
     else {
         // Show file/folder not found overlay
-        mobile.notFoundOverlay.show();
+        mobile.initDOM();
+        mobile.notFoundOverlay.show(message || parseInt(e && e.err || e));
     }
 }
 
-function init_chat() {
-    function __init_chat() {
-        if (u_type && !megaChatIsReady) {
-            if (d) console.log('Initializing the chat...');
+/**
+ * Initialize the chat subsystem.
+ * @param {*} [action] Specific action procedure to follow
+ * @returns {Promise} promise fulfilled on completion.
+ */
+function init_chat(action) {
+    'use strict';
+    return new Promise(function(resolve, reject) {
+        var __init_chat = function() {
+            var result = false;
 
-            var _chat = new Chat();
+            if ((anonymouschat || u_type) && !megaChatIsReady) {
+                if (d) {
+                    console.info('Initializing the chat...');
+                }
+                var _chat = new Chat();
 
-            // `megaChatIsDisabled` might be set if `new Karere()` failed (Ie, in older browsers)
-            if (!window.megaChatIsDisabled) {
-                window.megaChat = _chat;
-                megaChat.init();
-
-                if (fminitialized) {
-                    if (String(M.currentdirid).substr(0, 5) === 'chat/') {
-                        chatui(M.currentdirid);
-                    }
-                    //megaChat.renderContactTree();
-                    megaChat.renderMyStatus();
+                // `megaChatIsDisabled` might be set if `new Karere()` failed (Ie, in older browsers)
+                if (!window.megaChatIsDisabled) {
+                    window.megaChat = _chat;
+                    megaChat.init().then(resolve).catch(reject);
+                    resolve = null;
                 }
             }
-        }
 
-        if (!loadfm.loading) {
-            loadingDialog.hide();
-            loadingInitDialog.hide();
-        }
-    }
+            if (!loadfm.loading) {
+                window.loadingDialog.hide();
+                window.loadingInitDialog.hide();
+            }
 
-    if (pfid) {
-        if (d) console.log('Will not initialize chat [branch:1]');
-    }
-    else {
-        authring.onAuthringReady('chat').done(__init_chat);
-    }
+            if (resolve) {
+                resolve(result);
+            }
+        };
+
+        if (window.megaChatIsReady) {
+            $.tresizer();
+            return __init_chat();
+        }
+        var mclp = MediaInfoLib.getMediaCodecsList();
+
+        if (action === 0x104DF11E5) {
+            M.require('chat')
+                .always(function() {
+                    mclp.always(__init_chat);
+                });
+        }
+        else if (anonymouschat) {
+            mclp.always(__init_chat);
+        }
+        else if (pfid) {
+            if (d) {
+                console.log('Will not initialize the chat (folder-link)');
+            }
+
+            resolve(EACCESS);
+        }
+        else {
+            authring.onAuthringReady('chat').done(__init_chat);
+        }
+    });
 }
 
 function loadfm_callback(res) {
@@ -3030,8 +3479,6 @@ function loadfm_callback(res) {
         msgDialog('warninga', l[1311], l[16892], api_strerror(res), loadSubPage.bind(null, 'support'));
         return;
     }
-
-    loadingInitDialog.step3();
 
     mega.loadReport.recvNodes     = Date.now() - mega.loadReport.stepTimeStamp;
     mega.loadReport.stepTimeStamp = Date.now();
@@ -3058,6 +3505,11 @@ function loadfm_callback(res) {
     if (res.opc) {
         processOPC(res.opc);
     }
+    if (res.suba) {
+        if (!is_mobile) {
+            process_suba(res.suba);
+        }
+    }
     if (res.ipc) {
         processIPC(res.ipc);
     }
@@ -3067,11 +3519,27 @@ function loadfm_callback(res) {
     if (res.mcf) {
         // save the response to be processed later once chat files were loaded
         loadfm.chatmcf = res.mcf.c || res.mcf;
+        if (res.mcf.pc) {
+            loadfm.chatmcf = (loadfm.chatmcf || []).concat(res.mcf.pc);
+        }
         // cf will include the flags (like whether it is archived) and chatid,
         // so it needs to combine it before processing it.
+        var mergeCfToChatmcf = function(entry) {
+            for (var i = 0; i < loadfm.chatmcf.length; i++) {
+                if (loadfm.chatmcf[i].id === entry.id) {
+                    loadfm.chatmcf[i].f = entry.f;
+                }
+            }
+        };
+
         if (res.mcf.cf) {
             for (var i = 0; i < res.mcf.cf.length; i++) {
-                loadfm.chatmcf[i].f = res.mcf.cf[i].f;
+                mergeCfToChatmcf(res.mcf.cf[i]);
+            }
+        }
+        if (res.mcf.pcf) {
+            for (var i = 0; i < res.mcf.pcf.length; i++) {
+                mergeCfToChatmcf(res.mcf.pcf[i]);
             }
         }
         // ensure the response is saved in fmdb, even if the chat is disabled or not loaded yet
@@ -3107,6 +3575,12 @@ function loadfm_callback(res) {
                         loadSubPage('start');
                     });
             }
+        }
+
+        if (folderlink) {
+
+            // This folderlink is valid to affiliate
+            M.affiliate.storeAffiliate(folderlink, 2);
         }
 
         // If we have shares, and if a share is for this node, record it on the nodes share list
@@ -3154,6 +3628,17 @@ function loadfm_callback(res) {
         // those dependant on in-memory-nodes from the initial load to set flags such SHARED.
         console.assert(ufsc, 'check this...');
         if (ufsc) {
+            if (localStorage.ufsis) {
+                ufsc.saveInitialState()
+                    .then(function() {
+                        setsn(res.sn);
+                        currsn = res.sn;
+                        getsc(true);
+                    })
+                    .catch(dump);
+                return;
+            }
+
             ufsc.save();
         }
 
@@ -3169,10 +3654,6 @@ function loadfm_callback(res) {
         }
         else {
             getsc(true);
-        }
-
-        if (hasMissingKeys) {
-            srvlog('Got missing keys processing gettree...', null, true);
         }
     });
 }
@@ -3258,10 +3739,11 @@ function loadfm_done(mDBload) {
                         loadfm.chatloaded  = Date.now();
                     });
 
+                /*
                 if (getSitePath().substr(0, 8) === '/fm/chat') {
                     // Keep the "decrypting" step until the chat have loaded.
                     hideLoadingDialog = false;
-                }
+                }*/
             }
         }
 
@@ -3276,8 +3758,6 @@ function loadfm_done(mDBload) {
         // -0x800e0fff indicates a call to loadfm() when it was already loaded
         if (mDBload !== -0x800e0fff && !is_mobile) {
             onIdle(function _initialNotify() {
-                // After the first SC request all subsequent requests can generate notifications
-                notify.initialLoadComplete = true;
 
                 // If this was called from the initial fm load via gettree or db load, we should request the
                 // latest notifications. These must be done after the first getSC call.
@@ -3339,7 +3819,7 @@ function loadfm_done(mDBload) {
             closeMsg();
         }
         clearInterval(mega.loadReport.aliveTimer);
-        mega.flags &= ~window.MEGAFLAG_LOADINGCLOUD;
+        mega.state &= ~window.MEGAFLAG_LOADINGCLOUD;
 
         watchdog.notify('loadfm_done');
     };
@@ -3362,7 +3842,13 @@ function loadfm_done(mDBload) {
 
             // setup fm-notifications such as 'full' or 'almost-full' if needed.
             if (!pfid && u_type) {
-                M.checkStorageQuota(50);
+                M.getStorageState().then(function(res) {
+                    // 0: Green, 1: Orange (almost full), 2: Red (full)
+                    if (res >= 1) {
+                        M.checkStorageQuota(50);
+                    }
+                });
+                M.myChatFilesFolder.init();
             }
         }
         else {
@@ -3429,8 +3915,14 @@ function fmsortmode(id, n, d)
     var sortmodes = {};
     if (typeof fmconfig.sortmodes !== 'undefined')
         sortmodes = fmconfig.sortmodes;
-    if (n === 'name' && d > 0)
+    if (n === 'name' && d > 0 && id !== "contacts") {
+        // don't delete for "contacts" section, since "status" is the default there.
         delete sortmodes[id];
+    }
+    else if (n === "status" && d > 0 && id === "contacts") {
+        // DO delete for "contacts" section, since "status" is the default there, so default is already d > 1.
+        delete sortmodes[id];
+    }
     else
         sortmodes[id] = {n: n, d: d};
     mega.config.set('sortmodes', sortmodes);
@@ -3449,13 +3941,14 @@ function fmviewmode(id, e)
 }
 
 var thumbnails = Object.create(null);
+var th_pending = Object.create(null);
 var th_requested = Object.create(null);
 var fa_duplicates = Object.create(null);
 var fa_reqcnt = 0;
 var fa_addcnt = 8;
 var fa_tnwait = 0;
 
-function fm_thumbnails(mode, nodeList)
+function fm_thumbnails(mode, nodeList, callback)
 {
     var treq = {}, a = 0, max = Math.max($.rmItemsInView || 1, 71) + fa_addcnt, u = max - Math.floor(max / 3), y;
     if (!fa_reqcnt)
@@ -3465,7 +3958,7 @@ function fm_thumbnails(mode, nodeList)
 
     nodeList = (mode === 'standalone' ? nodeList : false) || M.v;
 
-    if ((M.viewmode && !M.chat) || mode === 'standalone')
+    if (!M.chat || mode === 'standalone')
     {
         for (var i = 0; i < nodeList.length; i++) {
             var n = nodeList[i];
@@ -3486,6 +3979,7 @@ function fm_thumbnails(mode, nodeList)
                             k: n.k
                         };
                     th_requested[n.h] = 1;
+                    th_pending[n.h] = [];
 
                     if (u == a)
                         y = n.h;
@@ -3499,6 +3993,15 @@ function fm_thumbnails(mode, nodeList)
                 else if (n.seen && n.seen !== 2)
                 {
                     fm_thumbnail_render(n);
+                }
+
+                if (mode === 'standalone' && typeof callback === 'function') {
+                    if (thumbnails[n.h]) {
+                        onIdle(callback.bind(null, n.h));
+                    }
+                    else if (th_pending[n.h]) {
+                        th_pending[n.h].push(onIdle.bind(null, callback.bind(null, n.h)));
+                    }
                 }
             }
         }
@@ -3514,6 +4017,15 @@ function fm_thumbnails(mode, nodeList)
             var cdid = M.currentdirid;
             api_getfileattr(treq, 0, function(ctx, node, uint8arr)
             {
+                if (mode === 'standalone' && typeof callback === 'function') {
+                    onIdle(callback.bind(null, node));
+                }
+                if (th_pending[node]) {
+                    for (var t = th_pending[node].length; t--;) {
+                        th_pending[node][t]();
+                    }
+                    delete th_pending[node];
+                }
                 if (uint8arr === 0xDEAD)
                 {
                     if (d)
@@ -3552,6 +4064,9 @@ function fm_thumbnails(mode, nodeList)
                             thumbnails[n.h] = thumbnails[node];
                             if (n.seen && M.currentdirid === cdid)  {
                                 fm_thumbnail_render(n);
+                            }
+                            if (mode === 'standalone' && typeof callback === 'function') {
+                                onIdle(callback.bind(null, n.h));
                             }
                         }
                     }
@@ -3608,7 +4123,12 @@ mBroadcaster.once('boot_done', function() {
                 return;
             }
             for (var i = 0; i < items.length; i++) {
-                if (items[i].type.indexOf("image") === 0) {
+                if (items[i].type.indexOf("text/rtf") === 0) {
+                    // halt execution, this is a Rich text formatted clipboard data, which may also contain an image,
+                    // so we need to halt here, otherwise it may be threated as image, instead of text
+                    return;
+                }
+                else if (items[i].type.indexOf("image") === 0) {
                     if (items[i] instanceof File) {
                         // Safari, using .files
                         blob = items[i];

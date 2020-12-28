@@ -18,6 +18,7 @@ mobile.proSignupPrompt = {
 
         // Cache the selector
         this.$dialog = $('.mobile.loginrequired-dialog');
+        this.scrollPos = $('html').scrollTop();
 
         // Initialise the buttons
         this.initCloseButton();
@@ -26,6 +27,21 @@ mobile.proSignupPrompt = {
 
         // Show the dialog
         this.$dialog.removeClass('hidden').addClass('overlay');
+
+        // Disable scrolling
+        $('html').addClass('overlayed');
+    },
+
+    /**
+     * Scroll to position before dialog is opened
+     */
+    restoreScrollPosition: function() {
+
+        'use strict';
+
+        var scrollPos = this.scrollPos;
+
+        $('html').removeClass('overlayed').scrollTop(scrollPos);
     },
 
     /**
@@ -35,7 +51,8 @@ mobile.proSignupPrompt = {
 
         'use strict';
 
-        var $dialog = this.$dialog;
+        var self = this;
+        var $dialog = self.$dialog;
         var $closeButton = $dialog.find('.fm-dialog-close');
 
         // Add click/tap handler
@@ -46,6 +63,9 @@ mobile.proSignupPrompt = {
 
             // Hide the dialog
             $dialog.addClass('hidden').removeClass('overlay');
+
+            // Enabled scroll again and scroll to previous position
+            self.restoreScrollPosition();
 
             // Prevent any additional clicks
             return false;
@@ -59,17 +79,20 @@ mobile.proSignupPrompt = {
 
         'use strict';
 
-        var $this = this;
-        var $registerButton = $this.$dialog.find('.register');
+        var self = this;
+        var $registerButton = self.$dialog.find('.register');
 
         // Add click/tap handler
         $registerButton.off('tap').on('tap', function() {
 
             // Set the plan number they selected into localStorage for use after Registration/Login
-            $this.setSelectedPlanNum();
+            self.setSelectedPlanNum();
 
             // Hide the dialog
-            $this.$dialog.addClass('hidden').removeClass('overlay');
+            self.$dialog.addClass('hidden').removeClass('overlay');
+
+            // Enabled scroll again and scroll to previous position
+            self.restoreScrollPosition();
 
             // Load the register page
             loadSubPage('register');
@@ -86,17 +109,20 @@ mobile.proSignupPrompt = {
 
         'use strict';
 
-        var $this = this;
-        var $loginButton = $this.$dialog.find('.login');
+        var self = this;
+        var $loginButton = self.$dialog.find('.login');
 
         // Add click/tap handler
         $loginButton.off('tap').on('tap', function() {
 
             // Set the plan number they selected into localStorage for use after Registration/Login
-            $this.setSelectedPlanNum();
+            self.setSelectedPlanNum();
 
             // Hide the dialog
-            $this.$dialog.addClass('hidden').removeClass('overlay');
+            self.$dialog.addClass('hidden').removeClass('overlay');
+
+            // Enabled scroll again and scroll to previous position
+            self.restoreScrollPosition();
 
             // Load the login page
             loadSubPage('login');
@@ -114,7 +140,7 @@ mobile.proSignupPrompt = {
         'use strict';
 
         // Get the selected Pro card's data-payment attribute value
-        var selectedPlanNum = $('.reg-st3-membership-bl.selected').data('payment');
+        var selectedPlanNum = $('.pricing-page.plan.selected').data('payment');
 
         // Set the selected plan number so when they've completed Login and Registration they can proceed to pay
         localStorage.setItem('proPageContinuePlanNum', selectedPlanNum);

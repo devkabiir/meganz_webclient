@@ -7,6 +7,12 @@ var security = {
     /** Minimum password length across the app for registration and password changes */
     minPasswordLength: 8,
 
+    /**
+     * Minimum password score across the app for registration and password changes. The score is calculated
+     * using the score from the ZXCVBN library and the range is from 0 - 4 (very weak, weak, medium, good, strong)
+     */
+    minPasswordScore: 1,
+
     /** The number of iterations for the PPF (1-2 secs computation time) */
     numOfIterations: 100000,
 
@@ -15,6 +21,44 @@ var security = {
 
     /** The desired length of the derived key from the PPF in bits */
     derivedKeyLengthInBits: 256,    // 32 Bytes
+
+    /**
+     * Checks if the password is valid and meets minimum strength requirements
+     * @param {String} password The user's password
+     * @param {String} confirmPassword The second password the user typed again as a confirmation to avoid typos
+     * @returns {true|String} Returns true if the password is valid, or the error message if not valid
+     */
+    isValidPassword: function(password, confirmPassword) {
+
+        'use strict';
+
+        // Check if the passwords are not the same
+        if (password !== confirmPassword) {
+            return l[9066];         // The passwords are not the same, please check that you entered them correctly.
+        }
+
+        // Check if there is whitespace at the start or end of the password
+        if (password !== password.trim()) {
+            return l[19855];        // Whitespace at the start or end of the password is not permitted.
+        }
+
+        // Check for minimum password length
+        if (password.length < security.minPasswordLength) {
+            return l[18701];        // Your password needs to be at least x characters long.
+        }
+
+        // Check that the estimator library is initialised
+        if (typeof zxcvbn === 'undefined') {
+            return l[1115] + ' ' + l[1116];     // The password strength verifier is still initializing.
+        }                                       // Please try again in a few seconds.
+
+        // Check for minimum password strength score from ZXCVBN library
+        if ((zxcvbn(password).score < security.minPasswordScore)) {
+            return l[1104];         // Please strengthen your password.
+        }
+
+        return true;
+    },
 
     /**
      * Converts a UTF-8 string to a byte array
@@ -35,8 +79,9 @@ var security = {
      * @param {String} password The password from the user
      * @param {String} masterKeyArray32 The user's Master Key
      * @param {Function} completeCallback The function to be run after the keys are created which will pass the
-     *                                    the clientRandomValueBytes, encryptedMasterKeyArray32 and
-     *                                    hashedAuthenticationKeyBytes as the parameters
+     *                                    the clientRandomValueBytes, encryptedMasterKeyArray32,
+     *                                    hashedAuthenticationKeyBytes
+     *                                    and derivedAuthenticationKeyBytes as the parameters
      */
     deriveKeysFromPassword: function(password, masterKeyArray32, completeCallback) {
 
@@ -74,7 +119,8 @@ var security = {
             var encryptedMasterKeyArray32 = encrypt_key(cipherObject, masterKeyArray32);
 
             // Pass the Client Random Value, Encrypted Master Key and Hashed Authentication Key to the calling function
-            completeCallback(clientRandomValueBytes, encryptedMasterKeyArray32, hashedAuthenticationKeyBytes);
+            completeCallback(clientRandomValueBytes, encryptedMasterKeyArray32, hashedAuthenticationKeyBytes,
+                derivedAuthenticationKeyBytes);
         });
     },
 
@@ -188,7 +234,7 @@ var security = {
         'use strict';
 
         // If Web Crypto method supported, use that as it's nearly as fast as native
-        if (window.crypto && window.crypto.subtle) {
+        if (window.crypto && window.crypto.subtle && !is_microsoft) {
             security.deriveKeyWithWebCrypto(saltBytes, passwordBytes, iterations, derivedKeyLength, callback);
         }
         else {
@@ -260,14 +306,18 @@ var security = {
      * A helper function for the check password feature (used when changing email or checking if they can remember).
      * This function will only pass the Derived Encryption Key to the completion callback.
      * @param {String} password The password from the user
-     * @param {String} completeCallback The callback to run when complete which will pass derivedEncryptionKeyArray32
+     * @param {String} [saltBase64] Account Authentication Salt, if applicable
+     * @returns {Promise} derivedEncryptionKeyArray32
      */
-    getDerivedEncryptionKey: function(password, completeCallback) {
-
+    getDerivedEncryptionKey: promisify(function(resolve, reject, password, saltBase64) {
         'use strict';
 
+        saltBase64 = saltBase64 === undefined ? u_attr && u_attr.aas || '' : saltBase64;
+        if (!saltBase64) {
+            return resolve(prepare_key_pw(password));
+        }
+
         // Convert the salt and password to byte arrays
-        var saltBase64 = u_attr.aas;                        // Account Authentication Salt
         var saltArrayBuffer = base64_to_ab(saltBase64);
         var saltBytes = new Uint8Array(saltArrayBuffer);
         var passwordBytes = security.stringToByteArray(password);
@@ -286,9 +336,9 @@ var security = {
             var derivedEncryptionKeyArray32 = base64_to_a32(ab_to_base64(derivedEncryptionKeyBytes));
 
             // Pass only the Derived Encryption Key back to the callback
-            completeCallback(derivedEncryptionKeyArray32);
+            resolve(derivedEncryptionKeyArray32);
         });
-    },
+    }),
 
     /**
      * Complete the Park Account process
@@ -448,6 +498,279 @@ var security = {
                 { callback: completeCallback });
             }
         );
+    },
+
+    /**
+     * Check whether the provided password is valid to decrypt a key.
+     * @param {String|*} aPassword The password to test against.
+     * @param {String|*} aMasterKey The encrypted master key.
+     * @param {String|*} aPrivateKey The encrypted private key.
+     * @param {String|*} [aSalt] Account authentication salt, if applicable.
+     * @returns {Boolean|*} whether it succeed.
+     */
+    verifyPassword: promisify(function(resolve, reject, aPassword, aMasterKey, aPrivateKey, aSalt) {
+        'use strict';
+
+        if (typeof aPrivateKey === 'string') {
+            aPrivateKey = base64_to_a32(aPrivateKey);
+        }
+
+        if (typeof aMasterKey === 'string') {
+            aMasterKey = [[aMasterKey, aSalt]];
+        }
+        var keys = aMasterKey.concat();
+
+        (function _next() {
+            var pair = keys.pop();
+            if (!pair) {
+                return reject(ENOENT);
+            }
+
+            var mk = pair[0];
+            var salt = pair[1];
+
+            security.getDerivedEncryptionKey(aPassword, salt || false)
+                .then(function(derivedKey) {
+                    if (typeof mk === 'string') {
+                        mk = base64_to_a32(mk);
+                    }
+
+                    var decryptedMasterKey = decrypt_key(new sjcl.cipher.aes(derivedKey), mk);
+                    var decryptedPrivateKey = decrypt_key(new sjcl.cipher.aes(decryptedMasterKey), aPrivateKey);
+
+                    if (crypto_decodeprivkey(a32_to_str(decryptedPrivateKey))) {
+                        return resolve({k: decryptedMasterKey, s: salt});
+                    }
+
+                    onIdle(_next);
+                })
+                .catch(function(ex) {
+                    console.warn(mk, salt, ex);
+                    onIdle(_next);
+                });
+        })();
+    }),
+
+    /**
+     * Complete the email verification process
+     * @param {String} pwd The new password for the account.
+     * @param {String} code The code from the email notification.
+     * @returns {Promise}
+     */
+    completeVerifyEmail: promisify(function(resolve, reject, pwd, code) {
+        'use strict';
+
+        var req = {a: 'erx', c: code, r: 'v1'};
+        var xhr = function(key, uh) {
+            req.y = uh;
+            req.x = a32_to_base64(key);
+            M.req(req).then(resolve).catch(reject);
+        };
+
+        // If using the new registration method (v2)
+        if (u_attr.aav > 1) {
+            req.r = 'v2';
+
+            security.deriveKeysFromPassword(pwd, u_k, tryCatch(function(crv, key, uh) {
+                req.z = ab_to_base64(crv);
+                xhr(key, ab_to_base64(uh));
+            }, reject));
+        }
+        else {
+            var aes = new sjcl.cipher.aes(prepare_key_pw(pwd));
+            xhr(encrypt_key(aes, u_k), stringhash(u_attr.email.toLowerCase(), aes));
+        }
+    }),
+
+    /**
+     * Ask the user for email verification on account suspension.
+     * @param {String} [aStep] What step of the email verification should be triggered.
+     * @returns {undefined}
+     */
+    showVerifyEmailDialog: function(aStep) {
+        'use strict';
+        var name = 'verify-email' + (aStep ? '-' + aStep : '');
+
+        // abort any ongoing dialog operation that may would get stuck by receiving an whyamiblocked=700
+        M.safeShowDialog.abort();
+
+        M.safeShowDialog(name, function() {
+            parsepage(pages.placeholder);
+            watchdog.registerOverrider('logout');
+
+            var $dialog = $('.fm-dialog.' + name);
+            if (!$dialog.length) {
+                $('#loading').addClass('hidden');
+                parsepage(pages['dialogs-common']);
+                $dialog = $('.fm-dialog.' + name);
+            }
+            var showLoading = function() {
+                loadingDialog.show();
+                $dialog.addClass('arrange-to-back');
+            };
+            var hideLoading = function() {
+                loadingDialog.hide();
+                $dialog.removeClass('arrange-to-back');
+            };
+            var reset = function(step) {
+                hideLoading();
+                closeDialog();
+
+                if (step === true) {
+                    loadSubPage('login');
+                }
+                else {
+                    security.showVerifyEmailDialog(step && step.to);
+                }
+            };
+            $('.fm-dialog:visible').addClass('hidden');
+
+            if (aStep === 'login-to-account') {
+                var code = String(page).substr(11);
+
+                onIdle(showLoading);
+                console.assert(String(page).startsWith('emailverify'));
+
+                M.req({a: 'erv', v: 2, c: code})
+                    .always(function(res) {
+                        loadingDialog.hide();
+                        console.debug('erv', [res]);
+
+                        if (res === EEXPIRED || res === ENOENT) {
+                            return msgDialog('warninga', l[135], res === EEXPIRED ? l[7719] : l[22128], false, reset);
+                        }
+                        if (!Array.isArray(res) || !res[6]) {
+                            return msgDialog('warninga', l[135], l[47], res < 0 ? api_strerror(res) : l[253], reset);
+                        }
+
+                        u_logout(true);
+                        $dialog.removeClass('arrange-to-back');
+
+                        u_handle = res[4];
+                        u_attr = {u: u_handle, email: res[1], privk: res[6].privk, evc: code, evk: res[6].k};
+
+                        if (is_mobile) {
+                            $('.fm-dialog-close', $dialog).addClass('hidden');
+                            $('.cancel-email-verify', $dialog).removeClass('hidden').rebind('click.cancel', function() {
+                                loadSubPage("start");
+                            });
+                        }
+                        else {
+                            $('.fm-dialog-close', $dialog).removeClass('hidden').rebind('click.cancel', function() {
+                                loadSubPage("start");
+                            });
+                            $('.cancel-email-verify', $dialog).addClass('hidden');
+                        }
+
+                        $('.mail', $dialog).val(u_attr.email);
+                        $('.button.default-green-button', $dialog).rebind('click.ve', function() {
+                            var $input = $('.pass', $dialog);
+                            var pwd = $input.val();
+
+                            showLoading();
+                            security.verifyPassword(pwd, u_attr.evk, u_attr.privk)
+                                .then(function(res) {
+                                    u_k = res.k;
+                                    u_attr.aav = 1 + !!res.s;
+                                    reset({to: 'set-new-pass'});
+                                })
+                                .catch(function(ex) {
+                                    hideLoading();
+                                    console.debug(ex);
+                                    $input.megaInputsShowError(l[1102]).val('').focus();
+                                });
+
+                            return false;
+                        });
+                    });
+            }
+            else if (aStep === 'set-new-pass') {
+                console.assert(u_attr && u_attr.evc, 'Invalid procedure...');
+
+                $('.button', $dialog).rebind('click.ve', function() {
+                    var pw1 = $('input.pw1', $dialog).val();
+                    var pw2 = $('input.pw2', $dialog).val();
+
+                    var error = function(msg) {
+                        hideLoading();
+                        $('input', $dialog)
+                            .val('').trigger('blur')
+                            .first().trigger('input').megaInputsShowError(msg).trigger('focus');
+                        return false;
+                    };
+
+                    var pwres = security.isValidPassword(pw1, pw2);
+                    if (pwres !== true) {
+                        return error(pwres);
+                    }
+
+                    showLoading();
+                    security.verifyPassword(pw1, u_attr.evk, u_attr.privk)
+                        .then(function() {
+                            // Do not allow to use a old known password
+                            error(l[22675]);
+                        })
+                        .catch(function(ex) {
+                            if (ex !== ENOENT) {
+                                console.error(ex);
+                                return error(l[8982]);
+                            }
+
+                            security.completeVerifyEmail(pw1, u_attr.evc)
+                                .then(function() {
+                                    login_email = u_attr.email;
+                                    watchdog.unregisterOverrider('logout');
+
+                                    u_logout(true);
+                                    eventlog(99728);
+                                    loadSubPage('login');
+                                })
+                                .catch(function(ex) {
+                                    hideLoading();
+                                    msgDialog('warninga', l[135], l[47], ex < 0 ? api_strerror(ex) : ex, 
+                                        reset.bind(null, false));
+                                });
+                        });
+
+                    return false;
+                });
+            }
+            else {
+                $('.send-email', $dialog).rebind('click.ve', function() {
+                    $(this).unbind('click.ve').addClass('disabled');
+                    M.req('era').always(function(res) {
+                        if (res === 0) {
+                            $('.status-txt', $dialog).removeClass('hidden');
+                        }
+                        else if (res === ETEMPUNAVAIL) {
+                            msgDialog('warninga', l[135], l[23628], l[23629], loadSubPage.bind(null, 'contact'));
+                        }
+                        else {
+                            msgDialog('warninga', l[135], l[47], api_strerror(res), loadSubPage.bind(null, 'contact'));
+                        }
+                    });
+                    return false;
+                });
+            }
+
+            var $inputs = $('input', $dialog);
+            $inputs.rebind('keypress.ve', function(ev) {
+                var key = ev.code || ev.key;
+
+                if (key === 'Enter') {
+                    if ($inputs.get(0) === this) {
+                        $inputs.trigger('blur');
+                        $($inputs.get(1)).trigger('focus');
+                    }
+                    else {
+                        $('.button', $dialog).trigger('click');
+                    }
+                }
+            });
+
+            mega.ui.MegaInputs($inputs);
+            return $dialog;
+        });
     }
 };
 
@@ -473,13 +796,7 @@ security.register = {
             return localStorage.getItem('newRegistrationEnabled') === '1' ? true : false;
         }
 
-        // Otherwise check API to see if 'New Secure Registration Enabled' flag is set
-        else if (typeof mega.apiMiscFlags.nsre !== 'undefined') {
-            return (mega.apiMiscFlags.nsre === 1) ? true : false;
-        }
-
-        // Default is not enabled until all clients have been updated, also it's been enabled and stable for 2 weeks
-        return false;
+        return mega.flags.nsre;
     },
 
     /**
@@ -606,24 +923,45 @@ security.register = {
     },
 
     /**
-     * Repeat the registration process and send a signup link to the user via the new email address they entered
-     * @param {type} newEmail The user's corrected email
-     * @param {type} completeCallback A function to run when the registration is complete
+     * Cache registration data like name, email etc in case they refresh the page and need to resend the email
+     * @param {Object} registerData An object containing keys 'first', 'last', 'name', 'email' and optional 'password'
+     *                              for old style registrations.
      */
-    repeatSendSignupLink: function(newEmail, completeCallback) {
+    cacheRegistrationData: function(registerData) {
 
         'use strict';
 
-        // Get the previous name used
-        var firstName = security.register.sendEmailRequestParams.firstName;
-        var lastName = security.register.sendEmailRequestParams.lastName;
-        var name = firstName + ' ' + lastName;
+        // If the new registration method is enabled, remove password from the object so it doesn't get saved to
+        // localStorage for the resend process. The old style registrations still requires the password as it is
+        // hashed with the email address.
+        if (security.register.newRegistrationEnabled()) {
+            delete registerData.password;
+        }
+
+        localStorage.awaitingConfirmationAccount = JSON.stringify(registerData);
+
+        if (localStorage.voucher) {
+            var data = [localStorage.voucher, localStorage[localStorage.voucher] || -1];
+            mega.attr.set('promocode', JSON.stringify(data), -2, true).dump();
+        }
+    },
+
+    /**
+     * Repeat the registration process and send a signup link to the user via the new email address they entered
+     * @param {String} firstName The user's first name
+     * @param {String} lastName The user's last name
+     * @param {String} newEmail The user's corrected email
+     * @param {Function} completeCallback A function to run when the registration is complete
+     */
+    repeatSendSignupLink: function(firstName, lastName, newEmail, completeCallback) {
+
+        'use strict';
 
         // Re-encode the parameters to Base64 before sending to the API
         var sendEmailRequestParams = {
             a: 'uc2',
-            n: base64urlencode(to8(name)),   // Name (used just for the email)
-            m: base64urlencode(newEmail)     // Email
+            n: base64urlencode(to8(firstName + ' ' + lastName)),  // Name (used just for the email)
+            m: base64urlencode(newEmail)                          // Email
         };
 
         // Run the API request
@@ -664,6 +1002,10 @@ security.register = {
             lastname: base64urlencode(to8(lastName)),
             name2: base64urlencode(to8(firstName + ' ' + lastName))
         };
+
+        if (mega.affid) {
+            options.aff = mega.affid;
+        }
 
         // Send API request
         api_req(options);
@@ -965,7 +1307,7 @@ security.login = {
         u_storage.sid = decryptedSessionIdBase64;
 
         // Notify other tabs of login
-        watchdog.notify('login', decryptedSessionIdBase64);
+        watchdog.notify('login', [!security.login.rememberMe && masterKeyArray32, decryptedSessionIdBase64]);
 
         // Store the RSA private key
         if (decodedPrivateRsaKey) {
@@ -1064,6 +1406,151 @@ security.login = {
         else {
             // Not applicable to this function
             return false;
+        }
+    }
+};
+
+
+/**
+ * Common functionality for desktop/mobile webclient for changing the password using the old and new processes
+ */
+security.changePassword = {
+
+    /**
+     * Change the user's password using the old method
+     * @param {String} newPassword The new password
+     * @param {String|null} twoFactorPin The 2FA PIN code or null if not applicable
+     * @param {Function} completeCallback The function to run when complete (to update the UI)
+     */
+    oldMethod: function(newPassword, twoFactorPin, completeCallback) {
+
+        'use strict';
+
+        // Otherwise change the password using the old method
+        var pw_aes = new sjcl.cipher.aes(prepare_key_pw(newPassword));
+        var encryptedMasterKeyBase64 = a32_to_base64(encrypt_key(pw_aes, u_k));
+        var userHash = stringhash(u_attr.email.toLowerCase(), pw_aes);
+
+        // Prepare the request
+        var requestParams = {
+            a: 'up',
+            k: encryptedMasterKeyBase64,
+            uh: userHash
+        };
+
+        // If the 2FA PIN was entered, send it with the request
+        if (twoFactorPin !== null) {
+            requestParams.mfa = twoFactorPin;
+        }
+
+        // Make API request to change the password
+        api_req(requestParams, {
+            callback: function(result) {
+
+                // If successful, update user attribute key property with the Encrypted Master Key
+                if (result) {
+                    u_attr.k = encryptedMasterKeyBase64;
+                }
+
+                // Update UI
+                completeCallback(result);
+            }
+        });
+    },
+
+    /**
+     * Change the user's password using the new method
+     * @param {String} newPassword The new password
+     * @param {String|null} twoFactorPin The 2FA PIN code or null if not applicable
+     * @param {Function} completeCallback The function to run when complete (to update the UI)
+     */
+    newMethod: function(newPassword, twoFactorPin, completeCallback) {
+
+        'use strict';
+
+        // Create the Client Random Value, Encrypted Master Key and Hashed Authentication Key
+        security.deriveKeysFromPassword(newPassword, u_k,
+            function(clientRandomValueBytes, encryptedMasterKeyArray32, hashedAuthenticationKeyBytes) {
+
+                // Convert to Base64
+                var encryptedMasterKeyBase64 = a32_to_base64(encryptedMasterKeyArray32);
+                var hashedAuthenticationKeyBase64 = ab_to_base64(hashedAuthenticationKeyBytes);
+                var clientRandomValueBase64 = ab_to_base64(clientRandomValueBytes);
+                var saltBase64 = ab_to_base64(security.createSalt(clientRandomValueBytes));
+
+                // Prepare the request
+                var requestParams = {
+                    a: 'up',
+                    k: encryptedMasterKeyBase64,
+                    uh: hashedAuthenticationKeyBase64,
+                    crv: clientRandomValueBase64
+                };
+
+                // If the 2FA PIN was entered, send it with the request
+                if (twoFactorPin !== null) {
+                    requestParams.mfa = twoFactorPin;
+                }
+
+                // Send API request to change password
+                api_req(requestParams, {
+                    callback: function(result) {
+
+                        // If successful, update global user attributes key and salt as the 'ug' request is not re-done
+                        if (result) {
+                            u_attr.k = encryptedMasterKeyBase64;
+                            u_attr.aas = saltBase64;
+                        }
+
+                        // Update UI
+                        completeCallback(result);
+                    }
+                });
+            }
+        );
+    },
+
+    isPasswordTheSame: function(newPassword, method) {
+        "use strict";
+        var operation = new MegaPromise();
+        // registration v2
+        if (method === 2) {
+            if (!u_attr || typeof u_attr.aas === "undefined" || typeof u_attr.k === "undefined"
+                || !u_k) {
+                return operation.reject(0);
+            }
+
+            var saltBytes = base64_to_ab(u_attr.aas);
+            var passwordBytes = security.stringToByteArray($.trim(newPassword));
+
+            security.deriveKey(saltBytes, passwordBytes, security.numOfIterations,
+                security.derivedKeyLengthInBits, function(derivedKeyBytes) {
+
+                    // callback could be Promise based or not
+                    var derivedEncryptionKeyBytes = derivedKeyBytes.subarray(0, 16);
+                    var derivedEncryptionKeyArray32 = base64_to_a32(ab_to_base64(derivedEncryptionKeyBytes));
+                    var cipherObject = new sjcl.cipher.aes(derivedEncryptionKeyArray32);
+                    var encryptedMasterKeyArray32 = encrypt_key(cipherObject, u_k);
+                    var encryptedMasterKeyBase64 = a32_to_base64(encryptedMasterKeyArray32);
+
+                    if (u_attr.k === encryptedMasterKeyBase64) {
+                        return operation.reject(1);
+                    }
+                    else {
+                        return operation.resolve();
+                    }
+                });
+            return operation;
+        }
+        else {
+            var pw_aes = new sjcl.cipher.aes(prepare_key_pw(newPassword));
+            var encryptedMasterKeyBase64 = a32_to_base64(encrypt_key(pw_aes, u_k));
+
+            if (u_attr.k === encryptedMasterKeyBase64) {
+                return operation.reject(1);
+            }
+            else {
+                return operation.resolve();
+            }
         }
     }
 };

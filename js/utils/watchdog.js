@@ -6,7 +6,7 @@ var watchdog = Object.freeze({
     // Tag prepended to messages to identify watchdog-events
     eTag: '$WDE$!_',
     // ID to identify tab's origin
-    wdID: (Math.random() * Date.now()),
+    wdID: (Math.random() * Date.now() << 4).toString(26),
     // Hols promises waiting for a query reply
     queryQueue: Object.create(null),
     // Holds query replies if cached
@@ -26,18 +26,43 @@ var watchdog = Object.freeze({
         }
     },
 
+    /** Remove watchdog entries out of localStorage */
+    clear: function() {
+        'use strict';
+
+        var tag = this.eTag;
+        var entries = Object.keys(localStorage)
+            .filter(function(k) {
+                return k.startsWith(tag);
+            });
+
+        console.debug('Removing watchdog entries...', entries);
+
+        for (var i = entries.length; i--;) {
+            delete localStorage[entries[i]];
+        }
+    },
+
+    /** Periodic removal of watchdog entries out of localStorage */
+    drain: SoonFc(7e3, function() {
+        'use strict';
+        this.clear();
+    }),
+
     /**
      * Notify watchdog event/message
      * @param {String} msg  The message
      * @param {String} data Any data sent to other tabs, optional
      */
-    notify: function(msg, data) {
-        data = {origin: this.wdID, data: data, sid: Math.random()};
+    notify: tryCatch(function(msg, data) {
+        'use strict';
+        this.drain();
+        data = {origin: this.wdID, data: data, sid: ++mIncID};
         localStorage.setItem(this.eTag + msg, JSON.stringify(data));
         if (d) {
             console.log('mWatchDog Notifying', this.eTag + msg, msg === 'setsid' ? '' : localStorage[this.eTag + msg]);
         }
-    },
+    }),
 
     /**
      * Perform a query to other tabs and wait for reply through a Promise
@@ -52,7 +77,7 @@ var watchdog = Object.freeze({
      */
     query: function(what, timeout, cache, data, expectsSingleAnswer) {
         var self = this;
-        var token = mRandomToken();
+        var token = (Math.random() * Date.now() << 4).toString(19);
         var promise = new MegaPromise();
 
         if (this.replyCache[what]) {
@@ -117,12 +142,12 @@ var watchdog = Object.freeze({
     /**
      * Register event handling overrider
      * @param {String} event The event name
-     * @param {Function|*} callback
+     * @param {Function|*} [callback] Optional function to invoke on overriding
      */
     registerOverrider: function(event, callback) {
         'use strict';
 
-        this.overrides[event] = callback;
+        this.overrides[event] = callback || true;
     },
 
     /**
@@ -164,6 +189,7 @@ var watchdog = Object.freeze({
             else {
                 mBroadcaster.sendMessage("watchdog:" + msg, strg);
             }
+            delete localStorage[ev.key];
             return;
         }
 
@@ -194,7 +220,7 @@ var watchdog = Object.freeze({
 
             case 'loadfm_done':
                 if (this.Strg.login === strg.origin) {
-                    location.assign(location.pathname);
+                    location.reload(true);
                 }
                 break;
 
@@ -216,12 +242,14 @@ var watchdog = Object.freeze({
                                 console.error('Unexpected user-type: got %s, expected %s', r, type);
                             }
 
-                            if (n_h) {
+                            if (window.n_h) {
                                 // set new u_sid under folderlinks
                                 api_setfolder(n_h);
 
                                 // hide ephemeral account warning
-                                alarm.hideAllWarningPopups();
+                                if (typeof alarm !== 'undefined') {
+                                    alarm.hideAllWarningPopups();
+                                }
                             }
 
                             dlmanager._onQuotaRetry(true, sid);
@@ -258,6 +286,12 @@ var watchdog = Object.freeze({
                 }
                 break;
 
+            case 'abort_trans':
+                if (M.hasPendingTransfers()) {
+                    M.abortTransfers(true);
+                }
+                break;
+
             case 'chat_event':
                 if (strg.data.state === 'DISCARDED') {
                     var chatRoom = megaChat.plugins.chatdIntegration._getChatRoomFromEventData(strg.data);
@@ -266,7 +300,9 @@ var watchdog = Object.freeze({
                 break;
 
             default:
-                mBroadcaster.sendMessage("watchdog:" + msg, strg);
+                if (mBroadcaster.sendMessage("watchdog:" + msg, strg)) {
+                    break;
+                }
 
                 if (msg.startsWith('Q!')) {
                     var value = false;
@@ -283,6 +319,10 @@ var watchdog = Object.freeze({
 
                         case 'qbqdata':
                             value = dlmanager.getQBQData();
+                            break;
+
+                        case 'transing':
+                            value = M.hasPendingTransfers();
                             break;
                     }
 

@@ -219,7 +219,9 @@ js/tests/node_modules/
 coverage/
 doc/
 test-results.xml
+.jscpd/
 jscpd-report.xml
+.eslintcache
 .coverage
 .tox
 js/tests/coverage
@@ -244,9 +246,8 @@ dont-deploy/ui/out/
 contrib/local_config.py
 
 # Temp language files from Babel
-lang/error.json
-lang/lang.tar.gz
-lang/strings.json
+lang/*
+!lang/*_prod.json
 lang/strings_prod.json
 
 #############
@@ -255,9 +256,11 @@ lang/strings_prod.json
 
 nbproject/
 .vscode
+jsconfig.json #vscode js config
 /.vs
 /Words.pdf
 /webclient.sln
 /Web.config
 /koko.html
 /webclient.sln
+/vwd.webinfo

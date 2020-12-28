@@ -5,238 +5,164 @@
 "use strict";
 
 function WebrtcApi() {
+    var self = this;
+    if (!window.RTCPeerConnection) {
+        throw new Error('Browser is not WebRTC-capable - no RTCPeerConnection support');
+    }
+
     if (navigator.mozGetUserMedia) {
         this.browser = 'firefox';
+        this.isFirefox = true;
         if (!MediaStream.prototype.getVideoTracks || !MediaStream.prototype.getAudioTracks) {
             throw new Error('webRTC API missing MediaStream.getXXXTracks');
         }
-
-        if (d) {
-            console.log('This appears to be Firefox');
-        }
-
-        this.pc_constraints = {};
-        if (MediaStream.prototype.clone) {
-            this.cloneMediaStream = function (src) {
-                return src.clone();
-            };
-        }
-        else {
-            this.cloneMediaStream = function (src) {
-                // no cloning, just returns original stream
-                return src;
-            };
-        }
-
     } else if (navigator.webkitGetUserMedia) {
         this.browser = window.opr ? 'opera' : 'chrome';
+        this.isChrome = true;
 
-        if (d) {
-            console.log('This appears to be Chrome');
-        }
-
-
-        // enable dtls support for compat with Firefox
-        this.pc_constraints = {'optional': [{'DtlsSrtpKeyAgreement': 'true'}]};
-
-        this.cloneMediaStream = function (src, what) {
-            var stream = new MediaStream();
-            var ats = src.getAudioTracks();
-            if (what.audio && ats.length > 0) {
-                stream.addTrack(ats[0]);
-            }
-            var vts = src.getVideoTracks();
-            if (what.video && vts.length > 0) {
-                stream.addTrack(vts[0]);
-            }
-            return stream;
-        };
-
-        if (!webkitMediaStream.prototype.getVideoTracks) {
-            webkitMediaStream.prototype.getVideoTracks = function () {
-                return this.videoTracks;
-            };
-        }
-        if (!webkitMediaStream.prototype.getAudioTracks) {
-            webkitMediaStream.prototype.getAudioTracks = function () {
-                return this.audioTracks;
-            };
-        }
-    } else {
-        throw new Error('Browser does not appear to be WebRTC-capable');
+        // enable dtls support for compat with Firefox - very old versions, now obsolete
+        // this.pc_constraints = {'optional': [{'DtlsSrtpKeyAgreement': 'true'}]};
+    } else if (!navigator.mediaDevices.getUserMedia) {
+        throw new Error('Browser is not WebRTC-capable - no getUserMedia support');
     }
-    function processDevices(devices) {
-        var hasAudio = false;
-        var hasVideo = false;
-        for (var i = 0; i < devices.length; i++) {
-            var s = devices[i];
-            if (s.kind === 'audio') {
-                hasAudio = true;
-            }
-            else if (s.kind === 'video') {
-                hasVideo = true;
-            }
-        }
-        return {audio: hasAudio, video: hasVideo};
+/*
+    else if (window.webkitAudioContext) { // Safari
+        this.browser = 'safari';
+        this.isSafari = true;
+    }
+    else if (navigator.userAgent.indexOf("Edge") > -1) {
+        this.browser = 'edge';
+        this.isEdge = true;
+    }
+*/
+    else {
+        throw new Error('Unknown browser with WebRTC support');
     }
 
-    this.attachMediaStream = function (elem, stream) {
+    this.browserVersion = parseInt(ua.details.version);
+    // Some browsers (i.e. older Safari) may support removing a track via replaceTrack(null), but can't re-add a track
+    // later - the peer doesn't see it
+    this.supportsReplaceTrack = !!(window.RTCRtpSender && RTCRtpSender.prototype.replaceTrack);
+    this.supportsUnifiedPlan = !this.isFirefox && window.RTCRtpTransceiver &&
+        RTCRtpTransceiver.prototype.hasOwnProperty("currentDirection");
+    this.supportsRxTxGetStats = !!(window.RTCRtpSender && RTCRtpSender.prototype.getStats);
+    this.supportsScreenCapture = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+
+    if (d) {
+        var browserName = this.browser.charAt(0).toUpperCase() + this.browser.substr(1);
+        console.log("========== webRTC support info ==========");
+        console.log("This appears to be " + browserName);
+        console.log("Supported webRTC APIs:");
+        logFeatureSupported("replaceTrack()", this.supportsReplaceTrack);
+        logFeatureSupported("Unified Plan", this.supportsUnifiedPlan);
+        logFeatureSupported("Sender/Receiver-style stats", this.supportsRxTxGetStats);
+        console.log("=========================================");
+    }
+
+    this.attachMediaStream = function(elem, stream) {
         if (elem.mozSrcObject) {
+            elem.mozSrcObject = null;
             elem.mozSrcObject = stream;
         } else if (typeof elem.srcObject !== 'undefined') {
+            elem.srcObject = null;
             elem.srcObject = stream;
-        }
-        else {
-            if (!stream) {
-                elem.removeAttribute('src');
-            } else {
-                elem.setAttribute('src', URL.createObjectURL(stream));
-            }
-        }
-        if (HTMLMediaElement.prototype.setSinkId) {
-            elem.setSinkId('default')
-            .then(function() {
-                if (stream) {
-                    elem.play();
-                }
-            });
         } else {
-            if (stream) {
+            elem.removeAttribute('src');
+            elem.setAttribute('src', URL.createObjectURL(stream));
+        }
+        if (stream) {
+            var pms;
+            if (stream.getAudioTracks().length > 0) {
+                // setup audio playback
+                if (HTMLMediaElement.prototype.setSinkId) {
+                    pms = elem.setSinkId('default')
+                    .catch(function(err) {
+                        console.warn("attachMediaStream: setSinkId() failed:", err.message || err);
+                    });
+                } else if (self.isSafari) {
+                    // safari hack
+                    elem.setAttribute('playsinline', "");
+                    elem.setAttribute('autoplay', "");
+                    elem.setAttribute("controls", true);
+                    setTimeout(function() {
+                        elem.removeAttribute("controls");
+                    });
+                }
+            }
+            if (pms) {
+                pms.then(function() {
+                    return elem.play();
+                })
+                .catch(function(err) {
+                    console.error("attachMediaStream: failed to play:", err);
+                });
+                pms.catch(function(err) {
+                    console.error("attachMediaStream: failed to set source:", err);
+                });
+
+            } else {
                 elem.play();
             }
         }
     };
-
-
-    this.getUserMedia = function (opts) {
-        return new Promise(function (resolve, reject) {
-            navigator.getUserMedia(opts, resolve, reject);
-        });
+    this.isAttachedToStream = function(playerElement) {
+        return (playerElement.srcObject || playerElement.src);
     };
-
-    if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
-        this.getMediaInputTypes = function () {
+    this.detachMediaStream = function(elem) {
+        elem.src = "";
+        elem.srcObject = null;
+    };
+    var mediaDevices = navigator.mediaDevices;
+    if (mediaDevices && mediaDevices.getUserMedia) {
+        this.getUserMedia = function (opts) {
+            return mediaDevices.getUserMedia(opts);
+        }
+    } else {
+        this.getUserMedia = function (opts) {
             return new Promise(function (resolve, reject) {
-                navigator.mediaDevices.enumerateDevices()
-                    .then(function (devices) {
-                        resolve(processDevices(devices));
-                    })
-                    .catch(function (error) {
-                        reject(error);
-                    });
+                navigator.getUserMedia(opts, resolve, reject);
             });
         };
-    } else {
-        this.getMediaInputTypes = function () {
-            return new Promise(function (resolve) {
-                MediaStreamTrack.getSources(function (sources) {
-                    resolve(processDevices(sources));
-                });
-            });
+    }
+    if (this.supportsScreenCapture) {
+        this.getDisplayMedia = function(opts) {
+            return mediaDevices.getDisplayMedia(opts);
         };
     }
 }
 
-WebrtcApi.prototype.getBrowserVersion = function getBrowserVersion() {
-    var browser = RTC.browser.charAt(0)+(navigator.userAgent.match(/(Android|iPhone)/i)?'m':'');
-    var ver = parseInt(ua.details.version);
-    if (!isNaN(ver)) {
-        browser += (':' + ver);
+function logFeatureSupported(name, isSupported) {
+    console.log("\t" + name + ": " + (isSupported ? "Yes" : "No"));
+}
+
+WebrtcApi.prototype.getBrowserId = function() {
+    var ret = this.browser.charAt(0) + (navigator.userAgent.match(/(Android|iPhone)/i) ? 'm' : '');
+    var ver = this.browserVersion;
+    if (ver) {
+        ret += ":" + ver;
     }
-    return browser;
+    return ret;
 };
 
-WebrtcApi.prototype.createUserMediaConstraints = function (um) {
-    var constraints = {audio: false, video: false};
-
-    if (um.video) {
-        constraints.video = {mandatory: {}};// same behaviour as true
-    }
-
-    if (um.audio) {
-        constraints.audio = {};// same behaviour as true
-    }
-
-    if (um.screen) {
-        constraints.video = {
-            "mandatory": {
-                "chromeMediaSource": "screen"
-            }
-        };
-    }
-
-    if (um.resolution && !constraints.video) {
-        constraints.video = {mandatory: {}};// same behaviour as true
-    }
-
+WebrtcApi.prototype.mediaConstraintsResolution = function (res) {
     // see https://code.google.com/p/chromium/issues/detail?id=143631#c9 for list of supported resolutions
-    switch (um.resolution) {
-        // 16:9 first
-        case '1080':
-        case 'fullhd':
-            constraints.video.mandatory.minWidth = 1920;
-            constraints.video.mandatory.minHeight = 1080;
-            constraints.video.mandatory.minAspectRatio = 1.77;
-            break;
-        case '720':
+    switch (res) {
         case 'hd':
-            constraints.video.mandatory.minWidth = 1280;
-            constraints.video.mandatory.minHeight = 720;
-            constraints.video.mandatory.minAspectRatio = 1.77;
-            break;
-        case '360':
-            constraints.video.mandatory.minWidth = 640;
-            constraints.video.mandatory.minHeight = 360;
-            constraints.video.mandatory.minAspectRatio = 1.77;
-            break;
-        case '180':
-            constraints.video.mandatory.minWidth = 320;
-            constraints.video.mandatory.minHeight = 180;
-            constraints.video.mandatory.minAspectRatio = 1.77;
-            break;
-        // 4:3
-        case '960':
-            constraints.video.mandatory.minWidth = 960;
-            constraints.video.mandatory.minHeight = 720;
-            break;
-        case '640':
+            return {
+                width: { min: 1024, ideal: 1280, max: 1920 },
+                height: { min: 576, ideal: 720, max: 1080 }
+            };
+        case 'low':
+            return {
+                width: { exact: 320 },
+                height: { exact: 240 }
+            };
         case 'vga':
-            constraints.video.mandatory.minWidth = 640;
-            constraints.video.mandatory.minHeight = 480;
-            break;
-        case '320':
-            constraints.video.mandatory.minWidth = 320;
-            constraints.video.mandatory.minHeight = 240;
-            break;
-        default:
-            if (navigator.userAgent.indexOf('Android') !== -1) {
-                constraints.video.mandatory.minWidth = 320;
-                constraints.video.mandatory.minHeight = 240;
-                constraints.video.mandatory.maxFrameRate = 15;
-            }
-            break;
+            return {
+                width:  { min: 640, max: 640 },
+                height: { min: 480, max: 480 }
+            };
     }
-
-    if (um.bandwidth) { // doesn't work currently, see webrtc issue 1846
-        if (!constraints.video)  {
-            // same behaviour as true
-            constraints.video = {mandatory: {}};
-        }
-        constraints.video.optional = [{bandwidth: um.bandwidth}];
-    }
-    if (um.fps) { // for some cameras it might be necessary to request 30fps
-        // so they choose 30fps mjpg over 10fps yuy2
-        if (!constraints.video) {
-            // same behaviour as tru;
-            constraints.video = {mandatory: {}};
-        }
-        constraints.video.mandatory.minFrameRate = fps;
-    }
-    return constraints;
-};
-
-WebrtcApi.prototype.getUserMediaWithConstraintsAndCallback = function (um) {
-    return this.getUserMedia(this.createUserMediaConstraints(um));
 };
 
 WebrtcApi.prototype.stopMediaStream = function (stream) {
@@ -267,13 +193,93 @@ WebrtcApi.prototype.fixupIceServers = function (iceServers) {
     var len = iceServers.length;
     for (var i = 0; i < len; i++) {
         var server = iceServers[i];
-        server.url = server.urls[0];
+        server.url = server.urls[0]; // support old browsers
     }
     return iceServers;
 };
 
-WebrtcApi.prototype._getBrowserVersion = function () {
-    return parseInt(ua.details.version);
+WebrtcApi.prototype.peerConnCreate = function(options) {
+    var conn = new RTCPeerConnection(options);
+    conn.outputStream = new MediaStream();
+    return conn;
+};
+
+WebrtcApi.prototype.peerConnDestroy = function(conn) {
+    this.streamStopAndRemoveTracks(conn.outputStream, conn.outputStream.getTracks());
+};
+
+/**
+ * @returns whether a peer connection has the necessary preconditions necessary to replace
+ * its video track
+ */
+WebrtcApi.prototype.peerConnCanReplaceVideoTrack = function(peerConn) {
+    return this.supportsReplaceTrack && peerConn.videoSender;
+};
+
+WebrtcApi.prototype.peerConnAddVideoTrack = function(peerConn, track) {
+    this.streamStopAndRemoveVideoTracks(peerConn.outputStream); // just in case
+    peerConn.outputStream.addTrack(track);
+    peerConn.videoSender = peerConn.addTrack(track, peerConn.outputStream);
+};
+
+WebrtcApi.prototype.peerConnReplaceVideoTrack = function(peerConn, track) {
+    assert(this.supportsReplaceTrack);
+    assert(peerConn.videoSender);
+    var outStream = peerConn.outputStream;
+    this.streamStopAndRemoveVideoTracks(outStream);
+    peerConn.outputStream.addTrack(track);
+    return peerConn.videoSender.replaceTrack(track);
+};
+
+WebrtcApi.prototype.peerConnRemoveVideoTrack = function(peerConn) {
+    var self = this;
+    assert(self.supportsReplaceTrack);
+    if (!peerConn.videoSender) {
+        return null;
+    }
+    try {
+        return peerConn.videoSender.replaceTrack(null)
+        .then(function() {
+            var stream = peerConn.outputStream;
+            assert(stream);
+            self.streamStopAndRemoveVideoTracks(stream);
+        });
+    } catch (e) {
+        return Promise.reject("replaceTrack(null) exception: " + e);
+    }
+};
+
+WebrtcApi.prototype.peerConnAddClonedTracksFromStream = function(peerConn, stream, disabled) {
+    // NOTE: Edge can't add one track to multiple peer connections, so we need to clone the stream
+    var pcStream = peerConn.outputStream;
+    var tracks = stream.getTracks();
+    var len = tracks.length;
+    for (var i = 0; i < len; i++) {
+        var track = tracks[i].clone();
+        if (disabled) {
+            track.enabled = false;
+        }
+        pcStream.addTrack(track);
+        if (track.kind === 'video') {
+            assert(!peerConn.videoSender);
+            peerConn.videoSender = peerConn.addTrack(track, pcStream);
+        } else {
+            peerConn.addTrack(track, pcStream);
+        }
+    }
+};
+
+WebrtcApi.prototype.streamStopAndRemoveTracks = function(stream, tracks) {
+    var len = tracks.length;
+    for (var i = 0; i < len; i++) {
+        var track = tracks[i];
+        track.stop();
+        stream.removeTrack(track);
+    }
+};
+
+WebrtcApi.prototype.streamStopAndRemoveVideoTracks = function(stream) {
+    this.streamStopAndRemoveTracks(stream, stream.getVideoTracks());
 };
 
 var RTC = null;
@@ -283,9 +289,7 @@ try {
 }
 catch (e) {
     RTC = null;
-    if (window.d && console.warn) {
-        console.warn("Error enabling webrtc support: " + e);
-    }
+    console.error("Error enabling webrtc support: " + e.stack);
 }
 
 scope.RTC = RTC;

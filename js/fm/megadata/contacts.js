@@ -46,27 +46,40 @@ MegaData.prototype.onlineStatusClass = function(os) {
         // UserPresence.PRESENCE.ONLINE
         return [l[5923], 'online'];
     }
-    else {
+    else if (os === 1 || os === 'offline') {
         return [l[5926], 'offline'];
+    }
+    else {
+        return ['', 'black'];
     }
 };
 
 MegaData.prototype.onlineStatusEvent = function(u, status) {
-    if (u && megaChatIsReady) {
-        var e = $('.ustatus.' + u.u);
-        if (e.length > 0) {
-            $(e).removeClass('offline online busy away');
-            $(e).addClass(this.onlineStatusClass(status)[1]);
-        }
-        e = $('#contact_' + u.u);
-        if (e.length > 0) {
-            $(e).removeClass('offline online busy away');
-            $(e).addClass(this.onlineStatusClass(status)[1]);
+    'use strict';
+
+    if (u instanceof MegaDataObject) {
+        var $elm = $('.ustatus.' + u.u);
+        if ($elm.length) {
+            $elm.removeClass('offline online busy away');
+            $elm.addClass(this.onlineStatusClass(status)[1]);
         }
 
-        e = $('.fm-chat-user-status.' + u.u);
-        if (e.length > 0) {
-            $(e).safeHTML(this.onlineStatusClass(status)[0]);
+        $elm = $('#contact_' + u.u);
+        if ($elm.length) {
+            $elm.removeClass('offline online busy away');
+            $elm.addClass(this.onlineStatusClass(status)[1]);
+        }
+
+        $elm = $('.fm-chat-user-status.' + u.u);
+        if ($elm.length) {
+            u = this.onlineStatusClass(status)[0];
+
+            if (u) {
+                $elm.safeHTML(u);
+            }
+            else {
+                $elm.text('');
+            }
         }
     }
 };
@@ -129,10 +142,10 @@ MegaData.prototype.drawReceivedContactRequests = function(ipc, clearGrid) {
                     '<span>' + l[5856] + '</span></div>' +
                     '<div class="contact-request-button default-white-button grey-txt inline ignore">' +
                     '<i class="small-icon icons-sprite stop dark"></i>' +
-                    '<span>' + l[5860] + '</span></div>' +
+                    '<span>' + l[20980] + '</span></div>' +
                     '<div class="contact-request-button default-white-button red-txt inline delete">' +
                     '<i class="small-icon icons-sprite tiny-red-cross"></i>' +
-                    '<span>' + l[5858] + '</span></div>' +
+                    '<span>' + l[20981] + '</span></div>' +
                     '<div class="contact-request-ignored"><span>' + l[5864] + '</span></div>' +
                     '<div class="clear"></div>' +
                     '</td>' +
@@ -400,8 +413,13 @@ MegaData.prototype.getContactsEMails = function(excludeRequests) {
         }
     }
 
+    // Sort contacts by name in ascending order
+    contacts.sort(function(contactA, contactB) {
+        return contactA.name.localeCompare(contactB.name);
+    });
+
     return contacts;
-}
+};
 
 MegaData.prototype.getActiveContacts = function() {
     var res = [];
@@ -420,7 +438,6 @@ MegaData.prototype.getActiveContacts = function() {
 
 // Contacts left panel handling
 MegaData.prototype.contacts = function() {
-
     // Contacts rendering not used on mobile
     if (is_mobile) {
         return true;
@@ -451,7 +468,7 @@ MegaData.prototype.contacts = function() {
     else if (sortBy === 'fav') {
         sortFn = this.sortByFavFn(sortDirection);
     }
-    
+
     if (typeof sortFn === 'function') {
         activeContacts.sort(
             function(a, b) {
@@ -461,6 +478,7 @@ MegaData.prototype.contacts = function() {
     }
 
     var html = '';
+    var count = 0;
     var onlinestatus;
 
     // status can be: "online"/"away"/"busy"/"offline"
@@ -484,12 +502,17 @@ MegaData.prototype.contacts = function() {
                     + '"><div class="nw-contact-status"></div><div class="nw-contact-name">'
                     + htmlentities(name)
                     + '<a class="button start-chat-button"><span></span></a></div></div>';
+                ++count;
             }
             $('.fm-start-chat-dropdown').addClass('hidden');
         }
     }
 
     $('.content-panel.contacts').html(html);
+
+    if (treesearch) {
+        mBroadcaster.sendMessage('treesearch', treesearch, 'contacts', count);
+    }
 
     if (megaChatIsReady) {
         var $dropdown = $('.fm-start-chat-dropdown');
@@ -521,6 +544,55 @@ MegaData.prototype.contacts = function() {
                     .removeClass('hidden')
                     .addClass('active')
                     .data("triggeredBy", $this);
+
+                $dropdown.find('.startchat-item').rebind('click.treePanel', function() {
+                    var $this = $(this);
+
+                    if (!$this.is(".disabled")) {
+                        var user_handle = $.selected && $.selected[0];
+                        loadSubPage("fm/chat/p/" + user_handle);
+                    }
+                });
+
+                $dropdown.find('.startaudio-item').rebind('click.treePanel', function() {
+                    if (M.isInvalidUserStatus()) {
+                        return;
+                    }
+
+                    var $this = $(this);
+                    var $triggeredBy = $this.parent().data("triggeredBy");
+                    var $userDiv = $triggeredBy.parent().parent();
+
+                    if (!$this.is('.disabled')) {
+                        var user_handle = $userDiv.attr('id').replace('contact_', '');
+
+                        megaChat.createAndShowPrivateRoom(user_handle)
+                            .then(function(room) {
+                                room.setActive();
+                                room.startAudioCall();
+                            });
+                    }
+                });
+
+                $dropdown.find('.startvideo-item').rebind('click.treePanel', function() {
+                    if (M.isInvalidUserStatus()) {
+                        return;
+                    }
+
+                    var $this = $(this);
+                    var $triggeredBy = $this.parent().data('triggeredBy');
+                    var $userDiv = $triggeredBy.parent().parent();
+
+                    if (!$this.is('.disabled')) {
+                        var user_handle = $userDiv.attr('id').replace('contact_', '');
+
+                        megaChat.createAndShowPrivateRoom(user_handle)
+                            .then(function(room) {
+                                room.setActive();
+                                room.startVideoCall();
+                            });
+                    }
+                });
             }
             else {
                 $this.removeClass('active');
@@ -535,46 +607,6 @@ MegaData.prototype.contacts = function() {
             return false; // stop propagation!
         });
 
-        $dropdown.find('.startchat-item').rebind('click.treePanel', function() {
-            var $this = $(this);
-
-            if (!$this.is(".disabled")) {
-                var user_handle = $.selected && $.selected[0];
-                loadSubPage("fm/chat/" + user_handle);
-            }
-        });
-
-        $dropdown.find('.startaudio-item').rebind('click.treePanel', function() {
-            var $this = $(this);
-            var $triggeredBy = $this.parent().data("triggeredBy");
-            var $userDiv = $triggeredBy.parent().parent();
-
-            if (!$this.is('.disabled')) {
-                var user_handle = $userDiv.attr('id').replace('contact_', '');
-
-                megaChat.createAndShowPrivateRoomFor(user_handle)
-                    .then(function(room) {
-                        room.setActive();
-                        room.startAudioCall();
-                    });
-            }
-        });
-
-        $dropdown.find('.startvideo-item').rebind('click.treePanel', function() {
-            var $this = $(this);
-            var $triggeredBy = $this.parent().data('triggeredBy');
-            var $userDiv = $triggeredBy.parent().parent();
-
-            if (!$this.is('.disabled')) {
-                var user_handle = $userDiv.attr('id').replace('contact_', '');
-
-                megaChat.createAndShowPrivateRoomFor(user_handle)
-                    .then(function(room) {
-                        room.setActive();
-                        room.startVideoCall();
-                    });
-            }
-        });
     }
 
     $('.fm-tree-panel').rebind('click', '.nw-contact-item', function() {
@@ -587,8 +619,8 @@ MegaData.prototype.contacts = function() {
         return false; // stop propagation!
     });
 
-    // On the Contacts screen, initiate a call by double clicking a contact name in the left panel
-    $('.fm-tree-panel').rebind('dblclick.treepanel', '.nw-contact-item.online', function() {
+    // On the Contacts screen, double clicking a contact name in the left panel changes to the conversation screen
+    $('.fm-tree-panel').rebind('dblclick.treepanel', '.nw-contact-item', function() {
 
         // Get the element ID
         var $this = $(this);
@@ -596,7 +628,7 @@ MegaData.prototype.contacts = function() {
 
         // Get the user handle and change to conversations screen
         var user_handle = id.replace('contact_', '');
-        loadSubPage('fm/chat/' + user_handle);
+        loadSubPage('fm/chat/p/' + user_handle);
     });
 
     M.addTreeUI();
@@ -612,31 +644,32 @@ MegaData.prototype.getContacts = function(n) {
     return folders;
 };
 
-MegaData.prototype.syncUsersFullname = function(userId) {
+MegaData.prototype.syncUsersFullname = function(userId, chatHandle, promise) {
     "use strict";
     var self = this;
+    var user = userId in this.u && this.u[userId] || false;
 
-    if (this.u[userId].firstName || this.u[userId].lastName) {
+    if (!user || user.firstName || user.lastName) {
         // already loaded.
-        return;
+        return promise ? promise.resolve() : false;
     }
 
-    var lastName = {name: 'lastname', value: null};
-    var firstName = {name: 'firstname', value: null};
+    Promise.allSettled([
+        mega.attr.get(userId, 'lastname', -1, false, undefined, undefined, chatHandle),
+        mega.attr.get(userId, 'firstname', -1, false, undefined, undefined, chatHandle)
+        // @todo ..
+        // eslint-disable-next-line complexity
+    ]).then(function(r) {
+        var user = self.u[userId];
 
-    MegaPromise.allDone([
-        mega.attr.get(userId, 'firstname', -1)
-            .done(function(r) {
-                firstName.value = r;
-            }),
-        mega.attr.get(userId, 'lastname', -1)
-            .done(function(r) {
-                lastName.value = r;
-            })
-    ]).done(function() {
-        if (!self.u[userId]) {
+        if (!user) {
+            if (promise) {
+                promise.reject();
+            }
             return;
         }
+        var lastName = {name: 'lastname', value: r[0].value};
+        var firstName = {name: 'firstname', value: r[1].value};
 
         [firstName, lastName].forEach(function(obj) {
 
@@ -658,104 +691,230 @@ MegaData.prototype.syncUsersFullname = function(userId) {
         lastName = lastName.value;
         firstName = firstName.value;
 
-        self.u[userId].firstName = firstName;
-        self.u[userId].lastName = lastName;
-        var user = self.u[userId];
+        user.name = "";
+        user.lastName = lastName;
+        user.firstName = firstName;
 
         if (firstName && $.trim(firstName).length > 0 || lastName && $.trim(lastName).length > 0) {
-            self.u[userId].name = "";
 
             if (firstName && $.trim(firstName).length > 0) {
-                self.u[userId].name = firstName;
+                user.name = firstName;
             }
             if (lastName && $.trim(lastName).length > 0) {
-                self.u[userId].name += (self.u[userId].name.length > 0 ? " " : "") + lastName;
+                user.name += (user.name.length > 0 ? " " : "") + lastName;
             }
 
+            // Get the nickname if available otherwise get the user name
+            var userName = nicknames.getNickname(userId);
+
             if (M.currentdirid === 'shares') {// Update right panel list and block view
-                $('.shared-grid-view .' + userId + ' .fm-chat-user').text(user.name);
+                $('.shared-grid-view .' + userId + ' .fm-chat-user').text(userName);
                 $('.inbound-share .' + userId).next().find('.shared-folder-info')
-                    .text(l[17590].replace('%1', user.name));
+                    .text(l[17590].replace('%1', userName));
             }
             else if (M.getNodeRoot(M.currentdirid) === 'shares') {
                 $('.shared-details-info-block .' + userId).next()
-                    .find('.fm-chat-user').text(user.name + ' <' + user.m + '>');
+                    .find('.fm-chat-user').text(userName + ' <' + user.m + '>');
+            }
+            else if (M.getNodeRoot(M.currentdirid) === 'contacts' && $.sortTreePanel) {
+
+                // Update left panel if it has been initialised
+                M.contacts();
             }
         }
-        else {
-            self.u[userId].name = "";
+
+        if (nicknames.cache[userId]) {
+            user.nickname = nicknames.cache[userId];
         }
 
-        if (self.u[userId].avatar && self.u[userId].avatar.type != "image") {
-            self.u[userId].avatar = false;
+        if (user.avatar && user.avatar.type !== "image") {
+            user.avatar = false;
             useravatar.loaded(userId);
         }
 
         if (userId === u_handle) {
             u_attr.firstname = firstName;
             u_attr.lastname = lastName;
-            u_attr.name = self.u[userId].name;
+            u_attr.name = user.name;
 
             $('.user-name').text(u_attr.fullname);
+            $('.top-menu-logged .name', '.top-menu-popup').text(u_attr.fullname);
             $('.membership-big-txt.name').text(u_attr.fullname);
-        }
-    });
-};
-
-
-MegaData.prototype.syncContactEmail = function(userHash) {
-    var promise = new MegaPromise();
-
-    if (M.u[userHash]) {
-        if (!M.u[userHash].m) {
-            attribCache.getItem(userHash + "_uge")
-                .done(function (r) {
-                    M.u[userHash].m = r;
-                    promise.resolve(r);
-                })
-                .fail(function () {
-                    asyncApiReq({
-                        'a': 'uge',
-                        'u': userHash
-                    })
-                        .done(function (r) {
-                            if (r && isString(r)) {
-                                if (M.u[userHash]) {
-                                    M.u[userHash].m = r;
-                                    attribCache.setItem(userHash + "_uge", r);
-                                    promise.resolve(r);
-                                }
-                                else {
-                                    promise.reject();
-                                }
-                            }
-                            else {
-                                promise.reject();
-                            }
-                        });
-                });
-        } else {
-            promise.resolve(M.u[userHash].m);
-        }
-    }
-    else {
-        promise.reject();
-    }
-
-    return promise;
-};
-
-(function(global) {
-    /**
-     * Callback, that would be called when a contact is changed.
-     */
-    var onContactChanged = function(contact) {
-        if (fminitialized) {
-            if (getSitePath() === '/fm/' + contact.u) {
-                // re-render the contact view page if the presence had changed
-                M.addContactUI();
+            if (M.currentdirid === 'account') {
+                accountUI.account.profiles.renderFirstName();
+                accountUI.account.profiles.renderLastName();
             }
         }
+
+        // check if this first name + last belongs to business sub-user
+        // we added here to avoid re-calling get attribute + minimize the need of code refactoring
+        if (u_attr && u_attr.b && u_attr.b.m && M.suba && M.suba[userId]) {
+            M.require('businessAcc_js', 'businessAccUI_js').done(
+                function() {
+                    var business = new BusinessAccount();
+                    var subUser = M.suba[userId];
+                    subUser.lastname = r[0].value;
+                    subUser.firstname = r[1].value;
+
+                    business.parseSUBA(subUser, false, true);
+                }
+            );
+        }
+
+        if ($.dialog === 'share') {
+            // Re-render the content of access list in share dialog to update contacts' latest names
+            renderShareDialogAccessList();
+        }
+
+        if (promise) {
+            promise.resolve();
+        }
+    });
+
+    return promise || true;
+};
+
+
+/**
+ * syncPendingContacts
+ * @description Keeps M.v synchronized with M.opc and M.ipc based on passed action packet.
+ * @see scparser.$add -- `opc` and `ipc` usages
+ * @param {Object} actionPacket
+ * @returns {void}
+ */
+MegaData.prototype.syncPendingContacts = function(actionPacket) {
+    'use strict';
+    if (this.currentdirid === 'opc' || this.currentdirid === 'ipc') {
+        for (var g = 0; g < this.v.length; g++) {
+            if (this.v[g].p === actionPacket.p) {
+                this.v[g] = actionPacket;
+                break;
+            }
+            else if (g === (this.v.length - 1)) {
+                this.v.push(actionPacket);
+            }
+        }
+    }
+};
+
+MegaData.prototype.syncContactEmail = function(userHash, promise, forced) {
+    'use strict';
+    var user = userHash in this.u && this.u[userHash] || false;
+
+    if (!forced && (!user || anonymouschat || user.c !== 1 && user.c !== 2)) {
+        return promise ? promise.reject() : false;
+    }
+
+    if (user.m) {
+        return promise ? promise.resolve(user.m) : user.m;
+    }
+
+    var cache = false;
+    var resolve = promise ? function(email) {
+        promise[email ? 'resolve' : 'reject'](email);
+    } : nop;
+    var validate = function(data) {
+        if (typeof data === 'string' && data[0] === '[') {
+            data = JSON.parse(data);
+        }
+        if (!Array.isArray(data)) {
+            data = [data, Infinity];
+        }
+        var email = data[0];
+        var expiry = data[1];
+
+        console.assert(typeof email !== 'string' || email.indexOf('@') > 0);
+        if (typeof email !== 'string' || email.indexOf('@') < 0) {
+            console.assert(email === ENOENT);
+            email = ENOENT;
+        }
+
+        if (cache === true) {
+            attribCache.setItem(userHash + "_uge+", JSON.stringify([email, Date.now() + 7e6]));
+        }
+
+        if (email === ENOENT) {
+            if (Date.now() > expiry) {
+                console.assert(!cache);
+                throw EEXPIRED;
+            }
+
+            email = undefined;
+        }
+        else if (M.u[userHash].m !== email) {
+            M.u[userHash].m = email;
+        }
+
+        resolve(email);
+    };
+
+    attribCache.getItem(userHash + "_uge+")
+        .then(validate)
+        .catch(function() {
+            cache = true;
+            asyncApiReq({a: 'uge', u: userHash}).always(validate);
+        });
+
+    return promise || true;
+};
+
+(function() {
+    "use strict";
+
+    var contactChangeWatcher = {
+        reorder: false,
+        sections: {'contacts': 1, 'ipc': 2, 'opc': 3},
+        handleChangeEvent: function(contact) {
+            var self = this;
+
+            if (!fminitialized) {
+                return;
+            }
+
+            this.reorder = this.reorder || contact && contact.h in M.u && M.u[contact.h].c;
+
+            // throttle updates, since a lot of batched updates may come at
+            // pretty much the same moment (+/- few ms, enough to trigger tons of updates)
+            delay('onContactChanged', function() {
+                if (getSitePath() === '/fm/' + contact.u) {
+                    // re-render the contact view page if the presence had changed
+                    M.addContactUI();
+                }
+                else if (M.currentdirid === 'contacts') {
+                    M.openFolder(M.currentdirid, true);
+                }
+
+                if (self.reorder) {
+                    self.reorder = false;
+
+                    if (self.sections[M.currentdirid] || M.currentdirid in M.u
+                        || M.getTreePanelSortingValue('contacts') === 'status') {
+
+                        // we need to resort
+                        M.contacts();
+                    }
+                }
+            }, 1000);
+        }
+    };
+
+    /**
+     * Set new user into map store and returns it
+     * @param {String} u_h user handle
+     * @param {MegaDataObject|Object} [obj] store
+     * @returns {MegaDataObject} stored user
+     */
+    MegaData.prototype.setUser = function(u_h, obj) {
+        if (!(u_h in this.u)) {
+            if (!(obj instanceof MegaDataObject)) {
+                if (!obj) {
+                    obj = {h: u_h, u: u_h, m: '', c: undefined};
+                }
+                obj = new MegaDataObject(MEGA_USER_STRUCT, obj);
+            }
+            this.u.set(u_h, obj);
+        }
+        return this.u[u_h];
     };
 
     /**
@@ -767,45 +926,39 @@ MegaData.prototype.syncContactEmail = function(userHash) {
      */
     MegaData.prototype.addUser = function(u, ignoreDB) {
         if (u && u.u) {
-            var userId = u.u;
+            var user = u.u in this.u && this.u[u.u];
 
-            if (this.u[userId]) {
+            if (user) {
                 for (var key in u) {
-                    if (MEGA_USER_STRUCT.hasOwnProperty(key) && key !== 'name') {
-                        this.u[userId][key] = u[key];
+                    if (key !== 'name' && key in MEGA_USER_STRUCT) {
+                        user[key] = u[key];
                     }
                     else if (d) {
                         console.warn('addUser: property "%s" not updated.', key, u[key]);
                     }
                 }
-
-                u = this.u[userId];
             }
             else {
-                this.u.set(userId, new MegaDataObject(MEGA_USER_STRUCT, true, u));
+                user = this.setUser(u.u, u);
+                user.addChangeListener(contactChangeWatcher);
             }
-
-            this.u[userId].addChangeListener(onContactChanged);
 
             if (fmdb && !ignoreDB && !pfkey) {
                 // convert MegaDataObjects -> JS
-                var cleanedUpUserData = clone(u.toJS ? u.toJS() : u);
-                delete cleanedUpUserData.presence;
-                delete cleanedUpUserData.presenceMtime;
-                delete cleanedUpUserData.shortName;
-                delete cleanedUpUserData.firstName;
-                delete cleanedUpUserData.lastName;
-                delete cleanedUpUserData.name;
-                delete cleanedUpUserData.avatar;
-                fmdb.add('u', {u: u.u, d: cleanedUpUserData});
-                M.u[userId].firstName = '';
-                M.u[userId].lastName = '';
+                fmdb.add('u', {u: u.u, d: clone(u instanceof MegaDataMap ? u.toJS() : u)});
+                user.firstName = '';
+                user.lastName = '';
+                attribCache.removeItem(user.u + "_firstname");
+                attribCache.removeItem(user.u + "_lastname");
             }
 
-            this.syncUsersFullname(userId);
+            this.syncUsersFullname(user.u);
+            if (megaChatIsReady && megaChat.plugins.presencedIntegration) {
+                megaChat.plugins.presencedIntegration.eventuallyAddPeer(user.u);
+            }
         }
     };
-})(this);
+})();
 
 // Update M.opc and related localStorage
 MegaData.prototype.addOPC = function(u, ignoreDB) {
@@ -900,6 +1053,11 @@ MegaData.prototype.delPS = function(pcrId, nodeId) {
         }
     }
 
+    // clear pending share history from M.su
+    if (M.su[pcrId] && M.su[pcrId][nodeId] === 2) {
+        delete M.su[pcrId][nodeId];
+    }
+
     if (fmdb && !pfkey) {
         fmdb.del('ps', nodeId + '*' + pcrId);
     }
@@ -920,6 +1078,33 @@ MegaData.prototype.inviteContact = function (owner, target, msg, contactLink) {
     "use strict";
 
     var invitePromise = new MegaPromise();
+
+    // since we have the possibility of having cached attributes of the user we are inviting
+    // we will remove the cached attrs to allow API request.
+    // this was done due to cases when a user changes his name, then we invite him
+    // in other cases when the user is in contacts list, it will be updated with APs.
+    // 1- check if we have cache
+    if (attribCache) {
+        var userHandle = null;
+        // 2- check if we cache this user. then get his handle
+        for (var us in M.u) {
+            if (M.u[us] && M.u[us].m && M.u[us].m === target) {
+                userHandle = us;
+                break;
+            }
+        }
+        // 3- if we found the user, remove the cached attrs.
+        if (userHandle) {
+            var userKeys = [userHandle + '_lastname', userHandle + '_firstname'];
+            for (var k = 0; k < userKeys.length; k++) {
+                attribCache.removeItem(userKeys[k]);
+            }
+            M.u[userHandle].firstName = '';
+            M.u[userHandle].lastName = '';
+
+            M.syncUsersFullname(userHandle);
+        }
+    }
 
     if (d) {
         console.debug('inviteContact');
@@ -1094,3 +1279,195 @@ MegaData.prototype.findOutgoingPendingContactIdByEmail = function(email) {
         }
     }
 };
+
+MegaData.prototype.addContactUI = function() {
+    "use strict";
+
+    var $container = $('.contact-top-details');
+
+    $('.nw-contact-item').removeClass('selected');
+
+    var n = this.u[this.currentdirid];
+    if (n && n.u) {
+        var u_h = this.currentdirid;
+        var user = this.u[u_h];
+        var avatar = $(useravatar.contact(u_h, 'medium-avatar'));
+
+        var onlinestatus = this.onlineStatusClass(
+            megaChatIsReady &&
+            this.u[u_h] ? this.u[u_h].presence : "unavailable"
+        );
+
+        $container.find('.nw-contact-block-avatar').empty().append(avatar);
+        $container.find('.onlinestatus').removeClass('away offline online busy').addClass(onlinestatus[1]);
+        $container.find('.fm-chat-user-status').text(onlinestatus[0]);
+        $('.contact-details-user-name', $container).text(nicknames.getNicknameAndName(user.u));
+        $container.find('.contact-details-email').text(user.m);
+        $('.contact-share-notification').text(l[20435].replace('%1', this.getNameByHandle(user.u)));
+
+        // Display the current fingerpring
+        showAuthenticityCredentials(user, $container);
+
+        // Set authentication state of contact from authring.
+        // To be called on settled authring promise.
+        authring.onAuthringReady('contactUI').done(function _setVerifiedState() {
+
+            var handle = user.u || user;
+            var verificationState = u_authring.Ed25519[handle] || {};
+            var isVerified = (verificationState.method >= authring.AUTHENTICATION_METHOD.FINGERPRINT_COMPARISON);
+
+            // Show the user is verified
+            if (isVerified) {
+                $('.fm-verify').addClass('verified').find('span').text(l[6776]);
+            }
+            else {
+                // Otherwise show the Verify... button.
+                enableVerifyFingerprintsButton(handle);
+            }
+        });
+
+        // Reset seen or verified fingerprints and re-enable the Verify button
+        $('.fm-reset-stored-fingerprint').rebind('click', function() {
+            if (M.isInvalidUserStatus()) {
+                return;
+            }
+
+            authring.resetFingerprintsForUser(user.u);
+            enableVerifyFingerprintsButton(user.u);
+
+            // Refetch the key
+            showAuthenticityCredentials(user, $container);
+
+            // Trigger manual UI updates
+            if (M.u[user.u]) {
+                M.u[user.u].trackDataChange();
+            }
+        });
+
+        $('.fm-share-folders').rebind('click', function() {
+            if (M.isInvalidUserStatus()) {
+                return;
+            }
+            openCopyShareDialog(M.currentdirid);
+        });
+
+        // Initialise the Set nickname button on the contact details page
+        $('.fm-set-nickname').rebind('click', function() {
+
+            nicknames.setNicknameDialog.init(u_h);
+        });
+
+        // Remove contact button on contacts page
+        $('.fm-remove-contact').rebind('click', function() {
+
+            if (M.isInvalidUserStatus()) {
+                return;
+            }
+
+            fmremove([M.currentdirid]);
+        });
+
+        if (!megaChatIsDisabled) {
+
+            // Bind the "Start conversation" button
+            $('.fm-start-conversation').rebind('click.megaChat', function() {
+                loadSubPage('fm/chat/p/' + u_h);
+                return false;
+            });
+        }
+
+        $('.nw-contact-item#contact_' + u_h).addClass('selected');
+    }
+};
+
+MegaData.prototype.contactsUI = function() {
+    "use strict";
+
+    var $container = $('.contacts-view');
+    var $contactBlocks = $container.find('.data-block-view, .contacts tr');
+    var $buttons = $contactBlocks.find('.default-white-button');
+
+    setContactLink();
+
+    mega.achievem.enabled()
+        .done(function() {
+            $container.find('.contact-green-info').text(l[19107]);
+            $('.fm-empty-contacts .fm-empty-description.small').text(l[19115]);
+        })
+        .fail(function() {
+            $container.find('.contact-green-info').text(l[19106]);
+            $('.fm-empty-contacts .fm-empty-description.small').text(l[19114]);
+        });
+
+    $('.contacts-tab-lnk').rebind('click', function() {
+        var $this = $(this);
+        var folder = escapeHTML($this.attr('data-folder'));
+
+        if (folder === "ipc") {
+            M.openFolder('ipc');
+        }
+        else if (folder === "opc") {
+            M.openFolder('opc');
+        }
+        else {
+            M.openFolder('contacts');
+        }
+    });
+
+    $contactBlocks.rebind('mouseover.contacts', function() {
+        var $this = $(this);
+
+        if (megaChatIsDisabled) {
+            $this.find('.contact-chat-buttons').addClass('hidden');
+        }
+        else {
+            $this.find('.contact-chat-buttons').removeClass('hidden');
+        }
+    });
+
+    $buttons.rebind('click.contacts', function() {
+
+        if (M.isInvalidUserStatus()) {
+            return;
+        }
+
+        var $this = $(this);
+        var user_handle = $this.closest('.data-block-view, tr').attr('id');
+
+        if ($this.hasClass('disabled') || !user_handle) {
+            return;
+        }
+
+        if ($this.hasClass('start-conversation')) {
+            loadSubPage("fm/chat/p/" + user_handle);
+        }
+        else if ($this.hasClass('start-audio-call')) {
+            megaChat.createAndShowPrivateRoom(user_handle)
+                .then(function(room) {
+                    room.setActive();
+                    room.startAudioCall();
+                });
+        }
+        else if ($this.hasClass('start-video-call')) {
+            megaChat.createAndShowPrivateRoom(user_handle)
+                .then(function(room) {
+                    room.setActive();
+                    room.startVideoCall();
+                });
+        }
+    });
+
+    $('.fm-empty-contacts .fm-empty-button, .add-new-contact, .fm-add-user')
+        .rebind('mousedown.addcontact1', function(e) {
+
+            if (M.isInvalidUserStatus()) {
+                return;
+            }
+
+            $.hideContextMenu();
+            contactAddDialog();
+            e.stopPropagation();
+        });
+
+};
+

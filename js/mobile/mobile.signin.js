@@ -25,8 +25,10 @@ mobile.signin = {
         // Show the login tab and hide the register tab until they manually open it
         this.$screen.find('.tab-block.sign-in').removeClass('hidden');
         this.$screen.find('.tab-block.register').addClass('hidden');
+        this.$screen.find('.mobile.forgot-password-button, .mobile.top-links').removeClass('hidden');
 
         // Init functionality
+        this.prefillLoginMessage();
         this.prefillEmailField();
         this.initLoginButton();
         this.initForgotPasswordButton();
@@ -39,6 +41,36 @@ mobile.signin = {
     },
 
     /**
+     * Shows a custom message on the login page if they got redirected from somewhere else
+     */
+    prefillLoginMessage: function() {
+
+        'use strict';
+
+        // If the custom message is set
+        if (login_txt) {
+
+            // Default messages
+            var $containerBlock = this.$screen.find('.custom-login-message-block.original-message');
+            var $messageText = $containerBlock.find('.custom-login-text');
+            var messageToShow = login_txt;
+
+            // If a phone number has been used as the text, show a special custom phone verified icon & message
+            if (login_txt.charAt(0) === '+') {
+                $containerBlock = this.$screen.find('.custom-login-message-block.sms-verified-message');
+                $messageText = $containerBlock.find('.js-user-phone-number');
+            }
+
+            // Unhide the block and show the message
+            $containerBlock.removeClass('hidden');
+            $messageText.text(messageToShow);
+
+            // Clear the message so it's only shown once
+            login_txt = false;
+        }
+    },
+
+    /**
      * Pre-fills the email text input if recently completed the recovery process
      */
     prefillEmailField: function() {
@@ -48,8 +80,8 @@ mobile.signin = {
         var $emailField = this.$screen.find('.signin-input.login input');
 
         // If the email has been set (e.g. from recovery process), pre-fill the email field
-        if (this.previousEmailUsed !== null) {
-            $emailField.val(this.previousEmailUsed);
+        if (this.previousEmailUsed || window.login_email) {
+            $emailField.val(this.previousEmailUsed || window.login_email);
         }
     },
 
@@ -100,7 +132,7 @@ mobile.signin = {
         $signInButton.off('tap').on('tap', function() {
 
             // Get the current text field values
-            var email = $emailField.val();
+            var email = $emailField.val().trim();
             var password = $passwordField.val();
             var rememberMe = $rememberMeCheckbox.is(':checked');
             var twoFactorPin = null;
@@ -111,7 +143,7 @@ mobile.signin = {
             }
 
             // If the email is invalid
-            if (checkMail(email)) {
+            if (!isValidEmail(email)) {
 
                 // Add red border, red text and show warning icon
                 $emailField.parent().addClass('incorrect');
@@ -128,9 +160,13 @@ mobile.signin = {
             $signInButton.addClass('loading');
 
             // Start the login flow and set different callbacks for the old and new registration types
-            security.login.checkLoginMethod(email, password, twoFactorPin, rememberMe,
-                                            mobile.signin.old.startLogin,
-                                            mobile.signin.new.startLogin);
+            security.login.checkLoginMethod(
+                email,
+                password,
+                twoFactorPin,
+                rememberMe,
+                mobile.signin.old.startLogin,
+                mobile.signin.new.startLogin);
 
             // Prevent double clicks/taps
             return false;
@@ -146,6 +182,12 @@ mobile.signin = {
 
         // Add click/tap handler to Forgot Password button
         this.$screen.find('.forgot-password-button').off('tap').on('tap', function() {
+
+            var email = $('.signin-input.login input').val();
+
+            if (isValidEmail(email)) {
+                $.prefillEmail = email;
+            }
 
             // Load the Recovery page
             loadSubPage('recovery');
@@ -250,6 +292,10 @@ mobile.signin.old = {
 
             // If they were on a page and asked to login before accessing
             else if (login_next) {
+
+                if (typeof login_next === 'function') {
+                    return login_next();                    
+                }
 
                 // Store the page temporarily
                 var nextPageAfterLogin = login_next;
@@ -359,6 +405,10 @@ mobile.signin.new = {
                 // If they were on a page and asked to login before accessing
                 else if (login_next) {
 
+                    if (typeof login_next === 'function') {
+                        return login_next();                    
+                    }
+                    
                     // Store the page temporarily
                     var nextPageAfterLogin = login_next;
 

@@ -22,18 +22,20 @@ mobile.twofactor.setup = {
         }
 
         // Cache selector
-        mobile.twofactor.setup.$page = $('.mobile.two-factor-page.setup-page');
+        this.$page = $('.mobile.two-factor-page.setup-page');
 
         // Initialise functionality
-        mobile.twofactor.setup.getSharedSecret();
-        mobile.twofactor.setup.initNextButton();
-        mobile.twofactor.setup.initBackButton();
-        mobile.twofactor.setup.initNoAuthenticatorAppButton();
-        mobile.twofactor.setup.initAppLinkButtons();
-        mobile.twofactor.setup.initCloseAuthenticatorAppDialogButton();
+        this.getSharedSecret();
+        this.initNextButton();
+        this.initNoAuthenticatorAppButton();
+        this.initAppLinkButtons();
+        this.initCloseAuthenticatorAppDialogButton();
+
+        // Initialise back button to go back to the My Account page
+        mobile.initBackButton(this.$page, 'fm/account');
 
         // Show the account page content
-        mobile.twofactor.setup.$page.removeClass('hidden');
+        this.$page.removeClass('hidden');
     },
 
     /**
@@ -55,10 +57,9 @@ mobile.twofactor.setup = {
 
                 loadingDialog.hide();
 
-                // The Two-Factor has already been setup
+                // The Two-Factor has already been setup, return to the My Account page to disable
                 if (response === EEXIST) {
-                    mobile.messageOverlay.show('Two-Factor Authentication is already setup.',
-                                               'Return to the My Account page to disable.', function() {
+                    mobile.messageOverlay.show(l[19219] + ' ' + l[19220], function() {
                         loadSubPage('fm/account/');
                     });
 
@@ -102,22 +103,6 @@ mobile.twofactor.setup = {
     },
 
     /**
-     * Initialise the back arrow icon in the header to go back to the main My Account page
-     */
-    initBackButton: function() {
-
-        'use strict';
-
-        // On Back click/tap
-        mobile.twofactor.setup.$page.find('.mobile.fm-icon.back').off('tap').on('tap', function() {
-
-            // Render the Intro page again
-            loadSubPage('twofactor/intro');
-            return false;
-        });
-    },
-
-    /**
      * Initialise the Don't have an authenticator app? button to load the Select Authenticator App dialog
      */
     initNoAuthenticatorAppButton: function() {
@@ -126,13 +111,13 @@ mobile.twofactor.setup = {
 
         var $noAuthAppButton = mobile.twofactor.setup.$page.find('.no-auth-app-button');
         var $authAppSelectDialog = $('.auth-app-select-dialog');
-        var $lightOverlay = $('.light-overlay');
+        var $darkOverlay = $('.dark-overlay');
 
         // On button click/tap
         $noAuthAppButton.off('tap').on('tap', function() {
 
             // Show an overlay behind the Select Authenticator app dialog
-            $lightOverlay.removeClass('hidden');
+            $darkOverlay.removeClass('hidden');
             $authAppSelectDialog.removeClass('hidden');
         });
     },
@@ -146,13 +131,13 @@ mobile.twofactor.setup = {
 
         var $authAppSelectDialog = $('.auth-app-select-dialog');
         var $cancelButton = $authAppSelectDialog.find('.cancel-button');
-        var $lightOverlay = $('.light-overlay');
+        var $darkOverlay = $('.dark-overlay');
 
         // On button click/tap
         $cancelButton.off('tap').on('tap', function() {
 
             // Hide the overlay and Select Authenticator app dialog
-            $lightOverlay.addClass('hidden');
+            $darkOverlay.addClass('hidden');
             $authAppSelectDialog.addClass('hidden');
         });
     },

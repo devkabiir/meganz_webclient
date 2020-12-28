@@ -15,7 +15,7 @@ describe("MegaNotifications Unit Test", function() {
 
     beforeEach(function(done) {
         sandbox = sinon.sandbox.create();
-        sandbox.stub(window, 'ion', {
+        mStub(window, 'ion', {
             'sound': function() {
                 ion.sound.play = function() {
                 };
@@ -25,7 +25,7 @@ describe("MegaNotifications Unit Test", function() {
                 sinon.spy(ion.sound, 'stop');
             }
         });
-        sandbox.stub(window, 'bootstaticpath', './');
+        mStub(window, 'bootstaticpath', './');
 
         // Initialize notifications
         mega.notif.setup(fmconfig.anf);
@@ -37,8 +37,8 @@ describe("MegaNotifications Unit Test", function() {
         };
         _notification.requestPermission = sinon.stub();
         _notification.permission = 'granted';
-        sandbox.stub(window, 'Notification', _notification);
-        sandbox.stub(window, 'Favico', function() {
+        mStub(window, 'Notification', _notification);
+        mStub(window, 'Favico', function() {
             this.badge = function() {};
             sinon.spy(this, 'badge');
 
@@ -61,7 +61,7 @@ describe("MegaNotifications Unit Test", function() {
         });
 
         megaNotifications.bind("onNotificationCreated", function(e, n) {
-            sinon.spy(n, '_showDesktopNotification', n._showDesktopNotification);
+            sinon.spy(n, '_showDesktopNotification');
         });
 
         done();
@@ -69,7 +69,7 @@ describe("MegaNotifications Unit Test", function() {
 
 
     afterEach(function(done) {
-        sandbox.restore();
+        mStub.restore();
         done();
     });
 

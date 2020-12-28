@@ -1,3 +1,4 @@
+var versiondialogid;
 (function _fileversioning(global) {
 
     var current_sel_version = false;
@@ -130,6 +131,8 @@
                 if (del && $.selected && ($.selected.length === 0 || del === $.selected[0])) {
                     $('.fm-versioning').addClass('hidden');
                     current_sel_version = false;
+                    versiondialogid = undefined;
+                    $(document).off('keydown.fileversioningKeydown');
                 }
                 else {
                     fileversioning.updateFileVersioningDialog();
@@ -160,10 +163,13 @@
          * @param {Number} newFavState Favourites state 0 or 1
          */
         favouriteVersions: function (h, newFavState) {
-             fileversioning.getAllVersions(h).done(
+            fileversioning.getAllVersions(h).done(
                 function(versions) {
                     for (var i = 1; i < versions.length; i++) {
-                        versions[i].fav = newFavState;
+                        versions[i].fav = newFavState | 0;
+                        if (!versions[i].fav) {
+                            delete versions[i].fav;
+                        }
                         api_setattr(versions[i], mRandomToken('fav'));
                     }
                 });
@@ -175,10 +181,13 @@
          * @param {Number} labelId Numeric value of label
          */
         labelVersions: function (h, labelId) {
-             fileversioning.getAllVersions(h).done(
+            fileversioning.getAllVersions(h).done(
                 function(versions) {
                     for (var i = 1; i < versions.length; i++) {
-                        versions[i].lbl = labelId;
+                        versions[i].lbl = labelId | 0;
+                        if (!versions[i].lbl) {
+                            delete versions[i].lbl;
+                        }
                         api_setattr(versions[i], mRandomToken('lbl'));
                     }
                 });
@@ -196,20 +205,17 @@
             )
             .done(function(r) {
                 if (r === "0") {
-                    $('#versioning-status').prop('checked', true)
-                    $('.label-heading').text(l[17601]);
+                    $('#versioning-status').addClass('toggle-on');
                     fileversioning.dvState = 0;
                 }
                 else if (r === "1") {
-                    $('#versioning-status').prop('checked', false)
-                    $('.label-heading').text(l[7070]);
+                    $('#versioning-status').removeClass('toggle-on');
                     fileversioning.dvState = 1;
                 }
             })
             .fail(function (e) {
                 if (e === ENOENT) {
-                    $('#versioning-status').prop('checked', true)
-                    $('.label-heading').text(l[17601]);
+                    $('#versioning-status').addClass('toggle-on');
                     fileversioning.dvState = 0;
                 }
             });
@@ -221,8 +227,9 @@
                     .replace('[X2]',
                     '<span class="versioning-text total-versions-size">' + bytesToSize(data.versions.size) + '</span>');
 
-            $('.versioning-body-text').safeHTML(verionInfo);
+            $('.versioning-body-text.versioning-info-message').safeHTML(verionInfo);
         },
+
         /**
          * Open file versioning dialog and render file history versions list.
          * @param {hanlde} handle hanle of the file to render history versioning list.
@@ -235,7 +242,8 @@
             if (!f) {
                 return;
             }
-            var nodeData = M.d[M.currentdirid];
+            versiondialogid = fh;
+            var nodeData = M.d[fh];
             // are we in an inshare?
             while (nodeData && !nodeData.su) {
                 nodeData = M.d[nodeData.p];
@@ -252,31 +260,14 @@
                     k: file.k
                 };
 
-                if (file.fav && file.lbl) {
-                    n = {
-                        name: file.name,
-                        hash: file.hash,
-                        fav: file.fav,
-                        lbl: file.lbl,
-                        k: file.k
-                    };
+                if (file.fav) {
+                    n.fav = file.fav;
                 }
-                else if (file.fav) {
-                    n = {
-                        name: file.name,
-                        hash: file.hash,
-                        fav: file.fav,
-                        k: file.k
-                    };
+
+                if (file.lbl) {
+                    n.lbl = file.lbl;
                 }
-                else if (file.lbl) {
-                    n = {
-                        name: file.name,
-                        hash: file.hash,
-                        lbl: file.lbl,
-                        k: file.k
-                    };
-                }
+
                 var ea = ab_to_base64(crypto_makeattr(n));
                 var dir = M.d[current_node].p || M.RootID;
                 var share = M.getShareNodesSync(dir);
@@ -310,7 +301,14 @@
                     revertedNode.t = n.t;
                     req.cr = crypto_makecr([revertedNode], share, false);
                 }
-                api_req(req);
+                api_req(req, {
+                    callback: function(res) {
+                        if (typeof res === 'object' && res.f) {
+                            selectionManager.clear_selection();
+                            selectionManager.add_to_selection(res.f[0].h);
+                        }
+                    }
+                });
             };
             var fillVersionList = function(versionList) {
 
@@ -320,7 +318,7 @@
 
                     var v = versionList[i];
                     var curTimeMarker;
-                    var msgDate = new Date(v.ts * 1000);
+                    var msgDate = new Date(v.ts * 1000 || 0);
                     var iso = (msgDate.toISOString());
                     if (todayOrYesterday(iso)) {
                         // if in last 2 days, use the time2lastSeparator
@@ -335,7 +333,7 @@
                         html += '<div class="fm-versioning data"><span>' + curTimeMarker + '</span></div>';
                     }
                     var actionHtml = (v.u === u_handle) ? l[16480]
-                                    : l[16476].replace('%1', M.u[v.u].m);
+                        : l[16476].replace('%1', M.u[v.u] && M.u[v.u].m || l[7381]);
                     if (i < versionList.length - 1) {
                         if (v.name !== versionList[i + 1].name) {
                             actionHtml = l[17156].replace('%1',
@@ -433,7 +431,7 @@
                     name = l[5863];
                 }
                 else if (a2[i] === 'shares') {
-                    name = '';
+                    name = l[5542];
                 }
                 else if (a2[i] === M.RubbishID) {
                     name = l[167];
@@ -512,21 +510,24 @@
             });
 
             $('.fm-versioning .pad .top-column .default-white-button .rubbish-bin-icon').parent()
-                    .rebind('click', function() {
-                var apiReq = function(handle) {
-                    api_req({a: 'd',
-                             n: handle,
-                             v: 1
-                            });
-                };
-                if (!$(this).hasClass('disabled')) {
-                    msgDialog('remove', l[1003], l[13749], l[1007], function(e) {
-                        if (e) {
-                            apiReq(current_sel_version);
-                            current_sel_version = false;
-                        }
-                    });
-                }
+                .rebind('click', function() {
+                    $('.fm-versioning.overlay').addClass('arrange-to-back');
+                    var apiReq = function(handle) {
+                        api_req({
+                            a: 'd',
+                            n: handle,
+                            v: 1
+                        });
+                    };
+                    if (!$(this).hasClass('disabled')) {
+                        msgDialog('remove', l[1003], l[13749], l[1007], function(e) {
+                            if (e) {
+                                apiReq(current_sel_version);
+                                current_sel_version = false;
+                            }
+                            $('.fm-versioning.overlay').removeClass('arrange-to-back');
+                        });
+                    }
             });
 
             $('.fm-versioning .pad .top-column .default-white-button .reverted-clock').parent()
@@ -537,9 +538,9 @@
             });
 
             $('.fm-versioning .header .button.close').rebind('click', function() {
-                pd.addClass('hidden');
-                current_sel_version = false;
+                fileversioning.closeFileVersioningDialog(window.versiondialogid);
             });
+
             fileversioning.getAllVersions(fh).done(
                 function(versions) {
                     var vh = fillVersionList(versions);
@@ -593,11 +594,13 @@
                         };
                         var self = this;
                         if (!$(this).hasClass('disabled')) {
+                            $('.fm-versioning.overlay').addClass('arrange-to-back');
                             msgDialog('remove', l[1003], l[13749], l[1007], function(e) {
                                 if (e) {
                                     apiReq(self.id.substring(4));
                                     current_sel_version = false;
                                 }
+                                $('.fm-versioning.overlay').removeClass('arrange-to-back');
                             });
                         }
                     });
@@ -622,10 +625,17 @@
             $(window).rebind('resize.fileversioning', SoonFc(function() {
                 fileversioning.initFileVersioningScrolling();
             }));
+            $(document).rebind('keydown.fileversioningKeydown', function(e) {
+                if (e.keyCode === 8) { // Backspace
+                    e.stopPropagation();
+                    fileversioning.closeFileVersioningDialog(window.versiondialogid);
+                }
+            });
             $('.fm-versioning .header .button.settings').rebind('click', function() {
                 pd.addClass('hidden');
                 loadSubPage('fm/account/file-management');
             });
+            pushHistoryState(page);
         },
 
         /**
@@ -665,7 +675,7 @@
         }
 
         mega.attr.get(u_handle, 'dv', -2, true).done(function(r) {
-            fileversioning.dvState = r === "1";
+            fileversioning.dvState = r === "1" ? 1 : 0;
         });
 
         return 0xDEAD;

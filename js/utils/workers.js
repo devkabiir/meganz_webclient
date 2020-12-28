@@ -12,6 +12,7 @@ function CreateWorkers(url, message, size) {
     "use strict";
 
     var worker = [];
+    var backoff = 400;
     var instances = [];
     var wid = url + '!' + makeUUID();
 
@@ -44,6 +45,7 @@ function CreateWorkers(url, message, size) {
                 if (d > 1) {
                     console.debug('[%s] Worker #%s finished...', wid, id);
                 }
+                worker[id].onerror = null;
                 worker[id].context = null;
                 worker[id].busy = false;
                 worker[id].tts = Date.now();
@@ -53,6 +55,14 @@ function CreateWorkers(url, message, size) {
                 instances[id] = null;
             });
         }
+    };
+
+    var workerLoadFailure = function(ex) {
+        if (d) {
+            console.error(wid, ex);
+        }
+        msgDialog('warninga', l[47], '' + ex, l[20858]);
+        throw ex;
     };
 
     var create = function(i) {
@@ -66,8 +76,12 @@ function CreateWorkers(url, message, size) {
             if (e.name === 'QuotaExceededError') {
                 return false;
             }
-            msgDialog('warninga', '' + url, '' + e, location.hostname);
-            throw e;
+            console.assert(navigator.onLine !== false, e);
+            if (navigator.onLine === false) {
+                // this should not happens, onerror shall be reached instead, if some fancy browser does it fix this!
+                return false;
+            }
+            workerLoadFailure(e);
         }
 
         w.id = i;
@@ -99,6 +113,7 @@ function CreateWorkers(url, message, size) {
 
     return new MegaQueue(function _(task, done) {
         var i = size;
+        var self = this;
 
         while (i--) {
             if (!worker[i] && !(worker[i] = create(i))) {
@@ -117,6 +132,21 @@ function CreateWorkers(url, message, size) {
 
         instances[i] = done;
         worker[i].busy = true;
+        worker[i].onerror = function(ex) {
+            console.warn('[%s] Worker #%s error on %s:%d, %s.',
+                wid, i, ex.filename || 0, ex.lineno | 0, ex.message || 'Failed to load', ex, task);
+
+            try {
+                worker[i].terminate();
+            }
+            catch (e) {}
+            worker[i] = instances[i] = null;
+
+            if ((backoff | 0) < 100) {
+                backoff = 200;
+            }
+            setTimeout(_.bind(self, task, done), Math.min(8e3, backoff <<= 1));
+        };
 
         if (d > 1) {
             console.debug('[%s] Sending task to worker #%s', wid, i, task);
@@ -126,15 +156,30 @@ function CreateWorkers(url, message, size) {
             if (e === 0) {
                 worker[i].context = t;
             }
-            else if (t.constructor === Uint8Array && typeof MSBlobBuilder !== "function") {
-                worker[i].postMessage(t.buffer, [t.buffer]);
-            }
+            // Unfortunately, we had to cease to use transferables for the onerror handler to work properly..
+            // else if (t.constructor === Uint8Array && typeof MSBlobBuilder !== "function") {
+            //     worker[i].postMessage(t.buffer, [t.buffer]);
+            // }
             else {
                 if (e === 2) {
                     worker[i].byteOffset = t * 16;
                 }
 
-                worker[i].postMessage(t);
+                try {
+                    worker[i].postMessage(t);
+                }
+                catch (ex) {
+                    if (ex.name === 'DataCloneError' && t.constructor === Uint8Array) {
+                        worker[i].postMessage(t.buffer, [t.buffer]);
+                    }
+                    else {
+                        console.error(' --- FATAL UNRECOVERABLE ERROR --- ', ex);
+
+                        onIdle(function() {
+                            throw ex;
+                        });
+                    }
+                }
             }
         });
     }, size, url.split('/').pop().split('.').shift() + '-worker');

@@ -16,7 +16,7 @@ var notify = {
     numOfNotifications: 50,
 
     /** Locally cached emails and pending contact emails */
-    userEmails: {},
+    userEmails: Object.create(null),
 
     /** jQuery objects for faster lookup */
     $popup: null,
@@ -89,6 +89,11 @@ var notify = {
                         var timestamp = currentTime - timeDelta;        // Timestamp of the notification
                         var userHandle = notification.u;                // User handle e.g. new share from this user
 
+                        if (!userHandle && notification.t === 'ipc') {
+                            // incoming pending contact
+                            userHandle = notification.p;
+                        }
+
                         // Add notifications to list
                         notify.notifications.push({
                             data: notification, // The full notification object
@@ -102,8 +107,17 @@ var notify = {
                     }
                 }
 
+                // After the first SC request all subsequent requests can generate notifications
+                notify.initialLoadComplete = true;
+
                 // Show the notifications
                 notify.countAndShowNewNotifications();
+
+                // If the popup is already open (they opened it while the notifications were being fetched) then render
+                // the notifications. If the popup is not open, then clicking the icon will render the notifications.
+                if (!notify.$popup.hasClass('hidden')) {
+                    notify.renderNotifications();
+                }
             }
         }, 3);  // Channel 3
     },
@@ -130,14 +144,16 @@ var notify = {
             userHandle: actionPacket.u || actionPacket.ou   // User handle e.g. new share from this user
         };
 
-        // Update store of user emails that it knows about if a contact request was recently accepted
-        notify.addUserEmails();
+        if (actionPacket.a === 'dshare' && actionPacket.orig && actionPacket.orig !== u_handle) {
+            newNotification.userHandle = actionPacket.orig;
+        }
 
         // If the user handle is not known to the local state we need to fetch the email from the API. This happens in
         // some sharing scenarios where a user is part of a share then another user adds files to the share but they
         // are not contacts with that other user so the local state has no information about them and would display a
         // broken notification if the email is not known.
-        if (newNotification.type === 'put' && typeof notify.userEmails[newNotification.userHandle] === 'undefined') {
+        if (newNotification.type === 'put' && !this.getUserEmailByTheirHandle(newNotification.userHandle)) {
+            console.assert(newNotification.userHandle && newNotification.userHandle.length === 11);
 
             // Once the email is fetched it will re-call the notifyFromActionPacket function with the same actionPacket
             notify.fetchUserEmailFromApi(newNotification.userHandle, actionPacket);
@@ -204,6 +220,11 @@ var notify = {
                     return true;
                 }
                 break;
+            case 'd':
+                if (notification.v) {
+                    return true;
+                }
+                break;
         }
 
         switch (notification.a || notification.t) {
@@ -233,7 +254,8 @@ var notify = {
 
             case 'c':
                 action = (typeof notification.c !== 'undefined') ? notification.c : notification.u[0].c;
-                if (action === 0 && !mega.notif.has('contacts_fcrdel')) {
+                if ((action === 0 && !mega.notif.has('contacts_fcrdel')) ||
+                    (action === 1 && !mega.notif.has('contacts_fcracpt'))) {
                     return true;
                 }
                 break;
@@ -267,17 +289,23 @@ var notify = {
 
         // If there are no previous notifications, nothing can be combined,
         // so add it to start of the list without modification and exit
-        if (notify.notifications.length === 0) {
-            notify.notifications.unshift(currentNotification);
-            return false;
-        }
 
         // Get the previous notification (list is already sorted by most recent at the top)
         var previousNotification = notify.notifications[0];
 
-        // If the new notification or the previous notification is not a new folder/file (put) notification, then they
-        // can't be combined (need to be the same), so add it to start of the list without modification and exit
-        if (currentNotification.type !== 'put' || previousNotification.type !== 'put') {
+        if (!previousNotification) {
+            notify.notifications.unshift(currentNotification);
+            return false;
+        }
+
+        // if prev+curr notifications are not from the same type
+        if (currentNotification.type !== previousNotification.type) {
+            notify.notifications.unshift(currentNotification);
+            return false;
+        }
+
+        // we only for now combine "put" and "d" (del)
+        if (currentNotification.type !== 'put' && currentNotification.type !== 'd') {
             notify.notifications.unshift(currentNotification);
             return false;
         }
@@ -304,18 +332,31 @@ var notify = {
         var previousNotificationParentHandle = previousNotification.data.n;
         var previousNotificationNodes = previousNotification.data.f;
 
-        // If parent folders are not the same, they cannot be combined, so
-        // add it to start of the list without modification and exit
-        if (currentNotificationParentHandle !== previousNotificationParentHandle) {
-            notify.notifications.unshift(currentNotification);
-            return false;
+
+        if (currentNotification.type === 'put') {
+            // If parent folders are not the same, they cannot be combined, so
+            // add it to start of the list without modification and exit
+            if (currentNotificationParentHandle !== previousNotificationParentHandle) {
+                notify.notifications.unshift(currentNotification);
+                return false;
+            }
+
+            // Combine the folder/file nodes from the current notification to the previous one
+            var combinedNotificationNodes = previousNotificationNodes.concat(currentNotificationNodes);
+
+            // Replace the current notification's nodes with the combined nodes
+            currentNotification.data.f = combinedNotificationNodes;
+
         }
+        else { // it's 'd'
 
-        // Combine the folder/file nodes from the current notification to the previous one
-        var combinedNotificationNodes = previousNotificationNodes.concat(currentNotificationNodes);
+            if (!Array.isArray(previousNotificationParentHandle)) {
+                previousNotificationParentHandle = [previousNotificationParentHandle];
+            }
 
-        // Replace the current notification's nodes with the combined nodes
-        currentNotification.data.f = combinedNotificationNodes;
+            var deletedCombinedNodes = previousNotificationParentHandle.concat(currentNotificationParentHandle);
+            currentNotification.data.n = deletedCombinedNodes;
+        }
 
         // Remove the previous notification and add the current notification with combined nodes from the previous
         notify.notifications.shift();
@@ -360,8 +401,13 @@ var notify = {
     /**
      * Marks all notifications so far as seen, this will hide the red circle
      * and also make sure on reload these notifications are not new anymore
+     * If this is triggered by local, send `sla` request
+     *
+     * @param {Boolean} [remote] Optional. Show this function triggered by remote action packet.
      */
-    markAllNotificationsAsSeen: function() {
+    markAllNotificationsAsSeen: function(remote) {
+
+        'use strict';
 
         // Loop through the notifications and mark them as seen (read)
         for (var i = 0; i < notify.notifications.length; i++) {
@@ -377,7 +423,9 @@ var notify = {
 
         // Send 'set last acknowledged' API request to inform it which notifications have been seen
         // up to this point then they won't show these notifications as new next time they are fetched
-        api_req({ a: 'sla', i: requesti });
+        if (!remote) {
+            api_req({ a: 'sla', i: requesti });
+        }
     },
 
     /**
@@ -464,11 +512,12 @@ var notify = {
      * @param {Array} pendingContactUsers An array of objects (with user handle and email) for the pending contacts
      */
     addUserEmails: function(pendingContactUsers) {
+        'use strict';
 
         // Add the pending contact email addresses
-        if (typeof pendingContactUsers !== 'undefined') {
+        if (Array.isArray(pendingContactUsers)) {
 
-            for (var i = 0, length = pendingContactUsers.length; i < length; i++) {
+            for (var i = pendingContactUsers.length; i--;) {
 
                 var userHandle = pendingContactUsers[i].u;
                 var userEmail = pendingContactUsers[i].m;
@@ -476,15 +525,16 @@ var notify = {
                 notify.userEmails[userHandle] = userEmail;
             }
         }
+    },
 
-        // Add the emails from the user's list of known contacts
-        if (M && M.u) {
-            M.u.forEach(function(contact, userHandle) {
-
-                // Add the email
-                notify.userEmails[userHandle] = contact.m;
-            });
-        }
+    /**
+     * Retrieve the email associated to an user by his/their handle.
+     * @param {String} userHandle the
+     * @returns {Object} or false if not found.
+     */
+    getUserEmailByTheirHandle: function(userHandle) {
+        'use strict';
+        return M.getUserByHandle(userHandle).m || this.userEmails[userHandle] || false;
     },
 
     /**
@@ -497,8 +547,12 @@ var notify = {
         var allNotificationsHtml = '';
 
         // If no notifications, show empty
-        if (numOfNotifications === 0) {
+        if (notify.initialLoadComplete && numOfNotifications === 0) {
+            notify.$popup.removeClass('loading');
             notify.$popup.addClass('empty');
+            return false;
+        }
+        else if (!notify.initialLoadComplete) {
             return false;
         }
 
@@ -533,9 +587,16 @@ var notify = {
             allNotificationsHtml += $notificationHtml.prop('outerHTML');
         }
 
+        // If all notifications are not recognised, show empty
+        if (allNotificationsHtml === "") {
+            notify.$popup.removeClass('loading');
+            notify.$popup.addClass('empty');
+            return false;
+        }
+
         // Update the list of notifications
         notify.$popup.find('.notification-scr-list').append(allNotificationsHtml);
-        notify.$popup.removeClass('empty');
+        notify.$popup.removeClass('empty loading');
 
         // Add scrolling for the notifications
         notify.setHeightForNotifications();
@@ -598,9 +659,13 @@ var notify = {
 
         // Add click handler for the 'Contact relationship established' notification
         this.$popup.find('.nt-contact-accepted').rebind('click', function() {
-            // Redirect to the contact's page
-            loadSubPage('fm/' + $(this).attr('data-contact-handle'));
-            notify.closePopup();
+            // Redirect to the contact's page only if it's still a contact
+            if (M.c.contacts && $(this).attr('data-contact-handle') in M.c.contacts) {
+                loadSubPage('fm/' + $(this).attr('data-contact-handle'));
+                notify.closePopup();
+            } else {
+                msgDialog('info', '', l[20427]);
+            }
         });
     },
 
@@ -661,9 +726,13 @@ var notify = {
 
             // Mark all notifications as seen (because they clicked on a notification within the popup)
             notify.markAllNotificationsAsSeen();
+            var $target = $('.data-block.account-balance');
 
             // Redirect to payment history
-            loadSubPage('fm/account/history');
+            loadSubPage('fm/account/plan');
+            mBroadcaster.once('settingPageReady', function () {
+                $('.fm-account-main').data('jsp').scrollToElement($target, true, false);
+            });
         });
     },
 
@@ -704,7 +773,7 @@ var notify = {
             notify.markAllNotificationsAsSeen();
 
             // Update IPC indicator
-            delay('updateIpcRequests', updateIpcRequests);
+            delay('updateIpcRequests', updateIpcRequests, 1000);
         });
     },
 
@@ -720,26 +789,29 @@ var notify = {
         $notificationHtml.removeClass('template');
 
         var date = time2last(notification.timestamp);
+        var data = notification.data;
         var userHandle = notification.userHandle;
         var customIconNotifications = ['psts', 'pses', 'ph'];   // Payment & Takedown notification types
-        var userEmail = '';
+        var userEmail = l[7381];    // Unknown
         var avatar = '';
 
         // If a contact action packet
-        if ((typeof userHandle === 'object') && (typeof notification.data.u[0].m !== 'undefined')) {
-            userEmail = notification.data.u[0].m;
+        if (typeof userHandle !== 'string') {
+            if (Array.isArray(userHandle)) {
+                userHandle = userHandle[0] || false;
+            }
+            if (typeof userHandle !== 'object' && data) {
+                userHandle = Array.isArray(data.u) && data.u[0] || data;
+            }
+            userEmail = userHandle.m || userEmail;
+            userHandle = userHandle.u || userHandle.ou;
         }
 
         // Use the email address in the notification/action packet if the contact doesn't exist locally
         // or if it was populated partially locally (i.e from chat, without email)
-        else if ((typeof M.u[userHandle] === 'undefined' || !M.u[userHandle].m)
-            && (typeof notification.data.m !== 'undefined')) {
-            userEmail = notification.data.m;
-        }
-
-        // Otherwise get from the list of emails we know about
-        else if (typeof notify.userEmails[userHandle] !== 'undefined') {
-            userEmail = notify.userEmails[userHandle];
+        // or if the notification is closed account notification, M.u cannot be exist, so just using attached email.
+        if (userEmail === l[7381]) {
+            userEmail = this.getUserEmailByTheirHandle(userHandle) || data && data.m || userEmail;
         }
 
         // If the notification is not one of the custom ones, generate an avatar from the user information
@@ -765,7 +837,7 @@ var notify = {
             $notificationHtml.find('.notification-icon').removeClass('hidden');
         }
 
-        // Get the user's name if we have it, otherwise user their email
+        // Get the user's name if we have it, otherwise use their email
         var displayNameOrEmail = notify.getDisplayName(userEmail);
 
         // Update common template variables
@@ -878,7 +950,8 @@ var notify = {
 
         // Get data from initial c=50 notification fetch or action packet
         var action = (typeof notification.data.c !== 'undefined') ? notification.data.c : notification.data.u[0].c;
-        var userHandle = (Array.isArray(notification.userHandle)) ? notification.data.ou : notification.userHandle;
+        var userHandle = (Array.isArray(notification.userHandle)) ?
+            notification.data.ou || notification.userHandle[0].u : notification.userHandle;
         var className = '';
         var title = '';
 
@@ -1099,7 +1172,7 @@ var notify = {
         }
         else {
             var folderName = M.getNameByHandle(notification.data.n) || '';
-            var removerEmail = notify.userEmails[notificationTarget];
+            var removerEmail = notify.getUserEmailByTheirHandle(notificationTarget);
             if (removerEmail) {
                 title = l[19153].replace('{0}', removerEmail).replace('{1}', folderName);
             }
@@ -1340,11 +1413,21 @@ var notify = {
         if (M && M.u) {
             M.u.forEach(function(contact) {
 
-                // If the email is found
-                if (contact.m === email && contact.firstName && contact.lastName) {
+                var contactEmail = contact.m;
+                var contactHandle = contact.u;
 
-                    // Set the name and email
-                    displayName = contact.firstName + ' ' + contact.lastName + ' (' + email + ')';
+                // If the email is found
+                if (contactEmail === email) {
+
+                    // If the nickname is available use: Nickname
+                    if (M.u[contactHandle].nickname !== '') {
+                        displayName = nicknames.getNickname(contactHandle);
+                    }
+                    else {
+                        // Otherwise use: FirstName LastName (Email)
+                        displayName = (M.u[contactHandle].firstName + ' ' + M.u[contactHandle].lastName).trim()
+                                    + ' (' + email + ')';
+                    }
 
                     // Exit foreach loop
                     return true;
@@ -1356,92 +1439,3 @@ var notify = {
         return displayName;
     }
 };
-
-// Account Notifications (preferences)
-(function(map) {
-    var _enum = [];
-    var _tag = 'ACCNOTIF_';
-
-    Object.keys(map)
-        .forEach(function(k) {
-            map[k] = map[k].map(function(m) {
-                return k.toUpperCase() + '_' + m.toUpperCase();
-            });
-
-            var rsv = 0;
-            var memb = clone(map[k]);
-
-            while (memb.length < 10) {
-                memb.push(k.toUpperCase() + '_RSV' + (++rsv));
-            }
-
-            if (memb.length > 10) {
-                throw new Error('Stack overflow..');
-            }
-
-            _enum = _enum.concat(memb);
-        });
-
-    makeEnum(_enum, _tag, mega);
-
-    Object.defineProperty(mega, 'notif', {
-        value: Object.freeze((function(flags) {
-            function check(flag, tag) {
-                if (typeof flag === 'string') {
-                    if (tag !== undefined) {
-                        flag = tag + '_' + flag;
-                    }
-                    flag = String(flag).toUpperCase();
-                    flag = mega[flag] || mega[_tag + flag] || 0;
-                }
-                return flag;
-            }
-            return {
-                get flags() {
-                    return flags;
-                },
-
-                setup: function setup(oldFlags) {
-                    if (oldFlags === undefined) {
-                        // Initialize account notifications to defaults (all enabled)
-                        assert(!fmconfig.anf, 'Account notification flags already set');
-
-                        Object.keys(map)
-                            .forEach(function(k) {
-                                var grp = map[k];
-                                var len = grp.length;
-
-                                while (len--) {
-                                    this.set(grp[len]);
-                                }
-                            }.bind(this));
-                    }
-                    else {
-                        flags = oldFlags;
-                    }
-                },
-
-                has: function has(flag, tag) {
-                    return flags & check(flag, tag);
-                },
-
-                set: function set(flag, tag) {
-                    flags |= check(flag, tag);
-                    mega.config.set('anf', flags);
-                },
-
-                unset: function unset(flag, tag) {
-                    flags &= ~check(flag, tag);
-                    mega.config.set('anf', flags);
-                }
-            };
-        })(0))
-    });
-
-    _enum = undefined;
-
-})({
-    chat: ['ENABLED'],
-    cloud: ['ENABLED', 'NEWSHARE', 'DELSHARE', 'NEWFILES'],
-    contacts: ['ENABLED', 'FCRIN', 'FCRACPT', 'FCRDEL']
-});

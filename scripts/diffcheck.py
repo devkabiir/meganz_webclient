@@ -174,7 +174,7 @@ def get_commits_in_branch(current_branch=None):
 
 def pick_files_to_test(file_line_mapping, extensions=None, exclude=None):
     if extensions is None:
-        extensions = ['js']
+        extensions = ['js', 'jsx']
 
     files_to_test = [os.path.join(*x)
                      for x in file_line_mapping.keys()
@@ -186,9 +186,9 @@ def pick_files_to_test(file_line_mapping, extensions=None, exclude=None):
     # logging.info(files_to_test)
     return files_to_test
 
-def reduce_jshint(file_line_mapping, **extra):
+def reduce_eslint(file_line_mapping, **extra):
     """
-    Runs JSHint on the project with the default configured rules. The output
+    Runs ESLint on the project with the default configured rules. The output
     is reduced to only contain entries from the Git change set.
 
     :param file_line_mapping: Mapping of files with changed lines (obtained
@@ -200,59 +200,70 @@ def reduce_jshint(file_line_mapping, **extra):
         an integer containing the number of failed rules.
     """
     norules = extra['norules'] if 'norules' in extra else False
-    # Get the JSHint output.
+    # Get the ESLint output.
     os.chdir(PROJECT_PATH)
-    rules = config.JSHINT_RULES if not norules else ''
+    rules = config.ESLINT_RULES if not norules else ''
     files_to_test = pick_files_to_test(file_line_mapping)
 
     if len(files_to_test) == 0:
-        logging.info('JSHint: No modified JavaScript files found.')
+        logging.info('ESLint: No modified JavaScript files found.')
         return '', 0
 
-    logging.info('Obtaining JSHint output ...')
-    command = config.JSHINT_COMMAND.format(binary=config.JSHINT_BIN,
+    logging.info('Obtaining ESLint output ...')
+    command = config.ESLINT_COMMAND.format(binary=config.ESLINT_BIN,
                                            rules=rules,
                                            files=' '.join(files_to_test))
+    warnings = 0
     output = None
     try:
         output = subprocess.check_output(command.split())
     except subprocess.CalledProcessError as ex:
-        # JSHint found something, so it has returned an error code.
+        # ESlint found something, so it has returned an error code.
         # But we still want the output in the same fashion.
         output = ex.output
     except OSError as ex:
         if ex.errno == 2:
-            logging.error('JSHint not installed.'
+            logging.error('ESLint not installed.'
                           ' Try to do so with `npm install`.')
         else:
-            logging.error('Error calling JSHint: {}'.format(ex))
-        return '*** JSHint: {} ***'.format(ex), 0
-    output = output.decode('utf8').split('\n')
+            logging.error('Error calling ESLint: {}'.format(ex))
+        return '*** ESLint: {} ***'.format(ex), 0
+    output = output.decode('utf8').replace(PROJECT_PATH + os.path.sep, '').split('\n')
 
     # Go through output and collect only relevant lines to the result.
-    result = ['\nJSHint output:\n==============\n']
-    jshint_expression = re.compile(r'(.+): line (\d+), col \d+, .+')
+    result = ['\nESLint output:\n==============\n']
+    eslint_expression = re.compile(r'(.+): line (\d+), col \d+, .+')
+    warning_result = []
     for line in output:
-        parse_result = jshint_expression.findall(line)
+        parse_result = eslint_expression.findall(line)
         # Check if we've got a relevant line.
         if parse_result:
             file_name, line_no = parse_result[0][0], int(parse_result[0][1])
             file_name = tuple(re.split(PATH_SPLITTER, file_name))
             # Check if the line is part of our selection list.
             if line_no in file_line_mapping[file_name]:
-                result.append(line)
+                if re.search(r': line \d+, col \d+, Warning - ', line):
+                    warnings += 1
+                    warning_result.append(line)
+                else:
+                    result.append(line)
+
+    result = result + warning_result;
 
     # Add the number of errors and return in a nicely formatted way.
     error_count = len(result) - 1
     if error_count == 0:
         return '', 0
-    result.append('\n{} errors'.format(error_count))
-    return '\n'.join(result), error_count
+    if warnings:
+        result.append('\n{} issue(s) found, {} Errors and {} Wanings'.format(error_count, error_count - warnings, warnings))
+    else:
+        result.append('\n{} error(s) found.'.format(error_count))
+    return '\n'.join(result), error_count - warnings
 
 
-def reduce_jscs(file_line_mapping, **extra):
+def reduce_stylelint(file_line_mapping, **extra):
     """
-    Runs JSCS on the project with the default configured rules. The output
+    Runs StyleLint on the project with the default configured rules. The output
     is reduced to only contain entries from the Git change set.
 
     :param file_line_mapping: Mapping of files with changed lines (obtained
@@ -264,61 +275,76 @@ def reduce_jscs(file_line_mapping, **extra):
         an integer containing the number of failed rules.
     """
     norules = extra['norules'] if 'norules' in extra else False
-    # Get the JSCS output.
+    # Get the StyleLint output.
     os.chdir(PROJECT_PATH)
-    rules = config.JSCS_RULES if not norules else ''
-    files_to_test = pick_files_to_test(file_line_mapping)
+    rules = config.STYLELINT_RULES if not norules else ''
+    files_to_test = pick_files_to_test(file_line_mapping, ['css'])
 
     if len(files_to_test) == 0:
-        logging.info('JSCS: No modified JavaScript files found.')
+        logging.info('StyleLint: No modified CSS files found.')
         return '', 0
 
-    logging.info('Obtaining JSCS output ...')
-    command = config.JSCS_COMMAND.format(binary=config.JSCS_BIN,
-                                         rules=rules,
-                                         files=' '.join(files_to_test))
+    if os.name == 'nt':
+        files_to_test = [x.replace('\\', '/') for x in files_to_test]
+
+    logging.info('Obtaining StyleLint output ...')
+    command = config.STYLELINT_COMMAND.format(binary=config.STYLELINT_BIN,
+                                           rules=rules,
+                                           files=' '.join(files_to_test))
+    warnings = 0
     output = None
     try:
         output = subprocess.check_output(command.split())
     except subprocess.CalledProcessError as ex:
-        # JSCS found something, so it has returned an error code.
+        # StyleLint found something, so it has returned an error code.
         # But we still want the output in the same fashion.
         output = ex.output
+        # unless no output given, e.g. stderr used for something unexpected.
+        if not output and ex.returncode is 1:
+            return '*** StyleLint: {} ***'.format(ex), 0
     except OSError as ex:
         if ex.errno == 2:
-            logging.error('JSCS not installed.'
+            logging.error('StyleLint not installed.'
                           ' Try to do so with `npm install`.')
         else:
-            logging.error('Error calling JSCS: {}'.format(ex))
-        return '*** JSCS: {} ***'.format(ex), 0
-    output = output.decode('utf8').split('\n\n')
+            logging.error('Error calling StyleLint: {}'.format(ex))
+        return '*** StyleLint: {} ***'.format(ex), 0
+    output = output.decode('utf8').replace(PROJECT_PATH + os.path.sep, '').split('\n')
 
     # Go through output and collect only relevant lines to the result.
-    result = ['\nJSCS output:\n============']
-    # lines_expression = re.compile(r'^ +(\d+) |.*(?:\n|\r\n?)-', re.MULTILINE)
-    lines_expression = re.compile(r'^ +(\d+) |-', re.MULTILINE)
-    file_expression = re.compile(r'^[^\b].* (?:\./)?(.+) :$', re.MULTILINE)
-    for item in output:
-        # Do the processing for every block here.
-        line_no_candidates = lines_expression.findall(item, re.MULTILINE)
-        idx = 0
-        while line_no_candidates and line_no_candidates.index('', idx) == idx:
-            idx = idx + 1;
-        # Check if we've got a relevant block.
-        if line_no_candidates and '' in line_no_candidates:
-            line_no = int(line_no_candidates[line_no_candidates.index('', idx) - 1])
-            file_name = file_expression.findall(item)[0]
+    result = ['\nStyleLint output:\n=================\n']
+    cmdout_expression = re.compile(r'(.+): line (\d+), col \d+, .+')
+    warning_result = []
+    for line in output:
+        parse_result = cmdout_expression.findall(line)
+        # Check if we've got a relevant line.
+        if parse_result:
+            file_name, line_no = parse_result[0][0], int(parse_result[0][1])
             file_name = tuple(re.split(PATH_SPLITTER, file_name))
-            # Check if the line is part of our selection list.
-            if line_no in file_line_mapping[file_name]:
-                result.append(item[:500])
+            # Check if the line is part of our selection list, or if a css syntax
+            # error happened within a file since that will halt further parsing
+            if line_no in file_line_mapping[file_name] or re.search(r'CssSyntaxError', line):
+                if re.search(r': line \d+, col \d+, warning - ', line):
+                    warnings += 1
+                    # plugin/no-unsupported-browser-features is too verbose
+                    # with e.g. Chrome 58,59,60,61,62,63,64,65,66,67,68,69
+                    if re.search(r'Unexpected browser feature', line):
+                        line = re.sub(r'(\w+ \d+)(,\d+)+,(\d+)', r'\1-\3', line)
+                    warning_result.append(line)
+                else:
+                    result.append(line)
+
+    result = result + warning_result;
 
     # Add the number of errors and return in a nicely formatted way.
     error_count = len(result) - 1
     if error_count == 0:
         return '', 0
-    result.append('\n{} code style errors found.'.format(error_count))
-    return '\n\n'.join(result), error_count
+    if warnings:
+        result.append('\n{} issue(s) found, {} Errors and {} Wanings'.format(error_count, error_count - warnings, warnings))
+    else:
+        result.append('\n{} error(s) found.'.format(error_count))
+    return '\n'.join(result), error_count - warnings
 
 def strip_ansi_codes(s):
     return re.sub(r'\x1b\[([0-9,A-Z]{1,2}(;[0-9]{1,2})?(;[0-9]{3})?)?[m|K]?', '', s)
@@ -340,7 +366,7 @@ def reduce_htmlhint(file_line_mapping, **extra):
     # Get the HTMLHint output.
     os.chdir(PROJECT_PATH)
     rules = config.HTMLHINT_RULES if not norules else ''
-    files_to_test = pick_files_to_test(file_line_mapping, ['htm', 'html'], re.compile('dont-deploy'))
+    files_to_test = pick_files_to_test(file_line_mapping, ['htm', 'html'], re.compile(r'dont-deploy|html[\\/]pdf'))
 
     if len(files_to_test) == 0:
         logging.info('HTMLHint: No modified HTML files found.')
@@ -386,18 +412,18 @@ def copypaste_detector(file_line_mapping):
     cwd = os.getcwd()
 
     try:
-        output = subprocess.check_output('{} {}'.format(config.JSCPD_BIN, config.JSCPD_RULES).split())
+        output = subprocess.check_output('{} {} ./html/js ./js'.format(config.JSCPD_BIN, config.JSCPD_RULES).split())
     except OSError as ex:
         logging.error('Error calling JSCPD: {}'.format(ex))
         return False
     output = strip_ansi_codes(output.decode('utf8')).rstrip().split('\n')
-    output = [re.sub(r'\t-? [\\/]', '', f.replace(cwd, '')).strip() for f in output if re.search(r'^\t', f)]
+    output = [re.sub(r'^[ -]+ [\\/]?', '', f.replace(cwd, '')).strip() for f in output if re.search(r'^ ', f)]
 
     # Build a list of duplicated blocks per file
     idx = 0
     dupes = collections.defaultdict(set)
     for file in output:
-        x,filename,ln1,ln2,z = re.split(r'^(.*): (\d+)-(\d+)$', file)
+        x,filename,ln1,ln2,z = re.split(r'^(.*) \[(\d+):\d+ - (\d+):\d+\]$', file)
         dupes[filename].update(range(int(ln1), int(ln2) + 1))
 
     # Check whether changed lines includes copy/paste code
@@ -458,8 +484,8 @@ def analyse_files_for_special_chars(filename, result):
                 for column, character in enumerate(line):
                     code = ord(character)
                     if code >= 128:
-                        result.append('Found non-ASCII character {} at file {}, line {}, column {}'
-                                     .format(code, filename, linenumber, column))
+                        result.append(u'Found non-ASCII character {} ({}) at file {}, line {}, column {}'
+                                     .format(code, character, filename, linenumber + 1, column))
                         test_fail = True
 
     return test_fail
@@ -471,7 +497,7 @@ def inspectcss(file, ln, line, result):
 
     # check potentially invalid url()s
     match = re.search(r'url\([^)]+images/mega/', line)
-    if match and not re.search(r'url\([\'"]?\.\./images/mega/', line):
+    if match and not re.search(r'url\([\'"]?(\.\./)+images/mega/', line):
         fatal += 1
         result.append('{}:{}: {}\n{}^ Potentially invalid url()'
             .format(file, ln, line, indent))
@@ -484,38 +510,12 @@ def inspecthtml(file, ln, line, result):
     indent = ' ' * (len(file)+len(str(ln))+3)
 
     # check for hidden-less fm-dialogs
-    match = re.search(r'fm-dialog ', line)
+    match = re.search(r'fm-dialog[\s"\']', line)
     if match and not re.search(r'hidden[\'"\s]', line):
         fatal += 1
         result.append('{}:{}: {}\n{}^ Missing hidden class on fm-dialog.'.format(file, ln, line, indent))
-
-    return fatal
-
-def inspectjs(file, ln, line, result):
-    fatal = 0
-    line = line.strip()
-    indent = ' ' * (len(file)+len(str(ln))+3)
-
-    # check non-namespaced event handlers
-    match = re.search(r'\$\((.*?)\)\s*\.\s*(?:re|un)?bind\s*\([\'"]([^\'"\),]+)', line)
-    if match:
-        target = match.group(1)
-        event = match.group(2)
-        if event.find('.') == -1:
-            if target in ['window', 'document']:
-                fatal += 1
-                result.append('{}:{}: {}\n{}^ Attaching event handlers '
-                    'to window or document requires a namespace.'
-                    .format(file, ln, line, indent))
-            elif event != 'click':
-                result.append('{}:{}: {}\n{}^ It is recommended to use'
-                    ' a namespace. '.format(file, ln, line, indent))
-
-    match = re.search(r'\$\.dialog\s*=[^=]', line)
-    if match:
-        result.append('{}:{}: {}\n{}^ Overwritting $.dialog is discouraged, handling of '
-                    'new dialogs\n{}  should be achieved through M.safeShowDialog(), see MR!1419'
-                    .format(file, ln, line, indent, indent))
+    if match and not re.search(r'=["\']fm-dialog', line):
+        result.append('{}:{}: {}\n{}^ for consistency, fm-dialog shall be placed as the first class.'.format(file, ln, line, indent))
 
     return fatal
 
@@ -559,7 +559,7 @@ def reduce_validator(file_line_mapping, **extra):
     """
 
     exclude = ['vendor', 'asm', 'sjcl', 'dont-deploy', 'secureboot', 'test']
-    special_chars_exclude = ['secureboot', 'test', 'emoji', 'dont-deploy']
+    special_chars_exclude = ['secureboot', 'test', 'emoji', 'dont-deploy', 'pdf.worker']
     logging.info('Analyzing modified files ...')
     result = ['\nValidator output:\n=================']
     warning = 'This is a security product. Do not add unverifiable code to the repository!'
@@ -569,7 +569,7 @@ def reduce_validator(file_line_mapping, **extra):
     diff_files = get_git_diff_files()
     if any(['images/mega' in f for f in diff_files]):
         base_sprites = get_sprite_images()
-        target_sprites = map_list_to_dict([split_sprite_name(f) for f in filter_list(diff_files, r'@2x')])
+        target_sprites = get_sprite_images(get_current_branch())
         for file, version in target_sprites.iteritems():
             if file in base_sprites and base_sprites[file] > version:
                 fatal += 1
@@ -605,7 +605,7 @@ def reduce_validator(file_line_mapping, **extra):
                           .format(file_path, warning))
             # continue
 
-        if os.path.getsize(file_path) > 131072 and not file_extension in ['.css', '.html']:
+        if os.path.getsize(file_path) > 150000 and not file_extension in ['.css', '.html']:
             result.append('The file "{}" has turned too big, '
                           'any new functions must be moved elsewhere.'.format(file_path))
             # continue
@@ -630,32 +630,6 @@ def reduce_validator(file_line_mapping, **extra):
                 if file_extension == '.html':
                     fatal += inspecthtml(file_path, line_number, line, result)
                     continue
-
-                # If line length exceeded, log it and move onto the next file
-                if line_length > config.VALIDATOR_LINELEN_THRESHOLD:
-                    fatal += 1
-                    result.append('Found line too long in file {}, line {} (length {}). '
-                                  'Please keep your lines under 120 characters.'
-                                  .format(file_path, line_number, line_length))
-                    # break
-
-                lines.append(line.rstrip())
-
-                # Analyse JavaScript files...
-                if file_extension in ['.js', '.jsx']:
-                    fatal += inspectjs(file_path, line_number, line, result)
-                    continue
-
-        # Further inspect all modifications in a whole instead of per-lines
-        if file_extension in ['.js', '.jsx']:
-            snippet = '\n'.join(lines)
-            # print('>>>>>>>>>>>>>>>>>> {}:{}'.format(file_path, snippet))
-            match = re.search(r'(\w+\s*\(\s*\n\s*[^\s,]{1,12})\s*(?:\n|$)', snippet)
-            if match:
-                fatal += 1
-                result.append('Found non-sensical statement spreaded '
-                    'around several lines on file {}:\n{} ...'.format(file_path, match.group(1)))
-
 
     # Add the number of errors and return in a nicely formatted way.
     error_count = len(result) - 1
@@ -846,11 +820,11 @@ def reduce_verapp(file_line_mapping, **extra):
 
 def main(base, target, norules, branch, jscpd):
     """
-    Run the JSHint and JSCS tests and present output ont eh console via print.
+    Run the ESLint tests and present output ont eh console via print.
     """
-    CHECKER_MAPPING = {'jshint': reduce_jshint,
-                       'jscs': reduce_jscs,
+    CHECKER_MAPPING = {'eslint': reduce_eslint,
                        'htmlhint': reduce_htmlhint,
+                       'stylelint': reduce_stylelint,
                        'validator': reduce_validator,
                        'cppcheck': reduce_cppcheck,
                        'nsiqcppstyle': reduce_nsiqcppstyle,
@@ -879,9 +853,11 @@ def main(base, target, norules, branch, jscpd):
         # if fatal > 0:
             # break
 
-    if total_errors > 0:
+    count = len(results)
+    warnings = count - total_errors
+    if count:
         logging.info('Output of reduced results ...')
-        print('\n\n'.join(results).rstrip())
+        print('\n\n'.join(results).rstrip().encode("utf-8"))
 
     if jscpd and copypaste_detector(file_line_mapping):
         total_errors += 1
@@ -896,7 +872,11 @@ def main(base, target, norules, branch, jscpd):
             print('WARNING: {} authors have contributed in this branch, '
                   'consider squashing your commits only\n         by manually running '
                   '"git rebase -i --autosquash {}", unless they do not care.'.format(authors, base))
-        sys.exit(1)
+        sys.exit(0)
+
+    if warnings:
+        print('\nAll fine, but there were some warnings you may want to look into.')
+        sys.exit(0)
 
     print('\nEverything seems Ok.')
 
@@ -910,7 +890,7 @@ if __name__ == '__main__':
     DESCRIPTION = ('Filter output from static code analyser and style checker '
                    'to only contain content relevant to a diff '
                    '(e. g. between commits or tips of branches). '
-                   'This tool will filter output from JSHint and JSCS.')
+                   'This tool will filter output from ESLint.')
     EPILOG = 'Note: if no revision (commit ID) is given, the branch tip will be used.'
     parser = argparse.ArgumentParser(description=DESCRIPTION, epilog=EPILOG)
     parser.add_argument('--norules', default=False, action='store_true',

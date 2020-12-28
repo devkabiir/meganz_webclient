@@ -19,6 +19,7 @@ var ep_node = false;
 
 function startMega() {
     'use strict';
+    jsl = [];
     mBroadcaster.sendMessage('startMega');
     eventlog(99686, true);
     init_page();
@@ -36,7 +37,7 @@ function init_page() {
 
     var ph = tmp[1];
     var key = tmp[2];
-    $.playbackTimeOffset = parseInt(tmp[3]) | 0;
+    $.playbackOptions = tmp[3];
 
     var init = function(res) {
         init_embed(ph, key, res);
@@ -70,9 +71,24 @@ function init_embed(ph, key, g) {
 
     if (node) {
         var link = '#!' + ph + '!' + key;
+        if (mega.flags.nlfe) {
+            link = '/file/' + ph + '#' + key;
+        }
+
+        // Remove header and logo on embed player when viewing the security video on /security page
+        if (under('security')) {
+            $('.viewer-top-bl, .logo-container').remove();
+            $('.viewer-bottom-bl').addClass('no-grad');
+            $('.download.video-block').addClass('no-bg-color');
+        }
+        else {
+            localStorage.affid = ph;
+            localStorage.affts = Date.now();
+            localStorage.afftype = 2;
+        }
 
         $('.play-video-button, .viewonmega-item, .filename').rebind('click', function() {
-            open(getAppBaseUrl() + link);
+            open(getBaseUrl() + link);
             return false;
         });
 
@@ -89,7 +105,7 @@ function init_embed(ph, key, g) {
             var timeoffset = 0;
             var $block = $('.sharefile-block');
             var $wrapper = $('.video-wrapper');
-            var url = getBaseUrl() + '/embed' + link;
+            var url = getBaseUrl() + '/embed' + link.replace('file/', '');
             var embed = '<iframe src="%" width="640" height="360" frameborder="0" allowfullscreen></iframe>';
 
             $('.close-overlay, .sharefile-buttons .cancel', $block).rebind('click', function() {
@@ -101,7 +117,7 @@ function init_embed(ph, key, g) {
             $('.sharefile-buttons .copy', $block).rebind('click', function() {
                 var content = String($('.tab-content', $block).text());
                 if (playing && document.getElementById('timecheckbox').checked) {
-                    content = content.replace(/![\w-]{8}![^"]+/, '$&!' + timeoffset + 's');
+                    content = content.replace(/[!/][\w-]{8}[!#][^"]+/, '$&!' + timeoffset + 's');
                 }
                 copyToClipboard(content, 1);
             });
@@ -116,7 +132,7 @@ function init_embed(ph, key, g) {
 
                 if ($(this).is('.getlink-item, .share-link')) {
                     $('.tab-link.share-link', $block).addClass('active');
-                    $('.tab-content', $block).text(url.replace('/embed', '/'));
+                    $('.tab-content', $block).text(url.replace('/embed', '/' + (mega.flags.nlfe ? 'file' : '')));
                     $('.sharefile-settings', $block).addClass('hidden');
                 }
                 else {
@@ -140,12 +156,21 @@ function init_embed(ph, key, g) {
             $wrapper.addClass('main-blur-block share-option');
         });
 
-        watchdog.registerOverrider('login', function() {
+        watchdog.registerOverrider('login', function(ev, strg) {
+            var data = strg.data;
+
+            if (data[0]) {
+                u_storage = init_storage(sessionStorage);
+                u_storage.k = JSON.stringify(data[0]);
+            }
+            else {
+                u_storage = init_storage(localStorage);
+            }
+
             watchdog.registerOverrider('setsid', function(ev, strg) {
                 var sid = strg.data;
                 api_setsid(sid);
 
-                u_storage = init_storage(localStorage);
                 u_storage.sid = sid;
 
                 u_checklogin({
@@ -169,7 +194,10 @@ function init_embed(ph, key, g) {
 
         watchdog.registerOverrider('psts', dlmanager._onQuotaRetry.bind(dlmanager));
 
-        iniVideoStreamLayout(node, $('body'), {preBuffer: false})
+        var buffer = $.playbackOptions && $.playbackOptions.indexOf('1a') > -1 &&
+            (window.chrome || $.playbackOptions.indexOf('1m') > -1);
+
+        iniVideoStreamLayout(node, $('body'), {preBuffer: buffer})
             .then(function(stream) {
                 if (stream instanceof Streamer) {
                     stream.on('activity', function() {
@@ -180,6 +208,10 @@ function init_embed(ph, key, g) {
                         }
                         return true;
                     });
+
+                    if (stream.options.autoplay) {
+                        $('.video-wrapper .play-video-button').click();
+                    }
                 }
             });
 
@@ -294,6 +326,16 @@ mBroadcaster.once('startMega', function() {
         return String(new Error().stack);
     };
     M.hasPendingTransfers = dummy;
+    M.req = promisify(function(resolve, reject, params, ch) {
+        api_req(typeof params === 'string' ? {a: params} : params, {
+            callback: function(res) {
+                if (typeof res === 'number' && res < 0) {
+                    return reject(res);
+                }
+                resolve(res);
+            }
+        }, ch | 0);
+    });
 
     dlmanager = Object.create(null);
     dlmanager._quotaTasks = [];
@@ -313,38 +355,48 @@ mBroadcaster.once('startMega', function() {
             this._quotaTasks.push(tryCatch(task));
         }
         this.isOverQuota = true;
+        this.isOverFreeQuota = !u_type;
 
-        if (u_type) {
-            if (u_attr.p) {
-                $('.upgrade-option .button', $block).text(l[16386]);
-            }
-            else {
-                $('.upgrade-option .button', $block).text(l[129]);
-            }
-            $('.transfer-body', $block).text(l[17084]);
-            $('.upgrade-option', $block).removeClass('hidden');
-            $('.signin-register-option', $block).addClass('hidden');
+        $('.button.signup', $block).text(l[209]);
+        $('.button.login', $block).text(l[16345]);
+        $('.transfer-body', $block).text(l[19615]);
+        $('.transfer-heading', $block).text(l[17]);
+        $('.upgrade-option .button', $block).text(l[17542]);
+        $('.upgrade-option', $block).addClass('hidden');
+        $('.signin-register-option', $block).addClass('hidden');
+
+        if (u_type && u_attr.p) {
+            $('.transfer-body', $block).text(l[19617]);
+            $('.upgrade-option .button', $block).text(l[19616]);
         }
-        else {
-            this.isOverFreeQuota = true;
-            $('.transfer-body', $block).text(l[7098]);
-            $('.upgrade-option', $block).addClass('hidden');
+
+        if (!u_type && u_wasloggedin()) {
+            $('.button.signup', $block).text(l[17542]);
             $('.signin-register-option', $block).removeClass('hidden');
         }
+        else {
+            $('.upgrade-option', $block).removeClass('hidden');
+        }
+
+        $('.button.login, .button.signup, .upgrade-option .button', $block).rebind('click', function() {
+            var page = 'pro';
+            var text = $.trim($(this).text());
+
+            if (text === l[209]) {
+                page = 'register';
+            }
+            else if (text === l[16345]) {
+                page = 'login';
+            }
+
+            open(getBaseUrl() + '/' + page);
+            return false;
+        });
 
         $('.close-overlay', $block).rebind('click', function() {
             $block.addClass('hidden');
             $wrapper.removeClass('main-blur-block');
         });
-
-        var toPage = function(page) {
-            open(getBaseUrl() + '/' + page);
-            return false;
-        };
-
-        $('.button.login', $block).rebind('click', toPage.bind(this, 'login'));
-        $('.button.signup', $block).rebind('click', toPage.bind(this, 'register'));
-        $('.upgrade-option .button', $block).rebind('click', toPage.bind(this, 'pro'));
     };
     dlmanager._onQuotaRetry = function() {
         for (var i = 0; i < this._quotaTasks.length; i++) {
@@ -428,6 +480,17 @@ function getAppBaseUrl() {
     return base;
 }
 
+function under(page) {
+    'use strict';
+
+    try {
+        return (top !== self && top.location.host === 'mega.nz' || d) && top.getCleanSitePath() === page;
+    }
+    catch (ex) {}
+
+    return false;
+}
+
 function showToast() {
     'use strict';
 
@@ -439,10 +502,33 @@ function showToast() {
 }
 
 function msgDialog(type, title, msg, submsg, callback, checkbox) {
+    'use strict';
+
     if (d) {
-        console.debug('msgDialog', arguments)
+        console.debug('msgDialog', type, title, msg, submsg);
     }
-    alert(String(msg) + (submsg ? '\n\n' + submsg : ''));
+    // alert(String(msg) + (submsg ? '\n\n' + submsg : ''));
+
+    var $wrapper = $('.video-wrapper').addClass('main-blur-block');
+    var $block = $('.transfer-limitation-block').removeClass('hidden');
+
+    $('.transfer-heading', $block).text(title);
+    $('.transfer-body', $block).text(String(msg) + (submsg ? '\n\n' + submsg : ''));
+
+    $('.upgrade-option', $block).removeClass('hidden');
+    $('.upgrade-option .button', $block).text(l[16518]);
+    $('.signin-register-option', $block).addClass('hidden');
+
+    $('.upgrade-option .button', $block).rebind('click', function() {
+        $('.viewonmega-item').trigger('click');
+        return false;
+    });
+
+    $('.close-overlay', $block).rebind('click', function() {
+        $block.addClass('hidden');
+        $wrapper.removeClass('main-blur-block');
+        location.reload(true);
+    });
 }
 
 function pagemetadata() {
@@ -464,6 +550,10 @@ function pagemetadata() {
     if (ep_node) {
         var url = getBaseUrl() + '/embed#!' + ep_node.link;
         var data = MediaAttribute(ep_node).data;
+
+        if (mega.flags.nlfe) {
+            url = getBaseUrl() + '/embed/' + ep_node.link.replace('!', '#');
+        }
 
         if (data) {
             append('og:duration', data.playtime);

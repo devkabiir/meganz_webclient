@@ -16,31 +16,15 @@ var ChatNotifications = function(megaChat, options) {
 
     self.notifications = new MegaNotifications(options);
 
-    megaChat.rebind("onInit.chatNotifications", function(e) {
-        self.attachToChat(megaChat);
-    });
-
-    return this;
-};
-
-/**
- * Entry point, for attaching to a specific `Chat` instance
- *
- * @param megaChat {Chat}
- */
-ChatNotifications.prototype.attachToChat = function(megaChat) {
-    var self = this;
-
     megaChat
         .rebind('onRoomInitialized.chatNotifications', function(e, megaRoom) {
             var resetChatNotificationCounters = function() {
                 if (megaRoom.isCurrentlyActive) {
-                    var uiElement = $('.conversation-panel[data-room-id="' + megaRoom.chatId + '"]');
+                    var cnSel = '.conversation-panel[data-room-id="' + megaRoom.chatId + '"]';
+                    var uiElement = document.querySelector(cnSel);
 
-                    if (
-                        uiElement.find(".call-block").length > 0 &&
-                        uiElement.find(".call-block.small-block").length === 0
-                    ) {
+                    if (!uiElement || uiElement.querySelector(".call-block") &&
+                        !uiElement.querySelector(".call-block.small-block")) {
                         return;
                     }
 
@@ -56,6 +40,7 @@ ChatNotifications.prototype.attachToChat = function(megaChat) {
                     }
                     self.notifications.resetCounterGroup(megaRoom.chatId);
                 }
+                megaChat.updateSectionUnreadCount();
             };
 
             megaRoom
@@ -70,11 +55,6 @@ ChatNotifications.prototype.attachToChat = function(megaChat) {
                     }
                     else if (message.authorContact) {
                         fromContact = message.authorContact;
-                    }
-                    else if (message.getFromJid) {
-                        fromContact = megaChat.getContactFromJid(
-                            message.getFromJid()
-                        );
                     }
 
                     var avatarMeta = generateAvatarMeta(fromContact.u);
@@ -98,10 +78,13 @@ ChatNotifications.prototype.attachToChat = function(megaChat) {
 
                         var unreadFlag = (
                             message.getState() === Message.STATE.NOT_SEEN &&
-                            !AppActivityHandler.getGlobalAppActivityHandler().isActive
+                            !mega.active
                         );
 
-                        if (message.source === Message.SOURCE.CHATD) {
+                        if (
+                            pushNotificationSettings.isAllowedForChatId(megaRoom.chatId) &&
+                            message.source === Message.SOURCE.CHATD
+                        ) {
                             n = self.notifications.notify(
                                 'incoming-chat-message',
                                 {
@@ -135,6 +118,10 @@ ChatNotifications.prototype.attachToChat = function(megaChat) {
                         if (message.type === "incoming-call") {
                             return; // already caught by the onIncomingCall...
                         }
+                        if (!pushNotificationSettings.isAllowedForChatId(megaRoom.chatId)) {
+                            return;
+                        }
+
                         n = self.notifications.notify(
                             'alert-info-message',
                             {
@@ -175,13 +162,17 @@ ChatNotifications.prototype.attachToChat = function(megaChat) {
                         });
                     }
                 })
-                .rebind('onChatShown.chatNotifications', function(e) {
-                    resetChatNotificationCounters();
+                .rebind('onChatShown.chatNotifications', function() {
+                    onIdle(resetChatNotificationCounters);
                 })
-                .rebind('onChatIsFocused.chatNotifications', function(e) {
-                    resetChatNotificationCounters();
+                .rebind('onChatIsFocused.chatNotifications', function() {
+                    onIdle(resetChatNotificationCounters);
                 })
-                .rebind('onOutgoingCall.chatNotifications', function(e, callManagerCall, mediaOptions) {
+                .rebind('onCallRequestSent.chatNotifications', function(e, callManagerCall, mediaOptions) {
+                    if (!pushNotificationSettings.isAllowedForChatId(megaRoom.chatId)) {
+                        return;
+                    }
+
                     var sid = callManagerCall.id;
                     var n = self.notifications.notify(
                         'outgoing-call',
@@ -203,8 +194,8 @@ ChatNotifications.prototype.attachToChat = function(megaChat) {
                     );
                     n.on('onClick', function() {
                         window.focus();
-                        room.activateWindow();
-                        room.show();
+                        megaRoom.activateWindow();
+                        megaRoom.show();
                     });
 
                     var evtId = generateEventSuffixFromArguments("", "chatNotifStopSoundOut", rand(10000));
@@ -220,8 +211,20 @@ ChatNotifications.prototype.attachToChat = function(megaChat) {
                 .rebind('CallTerminated.chatNotifications', function(e, origEvent, room) {
                     self.notifications.resetCounterGroup(room.chatId, "incoming-voice-video-call");
                     var contact = M.u[room.getParticipantsExceptMe()[0]];
-                    var avatarMeta = generateAvatarMeta(contact.u);
-                    var icon = avatarMeta.avatarUrl;
+                    var icon = false;
+                    var title;
+                    if (contact && contact.u) {
+                        var avatarMeta = generateAvatarMeta(contact.u);
+                        icon = avatarMeta.avatarUrl;
+                        title = avatarMeta.fullName;
+                    }
+                    else {
+                        title = room.getRoomTitle();
+                    }
+
+                    if (!pushNotificationSettings.isAllowedForChatId(room.chatId)) {
+                        return;
+                    }
 
                     var n = self.notifications.notify(
                         'call-terminated',
@@ -232,10 +235,10 @@ ChatNotifications.prototype.attachToChat = function(megaChat) {
                             'anfFlag': 'chat_enabled',
                             'icon': icon,
                             'params': {
-                                'from': avatarMeta.fullName
+                                'from': title
                             }
                         },
-                        !AppActivityHandler.getGlobalAppActivityHandler()
+                        !mega.active
                     );
 
                     n.on('onClick', function() {
@@ -246,6 +249,8 @@ ChatNotifications.prototype.attachToChat = function(megaChat) {
 
 
                     n.setUnread(false);
+
+                    megaChat.updateSectionUnreadCount();
                 });
         })
         .rebind('onIncomingCall.chatNotifications', function(e,
@@ -257,6 +262,10 @@ ChatNotifications.prototype.attachToChat = function(megaChat) {
              callManagerCall,
              dialogMessage
         ) {
+
+            if (!pushNotificationSettings.isAllowedForChatId(room.chatId)) {
+                return;
+            }
 
             var n = self.notifications.notify(
                 'incoming-voice-video-call',

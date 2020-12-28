@@ -69,7 +69,13 @@
             // close any dialog if such is opened
             if (Object.keys(self._lastShown).length > 0) {
                 var screenId = Object.keys(self._lastShown)[0];
+
                 self.hideDialog(screenId);
+
+                if (!self._lastShown) {
+                    // was destroyed.
+                    return;
+                }
                 delete self._lastShown[screenId];
             }
             self.eventuallyRenderDialogs();
@@ -710,40 +716,17 @@
                 if (!megaChatIsReady) {
                     return false;
                 }
-                if (
+                return (
                     self.shouldShow &&
                     M.u.keys().length >= 2 /* 1st of them == u_handle */ &&
                     megaChat.chats.length <= 1 &&
-                    ChatdIntegration.mcfHasFinishedPromise &&
-                    ChatdIntegration.mcfHasFinishedPromise.state() === "resolved" &&
                     !megaChat.plugins.chatdIntegration.isLoading() &&
-                    Number.isNaN(parseInt($('.new-messages-indicator:visible').text(), 10)) === true &&
+                    Number.isNaN(
+                        parseInt($('.new-messages-indicator .chat-unread-count:visible').text(), 10)
+                    ) === true &&
                     $('.nw-fm-left-icon.conversations.active').length === 0 &&
                     $('.nw-fm-left-icon.conversations:visible').length > 0
-                ) {
-                    return true;
-                }
-                else {
-                    if (
-                        ChatdIntegration.mcfHasFinishedPromise &&
-                        ChatdIntegration.mcfHasFinishedPromise.state() === "pending"
-                    ) {
-                        // schedule an update in case the MCF is still loading
-                        ChatdIntegration.mcfHasFinishedPromise.always(function() {
-                            Soon(function() {
-                                self.eventuallyRenderDialogs();
-                            });
-                        });
-                    }
-
-                    if (typeof megaChat !== 'undefined') {
-                        if (megaChat.plugins.chatdIntegration.isLoading() === false) {
-                            $(megaChat.plugins.chatdIntegration).rebind('onMcfLoadingDone.onboardingChat', function() {
-                                self.eventuallyRenderDialogs();
-                            });
-                        }
-                    }
-                }
+                );
             },
             function _onHideOnboardingChats(screenId) {
                 self.unregisterScreen(screenId);
@@ -793,9 +776,23 @@
     mBroadcaster.addListener('fm:initialized', function _delayedInitOnboarding() {
         if (!folderlink) {
             assert(typeof mega.ui.onboarding === 'undefined', 'unexpected onboarding initialization');
-            assert(typeof u_handle !== 'undefined', 'onboarding expects a valid user...');
 
+            if (typeof u_handle === 'undefined') {
+                console.error('onboarding expects a valid user...');
+                return;
+            }
             mega.ui.onboarding = new mega.ui.Onboarding({});
+
+            if (u_attr && u_attr.b) {
+                M.require('businessAcc_js', 'businessAccUI_js').done(function() {
+                    var business_ui = new BusinessAccountUI();
+                    if (u_attr.b.m) {
+                        business_ui.showWelcomeDialog();
+                    }
+                    // the function will check if the account is expired
+                    business_ui.showExp_GraceUIElements();
+                });
+            }
 
             // we reached our goal, stop listening for fminitialized
             return 0xDEAD;

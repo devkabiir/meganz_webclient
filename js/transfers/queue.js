@@ -89,6 +89,11 @@ MegaQueue.prototype.isEmpty = function() {
         && this._queue.length === 0;
 };
 
+MegaQueue.prototype.isFinalising = function(threshold) {
+    'use strict';
+    return this._running <= (threshold || 1) && this._queue.length === 0;
+};
+
 MegaQueue.prototype.pushFirst = function(arg, next, self) {
     if (d) {
         var found;
@@ -485,7 +490,7 @@ TransferQueue.prototype.pause = function(gid) {
             }
         }
         this._qpaused[gid] = this.slurp(gid).concat(this._qpaused[gid] || []);
-        var $tr = $('.transfer-table #' + gid);
+        var $tr = $('#' + gid);
         if ($tr.hasClass('transfer-started')) {
             $tr.find('.speed').addClass('unknown').text(l[1651]);
             $tr.find('.eta').addClass('unknown').text('');
@@ -521,7 +526,7 @@ TransferQueue.prototype.resume = function(gid) {
         if (this.isEmpty()) {
             this.dispatch(gid);
         }
-        $('.transfer-table #' + gid + ' .speed').text('');
+        $('#' + gid + ' .speed').text('');
     }
     else if (d) {
         if (!GlobalProgress[gid]) {

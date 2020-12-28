@@ -34,12 +34,16 @@ MegaData.prototype.buildtree = function(n, dialog, stype, sDeepIndex) {
     var html;
     var prefix;
     var inshares = n.h === 'shares';
+    var outshares = n.h === 'out-shares';
+    var publiclinks = n.h === 'public-links';
+    var treeType;
     var expand = function(i, e) {
         if (i) {
             e.firstElementChild.classList.add('expanded');
         }
     };
     var labelhash = [];
+    var cvtree = {};
 
     /*
      * XXX: Initially this function was designed to render new nodes only,
@@ -55,7 +59,9 @@ MegaData.prototype.buildtree = function(n, dialog, stype, sDeepIndex) {
     }
 
     stype = stype || M.currentTreeType || "cloud-drive";
-    _tf = M.filterTreePanel[stype + '-label'];
+    if (!dialog || rebuild) { // dialog should not be filtered unless it is forced.
+        _tf = M.filterTreePanel[stype + '-label'];
+    }
 
     if (!sDeepIndex) {
         sDeepIndex = 0;
@@ -64,14 +70,19 @@ MegaData.prototype.buildtree = function(n, dialog, stype, sDeepIndex) {
             console.time('buildtree');
         }
     }
-    if (n.h === M.RootID) {
+
+    if (n.h === M.RootID && !sDeepIndex) {
+        if (folderlink) {
+            n = {h: ''};
+        }
+        i = escapeHTML(n.h);
         if (typeof dialog === 'undefined') {
             if (rebuild || $('.content-panel.cloud-drive ul').length === 0) {
-                $('.content-panel.cloud-drive').html('<ul id="treesub_' + htmlentities(M.RootID) + '"></ul>');
+                $('.content-panel.cloud-drive').html('<ul id="treesub_' + i + '"></ul>');
             }
         }
         else {
-            $('.' + dialog + ' .cloud-drive .dialog-content-block').html('<ul id="mctreesub_' + htmlentities(M.RootID) + '"></ul>');
+            $('.' + dialog + ' .cloud-drive .dialog-content-block').html('<ul id="mctreesub_' + i + '"></ul>');
         }
     }
     else if (inshares) {
@@ -82,6 +93,16 @@ MegaData.prototype.buildtree = function(n, dialog, stype, sDeepIndex) {
             $('.' + dialog + ' .shared-with-me .dialog-content-block').html('<ul id="mctreesub_shares"></ul>');
         }
         stype = "shared-with-me";
+    }
+    else if (outshares) {
+        $('.content-panel.out-shares').html('<ul id="treesub_os_out-shares"></ul>');
+        stype = "out-shares";
+        cvtree = M.getOutShareTree();
+    }
+    else if (publiclinks) {
+        $('.content-panel.public-links').html('<ul id="treesub_pl_public-links"></ul>');
+        stype = "public-links";
+        cvtree = M.getPublicLinkTree();
     }
     else if (n.h === M.InboxID) {
         if (typeof dialog === 'undefined') {
@@ -101,9 +122,6 @@ MegaData.prototype.buildtree = function(n, dialog, stype, sDeepIndex) {
         }
         stype = "rubbish-bin";
     }
-    else if (folderlink) {
-        stype = "folder-link";
-    }
 
     prefix = stype;
     // Detect copy and move dialogs, make sure that right DOMtree will be sorted.
@@ -115,6 +133,12 @@ MegaData.prototype.buildtree = function(n, dialog, stype, sDeepIndex) {
         else if ($.moveDialog) {
             prefix = 'Move' + stype;
         }
+        else if ($.selectFolderDialog) {
+            prefix = 'SelectFolder' + stype;
+        }
+        else if ($.saveAsDialog) {
+            prefix = 'SaveAs' + stype;
+        }
     }
 
     var btd = d > 1;
@@ -122,14 +146,43 @@ MegaData.prototype.buildtree = function(n, dialog, stype, sDeepIndex) {
         console.group('BUILDTREE for "' + n.h + '"');
     }
 
-    if (this.tree[n.h]) {
-        var tree = this.tree[n.h];
+    if (n.h && n.h.indexOf('os_') === 0) {
+        treeType = 'os';
+        n.h = n.h.substr(3);
+    }
+    else if (n.h && n.h.indexOf('pl_') === 0) {
+        treeType = 'pl';
+        n.h = n.h.substr(3);
+    }
+
+    var tree = this.tree[n.h] || cvtree;
+
+    if (tree) {
         folders = obj_values(tree);
 
         if (inshares) {
             folders = folders
                 .filter(function(n) {
                     return !M.d[n.p];
+                });
+        }
+
+        if (outshares || publiclinks) {
+            // Remove child duplication on the tree.
+            folders = folders
+                .filter(function(n) {
+                    var folderParents = {};
+                    while (n && n.p !== M.RootID) {
+                        folderParents[n.p] = 1;
+                        n = M.d[n.p];
+                    }
+
+                    for (var i in folders) {
+                        if (folderParents[folders[i].h]) {
+                            return false;
+                        }
+                    }
+                    return true;
                 });
         }
 
@@ -147,8 +200,14 @@ MegaData.prototype.buildtree = function(n, dialog, stype, sDeepIndex) {
                 sortFn = M.sortByFavFn(sortDirection);
                 break;
             case 'created':
-                sortFn = function(a, b) {
-                    return (a.ts < b.ts ? -1 : 1) * sortDirection;
+                var type;
+
+                if (outshares || publiclinks) {
+                    type = stype;
+                }
+
+                sortFn = function (a, b) {
+                    return M.getSortByDateTimeFn(type)(a, b, sortDirection);
                 };
                 break;
             case 'label':
@@ -165,6 +224,22 @@ MegaData.prototype.buildtree = function(n, dialog, stype, sDeepIndex) {
             _sub = 'mctreesub_';
         }
 
+        // Special prefixs for Out-shares and Public links
+        var typefix = '';
+
+        if (stype === 'out-shares' || treeType === 'os') {
+            _a += 'os_';
+            _li += 'os_';
+            _sub += 'os_';
+            typefix = 'os_';
+        }
+        else if (stype === 'public-links' || treeType === 'pl') {
+            _a += 'pl_';
+            _li += 'pl_';
+            _sub += 'pl_';
+            typefix = 'pl_';
+        }
+
         if (folders.length && (node = document.getElementById(_a + n.h))) {
             // render > if new folders found on an empty folder
             if (!node.classList.contains('contains-folders')) {
@@ -179,12 +254,13 @@ MegaData.prototype.buildtree = function(n, dialog, stype, sDeepIndex) {
             containsc = this.tree[curItemHandle] || '';
             name = folders[idx].name;
 
-            if (Object(fmconfig.treenodes).hasOwnProperty(curItemHandle)) {
+            if (curItemHandle === M.RootID || Object(fmconfig.treenodes).hasOwnProperty(typefix + curItemHandle) ||
+                dialog && Object($.openedDialogNodes).hasOwnProperty(curItemHandle)) {
                 if (containsc) {
                     buildnode = true;
                 }
                 else {
-                    fmtreenode(curItemHandle, false);
+                    fmtreenode(typefix + curItemHandle, false);
                 }
             }
 
@@ -254,7 +330,7 @@ MegaData.prototype.buildtree = function(n, dialog, stype, sDeepIndex) {
                     node.setAttribute('title', titleTooltip.map(escapeHTML).join("\n"));
                 }
 
-                if (folders[idx].lbl){
+                if (folders[idx].lbl) {
                     var labelClass = M.getLabelClassFromId(folders[idx].lbl);
 
                     if (!labelClass) {
@@ -337,21 +413,6 @@ MegaData.prototype.buildtree = function(n, dialog, stype, sDeepIndex) {
             if (buildnode) {
                 M.buildtree(folders[idx], dialog, stype, sDeepIndex + 1);
             }
-
-            /**
-             * XXX: if this was really needed, add it at DOM node creation
-             * if (fminitialized) {
-             *     var currNode = M.d[curItemHandle];
-             *
-             *     if ((currNode && currNode.shares) || M.ps[curItemHandle]) {
-             *         sharedUInode(curItemHandle);
-             *     }
-             *
-             *     if (currNode && currNode.lbl) {
-             *         M.labelDomUpdate(curItemHandle, currNode.lbl);
-             *     }
-             * }
-             */
         }// END of for folders loop
 
         for (var h in labelhash) {
@@ -366,8 +427,14 @@ MegaData.prototype.buildtree = function(n, dialog, stype, sDeepIndex) {
         console.groupEnd();
     }
 
-    if (!sDeepIndex && d) {
-        console.timeEnd('buildtree');
+    if (!sDeepIndex) {
+        if (d) {
+            console.timeEnd('buildtree');
+        }
+
+        if (_ts_l) {
+            mBroadcaster.sendMessage('treesearch', _ts_l, stype);
+        }
     }
 };
 
@@ -378,33 +445,38 @@ MegaData.prototype.initTreePanelSorting = function() {
 
     var sections = [
         'folder-link', 'contacts', 'conversations', 'inbox',
-        'shared-with-me', 'cloud-drive', 'rubbish-bin' // Sorting sections for tree parts
+        'shared-with-me', 'cloud-drive', 'rubbish-bin', 'out-shares', 'public-links' // Sorting sections for tree parts
     ];
     var byType = ['name', 'status', 'last-interaction', 'label'];
+    var dialogs = ['Copy', 'Move', 'SelectFolder', 'SaveAs'];
+    var byDefault;
+    var type;
 
     $.sortTreePanel = Object.create(null);
 
+    var setSortTreePanel = function _setSortTreePanel(dialog) {
+        var key = (dialog || '') + type;
+        $.sortTreePanel[key] = {
+            by: anyOf(byType, localStorage['sort' + key + 'By']) || byDefault,
+            dir: parseInt(anyOf(['-1', '1'], localStorage['sort' + key + 'Dir']) || '1')
+        };
+    };
+
     for (var i = sections.length; i--;) {
-        var type = sections[i];
-        var byDefault = type === 'contacts' ? "status" : "name";
+        type = sections[i];
+        byDefault = type === 'contacts' ? "status" : "name";
 
-        $.sortTreePanel[type] = {
-            by: anyOf(byType, localStorage['sort' + type + 'By']) || byDefault,
-            dir: parseInt(anyOf(['-1', '1'], localStorage['sort' + type + 'Dir']) || '1')
-        };
+        setSortTreePanel();
 
-        var dlgKey = 'Copy' + type;
-        $.sortTreePanel[dlgKey] = {
-            by: anyOf(byType, localStorage['sort' + dlgKey + 'By']) || byDefault,
-            dir: parseInt(anyOf(['-1', '1'], localStorage['sort' + dlgKey + 'Dir']) || '1')
-        };
-
-        dlgKey = 'Move' + type;
-        $.sortTreePanel[dlgKey] = {
-            by: anyOf(byType, localStorage['sort' + dlgKey + 'By']) || byDefault,
-            dir: parseInt(anyOf(['-1', '1'], localStorage['sort' + dlgKey + 'Dir']) || '1')
-        };
+        dialogs.forEach(setSortTreePanel);
     }
+};
+
+MegaData.prototype.getTreePanelSortingValue = function(column, property) {
+    'use strict';
+
+    column = $.sortTreePanel && $.sortTreePanel[column] || false;
+    return column[property || 'by'];
 };
 
 var treesearch = false;
@@ -451,13 +523,19 @@ MegaData.prototype.treeSearchUI = function() {
         }); // END left panel header click
 
         // Make a search
-        $('.nw-fm-search-icon').show().rebind('click', function() {
+        !M.chat && $('.nw-fm-search-icon').show().rebind('click', function() {
             var $self = $(this);
+            var $input = $self.prev();
 
-            treesearch = false;
-            M.redrawTree();
-            $self.prev().val('');
-            $self.parent().find('input').trigger("blur");
+            if ($input.val() === '') {
+                $input.trigger('focus');
+            }
+            else {
+                treesearch = false;
+                M.redrawTree();
+                $input.val('');
+                $input.trigger('blur').trigger('cleared');
+            }
         });
 
         $('.nw-fm-tree-header input')
@@ -570,6 +648,7 @@ MegaData.prototype.treeSortUI = function() {
         var sortTreePanel;
         var $sortMenuItems;
         var dir;
+        var sortMenuPos;
 
         // Show sort menu
         if (!$self.hasClass('active')) {
@@ -586,9 +665,10 @@ MegaData.prototype.treeSortUI = function() {
                 type = M.lastActiveTab || 'cloud-drive';
             }
 
+            menu.find('.sorting-item-divider,.dropdown-item').removeClass('hidden');
+
             // Show only contacts related sorting options
             if (type === 'contacts') {
-                menu.find('.sorting-item-divider,.dropdown-item').removeClass('hidden');
                 menu.find('*[data-by=fav],*[data-by=created],*[data-by=label]').addClass('hidden');
                 menu.find('.dropdown-section.labels').addClass('hidden');
                 menu.find('hr').addClass('hidden');
@@ -596,14 +676,32 @@ MegaData.prototype.treeSortUI = function() {
 
             }
             else { // Hide status and last-interaction sorting options in sort dialog
-                menu.find('.sorting-item-divider,.dropdown-item').removeClass('hidden');
                 menu.find('*[data-by=status],*[data-by=last-interaction]').addClass('hidden');
                 menu.find('hr').removeClass('hidden');
                 menu.find('.dropdown-section.labels').removeClass('hidden');
                 menu.find('.filter-by').removeClass('hidden');
             }
 
-            menu.css('right', '-' + (menu.outerWidth() - 3) + 'px');
+            if (type === 'shared-with-me') {
+                menu.find('*[data-by=created]').addClass('hidden');
+            }
+
+            sortMenuPos = $self.offset().top - 9;
+
+            if (sortMenuPos < 3) {
+                sortMenuPos = 3;
+                menu.find('.dropdown-dark-arrow').css({
+                    'top': $self.offset().top - sortMenuPos + 1
+                });
+            }
+            else {
+                menu.find('.dropdown-dark-arrow').removeAttr('style');
+            }
+
+            menu.css({
+                'top': sortMenuPos,
+                'right': '-' + (menu.outerWidth() - 3) + 'px'
+            });
 
             sortTreePanel = $.sortTreePanel[type];
 
@@ -713,8 +811,8 @@ MegaData.prototype.treeSortUI = function() {
 MegaData.prototype.treePanelType = function() {
     'use strict';
 
-    var remove = /(?:active|nw-fm-left-icon|ui-droppable|filled|glow|asc|desc)/g;
-    return $.trim($('.nw-fm-left-icon.active').attr('class').replace(remove, ''));
+    var remove = /active|nw-fm-left-icon|ui-droppable|filled|glow|asc|desc/g;
+    return $.trim(String($('.nw-fm-left-icon.active').attr('class') || 'unknown').replace(remove, ''));
 };
 
 /**
@@ -736,7 +834,7 @@ MegaData.prototype.redrawTree = function(f) {
         force = undefined;
     }
 
-    if (M.currentrootid === M.RootID || M.currentdirid.match("^search/")) {
+    if (M.currentrootid === M.RootID || String(M.currentdirid).match("^search/")) {
         M.buildtree(M.d[M.RootID], force);
     }
     if (M.currentrootid === M.InboxID) {
@@ -748,11 +846,14 @@ MegaData.prototype.redrawTree = function(f) {
     else if (M.currentrootid === 'shares') {
         M.buildtree({h: 'shares'}, force);
     }
+    else if (M.currentrootid === 'out-shares') {
+        M.buildtree({h: 'out-shares'}, force);
+    }
+    else if (M.currentrootid === 'public-links') {
+        M.buildtree({h: 'public-links'}, force);
+    }
     else if (M.currentrootid === 'contacts' || M.currentrootid === 'opc' || M.currentrootid === 'ipc') {
         M.contacts();
-    }
-    else if (M.currentrootid === 'chat') {
-        console.log('render the entire contact list filtered by search query into the conversations list');
     }
     M.addTreeUI();
     $('.nw-fm-tree-item').noTransition(function() {
@@ -796,10 +897,428 @@ MegaData.prototype.isLabelExistTree = function(handle) {
     handle = handle ? handle : M.currentrootid;
     var ct = M.tree[handle];
 
+    if (handle === 'out-shares') {
+        ct = M.getOutShareTree();
+    }
+    else if (handle === 'public-links') {
+        ct = M.getPublicLinkTree();
+    }
+
     for (var h in ct) {
         if (ct[h].lbl > 0 || (M.tree[h] && M.isLabelExistTree(h))) {
             return true;
         }
     }
     return false;
+};
+
+/**
+ * Create tree of public-link's children. Same structure as M.tree
+ * @return {Object}
+ */
+MegaData.prototype.getPublicLinkTree = function() {
+
+    'use strict';
+
+    var pltree = {};
+    for (var h in M.su.EXP) {
+        if (M.d[h].t) {
+            pltree[h] = Object.assign({}, M.d[h]);
+            pltree[h].t = this.getTreeValue(M.d[h]);
+        }
+    }
+    return pltree;
+};
+
+/**
+ * Create tree of out-share's children. Same structure as M.tree
+ * @return {Object}
+ */
+MegaData.prototype.getOutShareTree = function() {
+
+    'use strict';
+
+    var ostree = {};
+    for (var suh in M.su) {
+        if (suh !== 'EXP') {
+            for (var h in M.su[suh]) {
+                if (M.d[h]) {
+                    ostree[h] = Object.assign({}, M.d[h]);
+                    ostree[h].t = this.getTreeValue(M.d[h]);
+                }
+            }
+        }
+    }
+    return ostree;
+};
+
+/**
+ * Get t value of custom view trees
+ * @return {MegaNode} An ufs-node
+ */
+MegaData.prototype.getTreeValue = function(n) {
+
+    'use strict';
+
+    var t = n.t;
+    if (n.fav) {
+        t |= M.IS_FAV;
+    }
+    if (M.su.EXP && M.su.EXP[n.h]) {
+        t |= M.IS_LINKED;
+    }
+    if (M.getNodeShareUsers(n, 'EXP').length || M.ps[n.h]) {
+        t |= M.IS_SHARED;
+    }
+    if (M.getNodeShare(n).down === 1) {
+        t |= M.IS_TAKENDOWN;
+    }
+    return t;
+};
+
+/**
+ * Initializes tree panel
+ */
+MegaData.prototype.addTreeUI = function() {
+    "use strict";
+
+    if (d) {
+        console.time('treeUI');
+    }
+    var $treePanel = $('.fm-tree-panel');
+    var $treeItem = $(folderlink ? '.nw-fm-tree-item' : '.nw-fm-tree-item:visible', $treePanel);
+
+    $treeItem.draggable(
+        {
+            revert: true,
+            containment: 'document',
+            revertDuration: 200,
+            distance: 10,
+            scroll: false,
+            cursorAt: {right: 88, bottom: 58},
+            helper: function(e, ui) {
+                $(this).draggable("option", "containment", [72, 42, $(window).width(), $(window).height()]);
+                return M.getDDhelper();
+            },
+            start: function(e, ui) {
+                $.treeDragging = true;
+                $.hideContextMenu(e);
+                var html = '';
+                var id = $(e.target).attr('id');
+                if (id) {
+                    id = id.replace(/treea_+|(os_|pl_)/g, '');
+                }
+                if (id && M.d[id]) {
+                    html = (
+                        '<div class="transfer-filetype-icon ' + fileIcon(M.d[id]) + '"></div>' +
+                        '<div class="tranfer-filetype-txt dragger-entry">' +
+                        str_mtrunc(htmlentities(M.d[id].name)) + '</div>'
+                    );
+                }
+                $('#draghelper .dragger-icon').remove();
+                $('#draghelper .dragger-content').html(html);
+                $('body').addClass('dragging');
+                $.draggerHeight = $('#draghelper .dragger-content').outerHeight();
+                $.draggerWidth = $('#draghelper .dragger-content').outerWidth();
+            },
+            drag: function(e, ui) {
+                //console.log('tree dragging',e);
+                if (ui.position.top + $.draggerHeight - 28 > $(window).height()) {
+                    ui.position.top = $(window).height() - $.draggerHeight + 26;
+                }
+                if (ui.position.left + $.draggerWidth - 58 > $(window).width()) {
+                    ui.position.left = $(window).width() - $.draggerWidth + 56;
+                }
+            },
+            stop: function(e, u) {
+                $.treeDragging = false;
+                $('body').removeClass('dragging').removeClassWith("dndc-");
+            }
+        });
+
+    $(
+        '.fm-tree-panel .nw-fm-tree-item,' +
+        '.rubbish-bin,' +
+        '.fm-breadcrumbs,' +
+        '.nw-fm-left-icons-panel .nw-fm-left-icon,' +
+        '.shared-with-me tr,' +
+        '.nw-conversations-item,' +
+        'ul.conversations-pane > li,' +
+        '.messages-block'
+    ).filter(":visible").droppable({
+        tolerance: 'pointer',
+        drop: function(e, ui) {
+            $.doDD(e, ui, 'drop', 1);
+        },
+        over: function(e, ui) {
+            $.doDD(e, ui, 'over', 1);
+        },
+        out: function(e, ui) {
+            $.doDD(e, ui, 'out', 1);
+        }
+    });
+
+    $treeItem.rebind('click.treeUI, contextmenu.treeUI', function(e) {
+
+        var $this = $(this);
+        var id = $this.attr('id').replace('treea_', '');
+        var tmpId = id;
+        var cv = M.isCustomView(id);
+
+        id = cv ? cv.nodeID : id;
+
+        if (e.type === 'contextmenu') {
+            $('.nw-fm-tree-item').removeClass('dragover');
+            $this.addClass('dragover');
+
+            var $uls = $this.parents('ul').find('.selected');
+
+            if ($uls.length > 1) {
+                $.selected = $uls.attrs('id')
+                    .map(function(id) {
+                        return id.replace(/treea_+|(os_|pl_)/g, '');
+                    });
+            }
+            else {
+                $.selected = [id];
+
+                Soon(function() {
+                    $this.addClass('hovered');
+                });
+            }
+            return !!M.contextMenuUI(e, 1);
+        }
+
+        var $target = $(e.target);
+        if ($target.hasClass('nw-fm-arrow-icon')) {
+            M.onTreeUIExpand(tmpId);
+        }
+        else if (e.shiftKey) {
+            $this.addClass('selected');
+        }
+        else {
+            // plain click, remove all .selected from e.shiftKey
+            $('#treesub_' + M.currentrootid + ' .nw-fm-tree-item').removeClass('selected');
+            $this.addClass('selected');
+
+            if ($target.hasClass('opened')) {
+                M.onTreeUIExpand(tmpId);
+            }
+            if (e.ctrlKey) {
+                $.ofShowNoFolders = true;
+            }
+
+            id = cv ? cv.prefixPath + id : id;
+
+            M.openFolder(id, e.ctrlKey);
+        }
+
+        return false;
+    });
+
+    $('.nw-contact-item', $treePanel).rebind('contextmenu.treeUI', function(e) {
+        var $self = $(this);
+
+        if (!$self.hasClass('selected')) {
+            $('.content-panel.contacts .nw-contact-item.selected').removeClass('selected');
+            $self.addClass('selected');
+        }
+
+        $.selected = [$self.attr('id').replace('contact_', '')];
+        M.searchPath();
+        $.hideTopMenu();
+
+        return Boolean(M.contextMenuUI(e, 1));
+    });
+
+    /**
+     * Let's shoot two birds with a stone, when nodes are moved we need a resize
+     * to let dynlist refresh - plus, we'll implicitly invoke initTreeScroll.
+     */
+    $(window).trigger('resize');
+
+    if (d) {
+        console.timeEnd('treeUI');
+    }
+};
+
+/**
+ * Invokes debounced tree panel initialization.
+ */
+MegaData.prototype.addTreeUIDelayed = function(ms) {
+    'use strict';
+
+    delay('treeUI', function() {
+        M.addTreeUI();
+    }, ms || 30);
+};
+
+/**
+ * Handles expanding of tree panel elements.
+ * @param {String} id An ufs-node's handle
+ * @param {Boolean} [force]
+ */
+MegaData.prototype.onTreeUIExpand = function(id, force) {
+    "use strict";
+
+    this.buildtree({h: id});
+
+    var $tree = $('#treea_' + id);
+
+    if ($tree.hasClass('expanded') && !force) {
+        fmtreenode(id, false);
+        $('#treesub_' + id).removeClass('opened');
+        $tree.removeClass('expanded');
+    }
+    else if ($tree.hasClass('contains-folders')) {
+        fmtreenode(id, true);
+        $('#treesub_' + id).addClass('opened')
+            .find('.tree-item-on-search-hidden')
+            .removeClass('tree-item-on-search-hidden');
+        $tree.addClass('expanded');
+    }
+
+    M.addTreeUIDelayed();
+};
+
+/**
+ * Handles opening of tree panel elemement.
+ * @param {String} id An ufs-node's handle
+ * @param {Object} [event] Event triggering action
+ * @param {Boolean} [ignoreScroll] Whether scroll element into view.
+ */
+MegaData.prototype.onTreeUIOpen = function(id, event, ignoreScroll) {
+    "use strict";
+
+    id = String(id);
+    var id_r = this.getNodeRoot(id);
+    var id_s = id.split('/')[0];
+    var e, scrollTo = false, stickToTop = false;
+    if (d) {
+        console.log("treeUIopen", id);
+    }
+
+    if (id_r === 'shares') {
+        this.onSectionUIOpen('shared-with-me');
+    }
+    else if (id_r === 'out-shares') {
+        this.onSectionUIOpen('out-shares');
+    }
+    else if (id_r === 'public-links') {
+        this.onSectionUIOpen('public-links');
+    }
+    else if (this.InboxID && id_r === this.InboxID) {
+        this.onSectionUIOpen('inbox');
+    }
+    else if (id_r === this.RootID) {
+        this.onSectionUIOpen('cloud-drive');
+    }
+    else if (id_s === 'chat') {
+        this.onSectionUIOpen('conversations');
+    }
+    else if (id_r === 'contacts') {
+        this.onSectionUIOpen('contacts');
+    }
+    else if (id_r === 'ipc') {
+        this.onSectionUIOpen('ipc');
+    }
+    else if (id_r === 'opc') {
+        this.onSectionUIOpen('opc');
+    }
+    else if (id_s === 'user-management') {
+        this.onSectionUIOpen('user-management');
+    }
+    else if (id_r === 'account') {
+        this.onSectionUIOpen('account');
+    }
+    else if (id_r === 'dashboard') {
+        this.onSectionUIOpen('dashboard');
+    }
+    else if (this.RubbishID && id_r === this.RubbishID) {
+        this.onSectionUIOpen('rubbish-bin');
+    }
+    else if (id_s === 'transfers') {
+        this.onSectionUIOpen('transfers');
+    }
+    else if (id_s === 'recents') {
+        this.onSectionUIOpen('recents');
+    }
+
+    if (!fminitialized) {
+        return false;
+    }
+
+    if (!event) {
+        var ids = this.getPath(id);
+        var i = 1;
+        while (i < ids.length) {
+            if (this.d[ids[i]] && ids[i].length === 8) {
+                if (id_r === 'out-shares') {
+                    this.onTreeUIExpand('os_' + ids[i], 1);
+                }
+                else if (id_r === 'public-links') {
+                    this.onTreeUIExpand('pl_' + ids[i], 1);
+                }
+                else {
+                    this.onTreeUIExpand(ids[i], 1);
+                }
+            }
+            i++;
+        }
+        if (
+            (ids[0] === 'contacts')
+            && this.currentdirid
+            && (String(this.currentdirid).length === 11)
+            && (this.currentrootid === 'contacts')
+        ) {
+            this.onSectionUIOpen('contacts');
+        }
+        else if (ids[0] === 'contacts') {
+            // XX: whats the goal of this? everytime when i'm in the contacts and I receive a share, it changes ONLY the
+            // UI tree -> Shared with me... its a bug from what i can see and i also don't see any points of automatic
+            // redirect in the UI when another user had sent me a shared folder.... its very bad UX. Plus, as a bonus
+            // sectionUIopen is already called with sectionUIopen('contacts') few lines before this (when this func
+            // is called by the renderNew()
+
+            // sectionUIopen('shared-with-me');
+        }
+        else if (ids[0] === this.RootID) {
+            this.onSectionUIOpen('cloud-drive');
+        }
+    }
+    if ($.hideContextMenu) {
+        $.hideContextMenu(event);
+    }
+
+    if (id_r === 'out-shares') {
+        e = $('#treea_os_' + id.split('/')[1]);
+    }
+    else if (id_r === 'public-links') {
+        e = $('#treea_pl_' + id.split('/')[1]);
+    }
+    else {
+        e = $('#treea_' + id_s);
+    }
+
+    $('.fm-tree-panel .nw-fm-tree-item').removeClass('selected');
+    e.addClass('selected');
+
+    if (!ignoreScroll) {
+        if (id === this.RootID || id === 'shares' || id === 'contacts' || id === 'chat' || id === 'opc' || id === 'ipc') {
+            stickToTop = true;
+            scrollTo = $('.nw-tree-panel-header');
+        }
+        else if (e.length && !e.visible()) {
+            scrollTo = e;
+        }
+        // if (d) console.log('scroll to element?',ignoreScroll,scrollTo,stickToTop);
+
+        var jsp = scrollTo && $('.fm-tree-panel').data('jsp');
+        if (jsp) {
+            setTimeout(function() {
+                jsp.scrollToElement(scrollTo, stickToTop);
+            }, 50);
+        }
+    }
+    this.addTreeUIDelayed();
 };

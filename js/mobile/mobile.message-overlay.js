@@ -5,52 +5,106 @@ mobile.messageOverlay = {
 
     /**
      * Shows the error overlay
-     * @param {String} firstMessage The main message to be displayed
-     * @param {String} optionalSecondMessage An optional second message to be displayed after the first
-     * @param {Function} optionalSuccessCallback An optional success callback to be run after they confirm OK
-     * @param {Function} optionalFailureCallback An optional failure callback to be run after they click Close
+     * @param {String} message The main message to be displayed
+     * @param {String} [subMessage] An optional second message to be displayed after the first
+     * @param {Function} [onSuccess] An optional success callback to be run after they confirm OK
+     * @param {Function} [onFailure] An optional failure callback to be run after they click Close
+     * @param {String} [icon] An optional class name to show an icon, empty-icon classes can be found in mobile.css
+     * @param {String} [buttons] An optional second button in place of text-link close
      */
-    show: function(firstMessage, optionalSecondMessage, optionalSuccessCallback, optionalFailureCallback) {
-
+    show: function(message, subMessage, onSuccess, onFailure, icon, buttons) {
         'use strict';
 
         // Cache selectors
         var $overlay = $('#mobile-ui-error');
         var $firstMessage = $overlay.find('.first-message');
         var $optionalSecondMessage = $overlay.find('.optional-second-message');
+        var $iconElement = $('.mobile.empty-icon', $overlay).attr('class', 'mobile empty-icon hidden');
+        var $buttons = $('.buttons', $overlay).removeClass('inline-buttons');
         var $fileManagerHolder = $('.mobile .fmholder');
+        var promise = new MegaPromise();
+        var reject = function() {
+            // Hide overlay with download button options
+            $overlay.addClass('hidden');
+            $fileManagerHolder.removeClass('no-scroll');
 
-        // Set the first message
-        $firstMessage.text(firstMessage);
+            // Run the callback
+            if (typeof onFailure === 'function') {
+                onFailure();
+            }
 
-        // If there is a second message, set that
-        if (typeof optionalSecondMessage !== 'undefined' && optionalSecondMessage) {
-            $optionalSecondMessage.text(optionalSecondMessage);
+            onIdle(function() {
+                promise.reject();
+            });
+            return false;
+        };
+
+        $('input').blur();
+
+        if (typeof onSuccess === 'string') {
+            icon = onSuccess;
+            onSuccess = null;
+        }
+        if (!buttons && typeof onFailure !== 'function') {
+            buttons = onFailure;
+            onFailure = null;
         }
 
-        // Initialise the OK/close button
-        this.initConfirmOkButton($overlay, $fileManagerHolder, optionalSuccessCallback);
-        this.initOverlayCloseButton($overlay, $fileManagerHolder, optionalFailureCallback);
+        // Clear old messages
+        $firstMessage.empty();
+        $optionalSecondMessage.empty();
+        $('.third span', $overlay).text(l[148]);
+
+        // If the close button is needed, unhide the button
+        var $closeButton = $overlay.find('.fm-dialog-close, .text-button.cancel');
+        if (typeof onFailure === 'function') {
+            $closeButton.removeClass('hidden');
+        }
+
+        // Add tap handler
+        $closeButton.rebind('tap', reject);
+
+        // Set the first message
+        $firstMessage.safeHTML(message);
+
+        // If there is a second message, set that
+        if (typeof subMessage === 'string' && subMessage.length) {
+            $optionalSecondMessage.safeHTML(subMessage);
+        }
+
+        // set image icon, if any
+        if (icon) {
+            $iconElement.removeClass('hidden').addClass(icon);
+        }
+
+        // set additional button, if any
+        if (buttons) {
+            var okButton = l[1596];
+            var cancelButton = buttons;
+            if (Array.isArray(buttons)) {
+                okButton = buttons[1];
+                cancelButton = buttons[0];
+            }
+            $('.text-button.cancel', $overlay).addClass('hidden');
+
+            $buttons.addClass('inline-buttons')
+                .find('.first').removeClass('red-button').addClass('green-button').text(okButton).end()
+                .find('.second').removeClass('hidden').rebind('tap', reject).find('span').text(cancelButton);
+        }
+        else {
+            $buttons.removeClass('inline-buttons')
+                .find('.first').addClass('red-button').removeClass('green-button').text(l[1596]).end()
+                .find('.second').addClass('hidden');
+        }
 
         // Show the error overlay and prevent scrolling behind
         $overlay.removeClass('hidden');
         $fileManagerHolder.addClass('no-scroll');
-    },
 
-    /**
-     * Initialise the OK button to close the error overlay
-     * @param {Object} $overlay A cached selector for the error overlay
-     * @param {Object} $fileManagerHolder A cached selector for the file manager/My Account block behind the overlay
-     * @param {Function} optionalSuccessCallback An optional success callback to be run after they confirm OK
-     */
-    initConfirmOkButton: function($overlay, $fileManagerHolder, optionalSuccessCallback) {
+        mobile.initOverlayPopstateHandler($overlay);
 
-        'use strict';
-
-        var $okButton = $overlay.find('.confirm-ok-button');
-
-        // Add click/tap handler
-        $okButton.off('tap').on('tap', function() {
+        // Initialise the OK/close button
+        $('.confirm-ok-button', $overlay).rebind('tap.ok', function() {
 
             // Hide the error overlay
             $overlay.addClass('hidden');
@@ -62,40 +116,18 @@ mobile.messageOverlay = {
             }
 
             // Run the success callback if requested
-            if (typeof optionalSuccessCallback === 'function') {
-                optionalSuccessCallback();
+            if (typeof onSuccess === 'function') {
+                onSuccess();
             }
+
+            onIdle(function() {
+                promise.resolve();
+            });
 
             // Prevent clicking behind
             return false;
         });
-    },
 
-    /**
-     * Initialises the close button on the generic mobile ui error overlay
-     * @param {Object} $overlay A cached selector for the error overlay
-     * @param {Object} $fileManagerHolder A cached selector for the file manager/My Account block behind the overlay
-     * @param {Function} optionalFailureCallback An optional failure callback to be run after they click Close
-     */
-    initOverlayCloseButton: function($overlay, $fileManagerHolder, optionalFailureCallback) {
-
-        'use strict';
-
-        var $closeButton = $overlay.find('.fm-dialog-close, .text-button');
-
-        // Add tap handler
-        $closeButton.off('tap').on('tap', function() {
-
-            // Hide overlay with download button options
-            $overlay.addClass('hidden');
-            $fileManagerHolder.removeClass('no-scroll');
-
-            // Run the failure callback if requested
-            if (typeof optionalFailureCallback === 'function') {
-                optionalFailureCallback();
-            }
-
-            return false;
-        });
+        return promise;
     }
 };

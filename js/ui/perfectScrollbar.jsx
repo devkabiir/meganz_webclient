@@ -1,65 +1,84 @@
 var React = require("react");
-var ReactDOM = require("react-dom");
+import {MegaRenderMixin, SoonFcWrap} from "../stores/mixins.js";
 
-var MegaRenderMixin = require("../stores/mixins.js").MegaRenderMixin;
-var x = 0;
 /**
  * perfect-scrollbar React helper
  * @type {*|Function}
  */
-var PerfectScrollbar = React.createClass({
-    mixins: [MegaRenderMixin],
-    isUserScroll: true,
-    scrollEventIncId: 0,
-    getDefaultProps: function() {
-        return {
-            className: "perfectScrollbarContainer",
-            requiresUpdateOnResize: true
-        };
-    },
-    doProgramaticScroll: function(newPos, forced, isX) {
-        var self = this;
-        var $elem = $(ReactDOM.findDOMNode(self));
-        var animFrameInner = false;
+export class PerfectScrollbar extends MegaRenderMixin {
+    static defaultProps = {
+        className: "perfectScrollbarContainer",
+        requiresUpdateOnResize: true
+    };
 
-        var prop = !isX ? 'scrollTop' : 'scrollLeft';
+    constructor(props) {
+        super(props);
 
-        if (!forced && $elem[0] && $elem[0][prop] === newPos) {
+        this.isUserScroll = true;
+        this.scrollEventIncId = 0;
+    }
+
+    get$Node() {
+        if (!this.$Node) {
+            this.$Node = $(this.findDOMNode());
+        }
+        return this.$Node;
+    }
+
+    doProgramaticScroll(newPos, forced, isX, skipReinitialised) {
+        if (!this.isMounted()) {
             return;
         }
+        // console.error("%s.doProgramaticScroll", this.getReactId(), newPos, forced, isX, skipReinitialised, [this]);
 
-        var idx = self.scrollEventIncId++;
+        var self = this;
+        var $elem = self.get$Node();
+        var animFrameInner = false;
+        var prop = !isX ? 'scrollTop' : 'scrollLeft';
+        var event = 'scroll.progscroll' + self.scrollEventIncId++;
 
-        $elem.rebind('scroll.progscroll' + idx, (function (idx, e) {
+        $elem.rebind(event, () => {
             if (animFrameInner) {
                 cancelAnimationFrame(animFrameInner);
                 animFrameInner = false;
             }
-            $elem.off('scroll.progscroll' + idx);
+            $elem.off(event);
+
+            if (!skipReinitialised) {
+                self.reinitialised(true);
+            }
+            else if (typeof skipReinitialised === 'function') {
+                onIdle(skipReinitialised);
+            }
+
             self.isUserScroll = true;
-        }).bind(this, idx));
+        });
 
         // do the actual scroll
         self.isUserScroll = false;
-        $elem[0][prop] = newPos;
+        $elem[0][prop] = Math.round(newPos);
         Ps.update($elem[0]);
 
         // reset the flag on next re-paint of the browser
-        animFrameInner = requestAnimationFrame(function (idx) {
+        animFrameInner = requestAnimationFrame(() => {
             animFrameInner = false;
             self.isUserScroll = true;
-            $elem.off('scroll.progscroll' + idx);
-        }.bind(this, idx));
-    },
-    componentDidMount: function() {
+            $elem.off(event);
+        });
+
+        return true;
+    }
+    componentDidMount() {
+        super.componentDidMount();
         var self = this;
-        var $elem = $(ReactDOM.findDOMNode(self));
+        var $elem = self.get$Node();
 
         $elem.height('100%');
 
 
-        var options = $.extend({}, {
-            'handlers': ['click-rail', 'drag-scrollbar', 'keyboard', 'wheel', 'touch', 'selection']
+        var options = Object.assign({}, {
+            'handlers': ['click-rail', 'drag-scrollbar', 'keyboard', 'wheel', 'touch', 'selection'],
+            'minScrollbarLength': 20
         }, self.props.options);
 
         Ps.initialize($elem[0], options);
@@ -97,221 +116,225 @@ var PerfectScrollbar = React.createClass({
             self.onResize(forced, scrollPositionYPerc, scrollToElement);
         });
         self.onResize();
-    },
-    componentWillUnmount: function() {
-        var $elem = $(ReactDOM.findDOMNode(this));
+        this.attachAnimationEvents();
+    }
+    componentWillUnmount() {
+        super.componentWillUnmount();
+        var $elem = this.get$Node();
         $elem.off('ps-scroll-y.ps' + this.getUniqueId());
-    },
-    eventuallyReinitialise: function(forced, scrollPositionYPerc, scrollToElement) {
+
+        var ns = '.ps' + this.getUniqueId();
+        $elem.parents('.have-animation')
+            .unbind('animationend' + ns +' webkitAnimationEnd' + ns + ' oAnimationEnd' + ns);
+
+    }
+    attachAnimationEvents() {
+        // var self = this;
+        // if (!self.isMounted()) {
+        //     return;
+        // }
+
+        // var $haveAnimationNode = self._haveAnimNode;
+        //
+        // if (!$haveAnimationNode) {
+        //     var $node = self.get$Node();
+        //     var ns = '.ps' + self.getUniqueId();
+        //     $haveAnimationNode = self._haveAnimNode = $node.parents('.have-animation');
+        // }
+
+        // $haveAnimationNode.rebind('animationend' + ns +' webkitAnimationEnd' + ns + ' oAnimationEnd' + ns,
+        //     function(e) {
+        //         self.safeForceUpdate(true);
+        //         if (self.props.onAnimationEnd) {
+        //             self.props.onAnimationEnd();
+        //         }
+        //     });
+    }
+    @SoonFcWrap(30, true)
+    eventuallyReinitialise(forced, scrollPositionYPerc, scrollToElement) {
         var self = this;
 
-        if (!self.isMounted()) {
-            return;
-        }
         if (!self.isComponentEventuallyVisible()) {
             return;
         }
 
-        var $elem = $(self.findDOMNode());
+        var $elem = self.get$Node();
 
-        if (forced || self._currHeight != self.getContentHeight()) {
-            self._currHeight = self.getContentHeight();
+        var h = self.getContentHeight();
+        if (forced || self._currHeight !== h) {
+            self._currHeight = h;
             self._doReinit(scrollPositionYPerc, scrollToElement, forced, $elem);
         }
-    },
-    _doReinit: function(scrollPositionYPerc, scrollToElement, forced, $elem) {
-        var self = this;
-
-        if (!self.isMounted()) {
-            return;
-        }
-        if (!self.isComponentEventuallyVisible()) {
-            return;
+    }
+    _doReinit(scrollPositionYPerc, scrollToElement, forced, $elem) {
+        var fired = false;
+        if (this.props.onReinitialise) {
+            fired = this.props.onReinitialise(this, $elem, forced, scrollPositionYPerc, scrollToElement);
         }
 
-        // triggers an
-        self.doProgramaticScroll($elem[0].scrollTop, true);
-
-        var manualReinitialiseControl = false;
-        if (self.props.onReinitialise) {
-            manualReinitialiseControl = self.props.onReinitialise(
-                self,
-                $elem,
-                forced,
-                scrollPositionYPerc,
-                scrollToElement
-            );
-        }
-
-        if (manualReinitialiseControl === false) {
+        if (fired === false) {
             if (scrollPositionYPerc) {
                 if (scrollPositionYPerc === -1) {
-                    self.scrollToBottom(true);
+                    this.scrollToBottom(true);
                 }
                 else {
-                    self.scrollToPercentY(scrollPositionYPerc, true);
+                    this.scrollToPercentY(scrollPositionYPerc, true);
                 }
             }
             else if (scrollToElement) {
-                self.scrollToElement(scrollToElement, true);
+                this.scrollToElement(scrollToElement, true);
             }
         }
-    },
-    scrollToBottom: function(skipReinitialised) {
-        this.doProgramaticScroll(9999999);
+    }
 
-        if (!skipReinitialised) {
-            this.reinitialised(true);
-        }
-    },
-    reinitialise: function(skipReinitialised) {
-        var $elem = $(this.findDOMNode());
+    scrollToBottom(skipReinitialised) {
+        this.reinitialise(skipReinitialised, true);
+    }
+
+    reinitialise(skipReinitialised, bottom) {
+        var $elem = this.get$Node()[0];
         this.isUserScroll = false;
-        Ps.update($elem[0]);
+        if (bottom) {
+            $elem.scrollTop = this.getScrollHeight();
+        }
+        Ps.update($elem);
         this.isUserScroll = true;
 
         if (!skipReinitialised) {
             this.reinitialised(true);
         }
-    },
-    getScrollHeight: function() {
-        var $elem = $(this.findDOMNode());
-        var outerHeightContainer = $elem.children(":first").outerHeight();
-        var outerHeightScrollable = $elem.outerHeight();
+    }
 
-        var res = outerHeightContainer - outerHeightScrollable;
+    getDOMRect(node) {
+        return (node || this.get$Node()[0]).getBoundingClientRect();
+    }
 
-        if (res <= 0) {
+    getScrollOffset(value) {
+        var $elem = this.get$Node()[0];
+        return this.getDOMRect($elem.children[0])[value] - this.getDOMRect($elem)[value] || 0;
+    }
+
+    getScrollHeight() {
+        var res = this.getScrollOffset('height');
+
+        if (res < 1) {
             // can happen if the element is now hidden.
-            return this._lastKnownScrollHeight ? this._lastKnownScrollHeight : 0;
+            return this._lastKnownScrollHeight || 0;
         }
         this._lastKnownScrollHeight = res;
         return res;
-    },
-    getScrollWidth: function() {
-        var $elem = $(this.findDOMNode());
-        var outerWidthContainer = $elem.children(":first").outerWidth();
-        var outerWidthScrollable = $elem.outerWidth();
+    }
+    getScrollWidth() {
+        var res = this.getScrollOffset('width');
 
-        var res = outerWidthContainer - outerWidthScrollable;
-
-        if (res <= 0) {
+        if (res < 1) {
             // can happen if the element is now hidden.
-            return this._lastKnownScrollWidth ? this._lastKnownScrollWidth : 0;
+            return this._lastKnownScrollWidth || 0;
         }
         this._lastKnownScrollWidth = res;
         return res;
-    },
-    getContentHeight: function() {
-        var $elem = $(this.findDOMNode());
-        return $elem.children(":first").outerHeight();
-    },
-    isAtTop: function() {
-        return this.findDOMNode().scrollTop === 0;
-    },
-    isAtBottom: function() {
-        return this.findDOMNode().scrollTop === this.getScrollHeight();
-    },
-    isCloseToBottom: function(minPixelsOff) {
+    }
+    getContentHeight() {
+        var $elem = this.get$Node();
+        return $elem[0].scrollHeight;
+    }
+    setCssContentHeight(h) {
+        var $elem = this.get$Node();
+        return $elem.css('height', h);
+    }
+    isAtTop() {
+        return this.get$Node()[0].scrollTop === 0;
+    }
+    isAtBottom() {
+        return Math.round(this.getScrollPositionY()) === Math.round(this.getScrollHeight());
+    }
+    isCloseToBottom(minPixelsOff) {
         return (this.getScrollHeight() - this.getScrollPositionY()) <= minPixelsOff;
-    },
-    getScrolledPercentY: function() {
-        return 100/this.getScrollHeight() * this.findDOMNode().scrollTop;
-    },
-    getScrollPositionY: function() {
-        return this.findDOMNode().scrollTop;
-    },
-    scrollToPercentY: function(posPerc, skipReinitialised) {
-        var $elem = $(this.findDOMNode());
+    }
+    getScrolledPercentY() {
+        return 100 / this.getScrollHeight() * this.getScrollPositionY();
+    }
+    getScrollPositionY() {
+        return this.get$Node()[0].scrollTop;
+    }
+    scrollToPercentY(posPerc, skipReinitialised) {
+        var $elem = this.get$Node();
         var targetPx = this.getScrollHeight()/100 * posPerc;
         if ($elem[0].scrollTop !== targetPx) {
-            this.doProgramaticScroll(targetPx);
-
-            if (!skipReinitialised) {
-                this.reinitialised(true);
-            }
+            this.doProgramaticScroll(targetPx, 0, 0, skipReinitialised);
         }
-    },
-    scrollToPercentX: function(posPerc, skipReinitialised) {
-        var $elem = $(this.findDOMNode());
+    }
+    scrollToPercentX(posPerc, skipReinitialised) {
+        var $elem = this.get$Node();
         var targetPx = this.getScrollWidth()/100 * posPerc;
         if ($elem[0].scrollLeft !== targetPx) {
-            this.doProgramaticScroll(targetPx, false, true);
-            if (!skipReinitialised) {
-                this.reinitialised(true);
-            }
+            this.doProgramaticScroll(targetPx, false, true, skipReinitialised);
         }
-    },
-    scrollToY: function(posY, skipReinitialised) {
-        var $elem = $(this.findDOMNode());
+    }
+    scrollToY(posY, skipReinitialised) {
+        var $elem = this.get$Node();
         if ($elem[0].scrollTop !== posY) {
-            this.doProgramaticScroll(posY);
-
-            if (!skipReinitialised) {
-                this.reinitialised(true);
-            }
+            this.doProgramaticScroll(posY, 0, 0, skipReinitialised);
         }
-    },
-    scrollToElement: function(element, skipReinitialised) {
-        var $elem = $(this.findDOMNode());
-        if (!element || !element.offsetTop) {
-            return;
+    }
+    scrollToElement(element, skipReinitialised) {
+        if (element && element.offsetParent) {
+            this.doProgramaticScroll(element.offsetTop, 0, 0, skipReinitialised);
         }
-
-        this.doProgramaticScroll(element.offsetTop);
-
-        if (!skipReinitialised) {
-            this.reinitialised(true);
-        }
-    },
-    disable: function() {
+    }
+    disable() {
         if (this.isMounted()) {
-            var $elem = $(this.findDOMNode());
+            var $elem = this.get$Node();
             $elem.attr('data-scroll-disabled', true);
             $elem.addClass('ps-disabled');
             Ps.disable($elem[0]);
         }
-    },
-    enable: function() {
+    }
+    enable() {
         if (this.isMounted()) {
-            var $elem = $(this.findDOMNode());
+            var $elem = this.get$Node();
             $elem.removeAttr('data-scroll-disabled');
             $elem.removeClass('ps-disabled');
             Ps.enable($elem[0]);
         }
-    },
-    reinitialised: function(forced) {
+    }
+    reinitialised(forced) {
         if (this.props.onReinitialise) {
             this.props.onReinitialise(
                 this,
-                $(this.findDOMNode()),
+                this.get$Node(),
                 forced ? forced : false
-            )
+            );
         }
-    },
-    onResize: function(forced, scrollPositionYPerc, scrollToElement) {
+    }
+    @SoonFcWrap(30, true)
+    onResize(forced, scrollPositionYPerc, scrollToElement) {
         if (forced && forced.originalEvent) {
             forced = true;
             scrollPositionYPerc = undefined;
         }
 
-
         this.eventuallyReinitialise(forced, scrollPositionYPerc, scrollToElement);
-    },
-    componentDidUpdate: function() {
+    }
+    inViewport(domNode) {
+        return verge.inViewport(domNode);
+    }
+    componentDidUpdate() {
         if (this.props.requiresUpdateOnResize) {
             this.onResize(true);
         }
-    },
-    render: function () {
+        this.attachAnimationEvents();
+    }
+    customIsEventuallyVisible() {
+        const chatRoom = this.props.chatRoom;
+        return !chatRoom || chatRoom.isCurrentlyActive;
+    }
+    render() {
+        var self = this;
         return (
-            <div {...this.props} onResize={this.onResize}>
-                {this.props.children}
+            <div style={this.props.style} className={this.props.className}>
+                {self.props.children}
             </div>
         );
     }
-});
-
-module.exports = {
-    PerfectScrollbar
 };

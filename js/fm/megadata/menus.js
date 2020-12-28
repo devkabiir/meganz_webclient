@@ -106,9 +106,10 @@ MegaData.prototype.menuItems = function menuItems() {
         if (n) {
             nodes.splice(i, 1);
 
-            if (n.rr) {
+            if (n.rr && n.p === M.RubbishID) {
                 rrnodes.push(n.rr);
             }
+            // else we can delete .rr and api_setattr
         }
     }
     nodes = nodes.concat(rrnodes);
@@ -116,27 +117,26 @@ MegaData.prototype.menuItems = function menuItems() {
     var checkMegaSync = function _checkMegaSync(preparedItems) {
         $('.dropdown-item.download-item').addClass('contains-submenu');
         $('.dropdown-item.download-item').removeClass('msync-found');
-        megasync.isInstalled(function (err, is) {
-            if (!err || is) {
-                $('.dropdown-item.download-item').removeClass('contains-submenu');
-                $('.dropdown-item.download-item').addClass('msync-found');
-                if (megasync.currUser === u_handle && $.selected.length === 1 && M.d[$.selected[0]].t === 1) {
-                    var addItemAndResolvePromise = function _addItemAndResolvePromise(error, response) {
-                        if (!error && response === 0) {
-                            preparedItems['.syncmegasync-item'] = 1;
-                        }
-                        promise.resolve(preparedItems);
-                    };
-                    megasync.syncPossible($.selected[0], addItemAndResolvePromise);
-                }
-                else {
+
+        if (window.useMegaSync === 2 || window.useMegaSync === 3) {
+            $('.dropdown-item.download-item').removeClass('contains-submenu');
+            $('.dropdown-item.download-item').addClass('msync-found');
+            if (window.useMegaSync === 2 && $.selected.length === 1 && M.d[$.selected[0]].t === 1) {
+                var addItemAndResolvePromise = function _addItemAndResolvePromise(error, response) {
+                    if (!error && response === 0) {
+                        preparedItems['.syncmegasync-item'] = 1;
+                    }
                     promise.resolve(preparedItems);
-                }
+                };
+                megasync.syncPossible($.selected[0], addItemAndResolvePromise);
             }
             else {
                 promise.resolve(preparedItems);
             }
-        });
+        }
+        else {
+            promise.resolve(preparedItems);
+        }
     }
 
     if (nodes.length) {
@@ -179,6 +179,10 @@ MegaData.prototype.menuItemsSync = function menuItemsSync() {
                 items['.open-item'] = 1;
             }
 
+            if (M.currentCustomView) {
+                items['.open-cloud-item'] = 1;
+            }
+
             if (sourceRoot === M.RootID && !folderlink) {
                 items['.sh4r1ng-item'] = 1;
             }
@@ -215,6 +219,7 @@ MegaData.prototype.menuItemsSync = function menuItemsSync() {
                     items['.clearprevious-versions'] = 1;
                 }
             }
+
             if (is_image2(selNode)) {
                 items['.preview-item'] = 1;
             }
@@ -224,9 +229,12 @@ MegaData.prototype.menuItemsSync = function menuItemsSync() {
                 if (mediaType) {
                     items['.play-item'] = 1;
 
-                    if (mediaType === 1 && sourceRoot !== M.RubbishID) {
+                    if (mediaType === 1 && sourceRoot !== M.RubbishID && sourceRoot !== "shares") {
                         items['.embedcode-item'] = 1;
                     }
+                }
+                else if (is_text(selNode)) {
+                    items['.edit-file-item'] = 1;
                 }
             }
         }
@@ -240,10 +248,17 @@ MegaData.prototype.menuItemsSync = function menuItemsSync() {
                 $('.add-star-item').safeHTML('<i class="small-icon context broken-heart"></i>@@', l[5872]);
             }
             else {
-                $('.add-star-item').safeHTML('<i class="small-icon context heart"/></i>@@', l[5871]);
+                $('.add-star-item').safeHTML('<i class="small-icon context heart"></i>@@', l[5871]);
             }
 
             M.colourLabelcmUpdate(selNode);
+
+            if (items['.edit-file-item']) {
+                $('.dropdown-item.edit-file-item span').text(l[865]);
+            }
+        }
+        else if (items['.edit-file-item']) {
+            $('.dropdown-item.edit-file-item span').text(l[16797]);
         }
     }
 
@@ -252,7 +267,7 @@ MegaData.prototype.menuItemsSync = function menuItemsSync() {
         var viewChat = true;
         for (var i = $.selected.length; i--;) {
             var n = M.d[$.selected[i]];
-            if (!n || n.t) {
+            if (!n || (n.t && sourceRoot !== M.RootID)) {
                 viewChat = false;
                 break;
             }
@@ -260,6 +275,25 @@ MegaData.prototype.menuItemsSync = function menuItemsSync() {
         if (viewChat) {
             items['.send-to-contact-item'] = 1;
         }
+    }
+
+    if (selNode) {
+        items['.download-item'] = 1;
+        items['.zipdownload-item'] = 1;
+        items['.copy-item'] = 1;
+        items['.properties-item'] = 1;
+    }
+    items['.refresh-item'] = 1;
+
+    if (folderlink) {
+        delete items['.copy-item'];
+        delete items['.add-star-item'];
+        delete items['.embedcode-item'];
+        delete items['.colour-label-items'];
+        delete items['.properties-versions'];
+        delete items['.clearprevious-versions'];
+        items['.import-item'] = 1;
+        items['.getlink-item'] = 1;
     }
 
     if ((sourceRoot === M.RootID) && !folderlink) {
@@ -284,6 +318,8 @@ MegaData.prototype.menuItemsSync = function menuItemsSync() {
             delete items['.sh4r1ng-item'];
             delete items['.add-star-item'];
             delete items['.colour-label-items'];
+            delete items['.download-item'];
+            items['.dispute-item'] = 1;
         }
     }
     else if (sourceRoot === M.RubbishID && !folderlink) {
@@ -292,7 +328,7 @@ MegaData.prototype.menuItemsSync = function menuItemsSync() {
         for (var j = $.selected.length; j--;) {
             n = M.getNodeByHandle($.selected[j]);
 
-            if (M.d[n.rr] && M.getNodeRoot(n.rr) !== M.RubbishID && M.getNodeRights(n.rr) > 1) {
+            if (M.d[n.rr] && n.p === M.RubbishID && M.getNodeRoot(n.rr) !== M.RubbishID && M.getNodeRights(n.rr) > 1) {
                 items['.revert-item'] = 1;
             }
             else if (items['.revert-item']) {
@@ -302,22 +338,18 @@ MegaData.prototype.menuItemsSync = function menuItemsSync() {
         }
     }
 
-    if (selNode) {
-        items['.download-item'] = 1;
-        items['.zipdownload-item'] = 1;
-        items['.copy-item'] = 1;
-        items['.properties-item'] = 1;
-    }
-    items['.refresh-item'] = 1;
-
-    if (folderlink) {
-        delete items['.copy-item'];
-        delete items['.add-star-item'];
-        delete items['.embedcode-item'];
-        delete items['.colour-label-items'];
-        delete items['.properties-versions'];
-        delete items['.clearprevious-versions'];
-        items['.import-item'] = 1;
+    // For multiple selections, should check all have the right permission.
+    if ((".remove-item" in items) && (items['.remove-item'] === 1) && ($.selected.length > 1)) {
+        var removeItemFlag = true;
+        for (var g = 1; g < $.selected.length; g++) {
+            if (M.getNodeRights($.selected[g]) <= 1) {
+                removeItemFlag = false;
+            }
+        }
+        if (!removeItemFlag) {
+            delete items['.remove-item'];
+            delete items['.move-item'];
+        }
     }
 
     return items;
@@ -381,6 +413,19 @@ MegaData.prototype.contextMenuUI = function contextMenuUI(e, ll) {
         m.find('.dropdown-section:visible:last hr').addClass('hidden');
 
         $(window).rebind('resize.ccmui', SoonFc(findNewPosition));
+
+        $('.jspContainer','#bodyel').rebind('mousewheel.context', function() {
+            $(this).off('mousewheel.context');
+            $.hideContextMenu();
+        });
+
+        // disable scrolling
+        var $psContainer = $(e.currentTarget).closest('.ps-container');
+        if ($psContainer.length) {
+            Ps.disable($psContainer[0]);
+            $.disabledContianer = $psContainer;
+        }
+
     };
 
     $.hideContextMenu();
@@ -388,22 +433,66 @@ MegaData.prototype.contextMenuUI = function contextMenuUI(e, ll) {
 
     // Used when right click is occured outside item, on empty canvas
     if (ll === 2) {
+        // to init megaSync, as the user may click of file/folder upload
+        // the below event handler will setup the communication with MEGASYNC
+        var fupload = document.getElementById('fileselect1');
+        var mEvent = new MouseEvent('mouseover', {
+            view: window,
+            bubbles: true,
+            cancelable: true
+        });
+        fupload.dispatchEvent(mEvent);
 
-        // Enable upload item menu for clould-drive, don't show it for rubbish and rest of crew
-        if (M.getNodeRights(M.currentdirid) && (M.currentrootid !== M.RubbishID)) {
-            $(menuCMI).filter('.dropdown-item').hide();
-            if (M.currentrootid === 'contacts') {
-                $(menuCMI).filter('.addcontact-item').show();
+        $(menuCMI).filter('.dropdown-item').hide();
+        var itemsViewed = false;
+        var ignoreGrideExtras = false;
+
+        if (M.currentdirid !== 'shares' && M.currentdirid !== 'out-shares') {
+            // Enable upload item menu for clould-drive, don't show it for rubbish and rest of crew
+            if (M.getNodeRights(M.currentCustomView.nodeID || M.currentdirid) && (M.currentrootid !== M.RubbishID)) {
+                if (M.currentrootid === 'contacts') {
+                    $(menuCMI).filter('.addcontact-item').show();
+                    ignoreGrideExtras = true;
+                }
+                else {
+                    $(menuCMI).filter('.fileupload-item,.newfolder-item,.newfile-item').show();
+
+                    if (is_chrome_firefox & 2 || 'webkitdirectory' in document.createElement('input')) {
+                        $(menuCMI).filter('.folderupload-item').show();
+                    }
+                }
+                itemsViewed = true;
+            }
+        }
+
+        if (M.currentrootid === M.RubbishID && M.v.length) {
+            $('.files-menu.context .dropdown-item.clearbin-item').attr('style', '');
+            itemsViewed = true;
+        }
+
+        if (!ignoreGrideExtras && M.viewmode) {
+            itemsViewed = true;
+            $('.files-menu.context .dropdown-item.sort-grid-item-main').show();
+            if (M.currentdirid === 'shares') {
+                $('.files-menu.context .dropdown-item.sort-grid-item').attr('style', 'display:none !important');
+                $('.files-menu.context .dropdown-item.sort-grid-item.s-inshare').attr('style', '');
+            }
+            else if (M.currentdirid === 'out-shares') {
+                $('.files-menu.context .dropdown-item.sort-grid-item').attr('style', 'display:none !important');
+                $('.files-menu.context .dropdown-item.sort-grid-item.s-outshare').attr('style', '');
             }
             else {
-                $(menuCMI).filter('.fileupload-item,.newfolder-item').show();
-
-                if (is_chrome_firefox & 2 || 'webkitdirectory' in document.createElement('input')) {
-                    $(menuCMI).filter('.folderupload-item').show();
+                $('.files-menu.context .dropdown-item.sort-grid-item').attr('style', 'display:none !important');
+                $('.files-menu.context .dropdown-item.sort-grid-item.s-fm').attr('style', '');
+                if (folderlink) {
+                    $('.files-menu.context .dropdown-item.sort-grid-item.s-fm.sort-label')
+                        .attr('style', 'display:none !important');
+                    $('.files-menu.context .dropdown-item.sort-grid-item.s-fm.sort-fav')
+                        .attr('style', 'display:none !important');
                 }
             }
         }
-        else {
+        if (!itemsViewed) {
             return false;
         }
     }
@@ -433,12 +522,37 @@ MegaData.prototype.contextMenuUI = function contextMenuUI(e, ll) {
                     $(menuCMI).filter(item).show();
                 }
 
+                // Hide Info item if properties dialog is opened
+                if ($.dialog === 'properties') {
+                    delete items['.properties-item'];
+                }
+
                 onIdle(showContextMenu);
             });
     }
     else if (ll === 6) { // sort menu
         $('.files-menu.context .dropdown-item').hide();
         $('.files-menu.context .dropdown-item.do-sort').show();
+    }
+    else if (ll === 7) { // Columns selection menu
+        if (M && M.columnsWidth && M.columnsWidth.cloud) {
+            var $currMenuItems = $('.files-menu.context .dropdown-item').hide().filter('.visible-col-select');
+            for (var col in M.columnsWidth.cloud) {
+                if (M.columnsWidth.cloud[col] && M.columnsWidth.cloud[col].disabled) {
+                    continue;
+                }
+                else {
+                    if (M.columnsWidth.cloud[col] && M.columnsWidth.cloud[col].viewed) {
+                        $currMenuItems.filter('[megatype="' + col + '"]').attr('isviewed', 'y')
+                            .show().find('i').addClass('icons-sprite tiny-grey-tick');
+                    }
+                    else {
+                        $currMenuItems.filter('[megatype="' + col + '"]').removeAttr('isviewed')
+                            .show().find('i').removeClass('icons-sprite tiny-grey-tick');
+                    }
+                }
+            }
+        }
     }
     else if (ll) {// Click on item
 
@@ -457,7 +571,7 @@ MegaData.prototype.contextMenuUI = function contextMenuUI(e, ll) {
 
             // File manager left panel click
             else if (id.indexOf('treea_') !== -1) {
-                id = id.replace('treea_', '');
+                id = id.replace(/treea_+|(os_|pl_)/g, '');
             }
         }
 
@@ -473,16 +587,23 @@ MegaData.prototype.contextMenuUI = function contextMenuUI(e, ll) {
             var $contactBlock = $('#' + id).length ? $('#' + id) : $('#contact_' + id);
             var username = M.getNameByHandle(id) || '';
 
-            flt = '.remove-contact, .share-folder-item';
+            flt = '.remove-contact, .share-folder-item, .set-nickname';
+
             // Add .send-files-item to show Send files item
             if (!window.megaChatIsDisabled) {
                 flt += ',.startchat-item, .startaudiovideo-item, .send-files-item';
             }
-            $(menuCMI).filter(flt).show();
+            var $menuCmi = $(menuCMI);
+            $menuCmi.filter(flt).show();
 
             // Enable All buttons
-            $(menuCMI).filter('.startaudiovideo-item, .send-files-item')
+            $menuCmi.filter('.startaudiovideo-item, .send-files-item')
                 .removeClass('disabled disabled-submenu');
+
+            // disable remove for business accounts + business users
+            if (u_attr && u_attr.b && M.u[id] && M.u[id].b) {
+                $menuCmi.filter('.remove-contact').addClass('disabled');
+            }
 
             // Show Detail block
             $contactDetails.removeClass('hidden');
@@ -497,11 +618,11 @@ MegaData.prototype.contextMenuUI = function contextMenuUI(e, ll) {
 
                 // Set contact avatar
                 $contactDetails.find('.dropdown-avatar').removeClass('hidden')
-                    .safeHTML(useravatar.contact(id, 'context-avatar'));
+                    .find('.avatar').safeHTML(useravatar.contact(id, 'context-avatar'));
 
                 // Set username
                 $contactDetails.find('.dropdown-user-name').removeClass('hidden')
-                    .find('span').text(username);
+                    .find('.name span').text(username);
             }
 
             // Set contact fingerprint
@@ -569,9 +690,9 @@ MegaData.prototype.contextMenuUI = function contextMenuUI(e, ll) {
         else if (currNodeClass && currNodeClass.indexOf('rubbish-bin') > -1) {
             $.selected = [M.RubbishID];
             $(menuCMI).filter('.properties-item').show();
-        }
-        else if (currNodeClass && currNodeClass.indexOf('recycle-item') > -1) {
-            $(menuCMI).filter('.clearbin-item').show();
+            if (currNodeClass.indexOf('filled') > -1) {
+                $(menuCMI).filter('.clearbin-item').show();
+            }
         }
         else if (currNodeClass && currNodeClass.indexOf('contacts-item') > -1) {
             $(menuCMI).filter('.addcontact-item').show();
@@ -618,7 +739,7 @@ MegaData.prototype.contextMenuUI = function contextMenuUI(e, ll) {
                         if (items['.play-item']) {
                             var $playItem = $menuCMI.filter('.play-item');
 
-                            if (is_video(M.d[id]) === 2) {
+                            if (is_audio(M.d[id])) {
                                 $playItem.find('i').removeClass('videocam').addClass('play')
                                     .end().find('span').text(l[17828]);
                             }
@@ -629,16 +750,16 @@ MegaData.prototype.contextMenuUI = function contextMenuUI(e, ll) {
                         }
                     }
 
+                    // Hide Info item if properties dialog is opened
+                    if ($.dialog === 'properties') {
+                        $menuCMI.filter('.properties-item').hide();
+                    }
+
                     onIdle(showContextMenu);
                 });
         }
         else {
             return false;
-        }
-
-        //Hide Info item if properties dialog is opened
-        if ($.dialog === 'properties') {
-            $(menuCMI).filter('.properties-item').hide();
         }
     }
 
@@ -760,8 +881,6 @@ MegaData.prototype.reCalcMenuPosition = function(m, x, y, ico) {
             n.addClass('overlap-left');
             n.css({'top': top, 'right': (wMax - nmW - minX) + 'px'});
         }
-
-
     };
 
     /**
@@ -786,18 +905,19 @@ MegaData.prototype.reCalcMenuPosition = function(m, x, y, ico) {
             pT = parseInt(mP.css('padding-top'));
             bT = parseInt(mP.css('border-top-width'));
         }
+
+        var difference = 0;
+
         if (b > maxY) {
-            top = (maxY - nmH + nTop - tB) - pE.top + 'px';
+            difference = b - maxY;
         }
-        else {
-            top = pPos.top - tB + 'px';
-        }
+        top = pPos.top - tB - difference + 'px';
 
         return top;
     };
 
     var handleSmall = function(dPos) {
-        m.find('> .dropdown-section').wrapAll('<div id="cm_scroll" class="context-scrolling-block" />');
+        m.find('> .dropdown-section').wrapAll('<div id="cm_scroll" class="context-scrolling-block"></div>');
         m.append('<span class="context-top-arrow"></span><span class="context-bottom-arrow"></span>');
         m.addClass('mega-height');
         cmH = wH - TOP_MARGIN * 2;
@@ -1025,11 +1145,11 @@ MegaData.prototype.labelSortMenuUI = function(event, rightClick) {
         .filter('*[data-by=' + sorting.n + ']')
         .addClass('active')
         .addClass(dir);
-        
+
     var tmpFn = function() {
         x = event.clientX;
         y = event.clientY;
-        
+
         $menu.css('left', x + 'px');
         $menu.css('top', y + 'px');
     };

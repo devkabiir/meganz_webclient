@@ -1,17 +1,10 @@
 var React = require("react");
-var ReactDOM = require("react-dom");
-var utils = require('./../../../ui/utils.jsx');
-var MegaRenderMixin = require('./../../../stores/mixins.js').MegaRenderMixin;
 var ContactsUI = require('./../contacts.jsx');
 var ConversationMessageMixin = require('./mixin.jsx').ConversationMessageMixin;
-var getMessageString = require('./utils.jsx').getMessageString;
 
-var TopicChange = React.createClass({
-    mixins: [ConversationMessageMixin],
-
-    render: function () {
+class TopicChange extends ConversationMessageMixin {
+    render() {
         var self = this;
-        var cssClasses = "message body";
 
         var message = this.props.message;
         var megaChat = this.props.message.chatRoom.megaChat;
@@ -22,8 +15,8 @@ var TopicChange = React.createClass({
 
 
 
-        var datetime = <div className="message date-time"
-                                       title={time2date(timestampInt)}>{timestamp}</div>;
+        var datetime = <div className="message date-time simpletip"
+            data-simpletip={time2date(timestampInt)}>{timestamp}</div>;
 
         var displayName;
         if (contact) {
@@ -37,15 +30,23 @@ var TopicChange = React.createClass({
 
 
         var avatar = <ContactsUI.Avatar contact={contact}
-                                        className="message avatar-wrapper small-rounded-avatar"/>;
+            chatRoom={chatRoom}
+            className="message avatar-wrapper small-rounded-avatar"/>;
 
         var topic = message.meta.topic;
 
-        var text = __(l[9081])
+        var formattedTopic = this._formattedTopic;
+        if (this._oldTopic !== topic) {
+            this._oldTopic = topic;
+            formattedTopic = megaChat.plugins.emoticonsFilter.processHtmlMessage(htmlentities(topic));
+            this._formattedTopic = formattedTopic;
+        }
+
+        var text = l[9081]
             .replace(
                 "%s",
                 '<strong className="dark-grey-txt">"' +
-                    megaChat.plugins.emoticonsFilter.processHtmlMessage(htmlentities(topic)) +
+                    formattedTopic +
                 '"</strong>'
             );
 
@@ -55,7 +56,12 @@ var TopicChange = React.createClass({
                 {avatar}
 
                 <div className="message content-area small-info-txt">
-                    <ContactsUI.ContactButton contact={contact} className="message" label={displayName} />
+                    <ContactsUI.ContactButton
+                        contact={contact}
+                        className="message"
+                        label={displayName}
+                        chatRoom={chatRoom}
+                    />
                     {datetime}
 
                     <div className="message text-block" dangerouslySetInnerHTML={{__html:text}}></div>
@@ -66,8 +72,8 @@ var TopicChange = React.createClass({
 
         return <div>{messages}</div>;
     }
-});
+}
 
-module.exports = {
+export {
     TopicChange
 };

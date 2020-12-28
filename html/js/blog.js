@@ -16,19 +16,7 @@ if (!m) {
 
 
 var blogposts = null;
-
-function unsigned_blogposts(ready) {
-    var xhr = getxhr();
-    xhr.open("GET", "https://cms2.mega.nz/unsigned/blog");
-    xhr.onreadystatechange = function() {
-        if (this.readyState === 4) {
-            blogposts = JSON.parse(xhr.responseText);
-            ready();
-        }
-    };
-    xhr.send(null);
-}
-
+var blogHeaders = Object.create(null);
 
 var bloglimit = 5;
 var blogpage = 1;
@@ -60,8 +48,11 @@ function blog_bind_search() {
 
 function init_blog_callback() {
     blog_bind_search();
-    if (page === 'blogarticle') {
+    if (page === 'blogarticle' || page.substr(0, 5) === 'blog/') {
         init_blogarticle();
+    }
+    else if (is_mobile) {
+        handleInvalidBlogID();
     }
     else {
         blog_load();
@@ -69,6 +60,12 @@ function init_blog_callback() {
 }
 
 function init_blog() {
+
+    // Remove early.
+    if (is_mobile) {
+        $('.blog-new-right').addClass('hidden');
+    }
+
     if (blogposts) {
         return init_blog_callback();
     }
@@ -82,12 +79,28 @@ function init_blog() {
         init_blog();
     });
 
+    CMS.scope = 'blog';
+
     CMS.get('blog', function(err, data) {
         if (err) {
             return alert("Error fetching the blog data");
         }
 
         blogposts = data.object;
+        for (var b in blogposts) {
+            if (blogposts.hasOwnProperty(b)) {
+                var bHeader = blogposts[b].h.substr(0, 50).trim().toLowerCase()
+                    .replace(/( )+/g, '-')
+                    .replace(/[^\dA-Za-z-]/g, '')
+                    .replace(/(-)+/g, '-');
+                blogHeaders[bHeader] = b;
+                blogposts[b].th = bHeader;
+            }
+        }
+        if (page.substr(0, 5) === 'blog/') {
+            // we arrived here to load all blogs, with a specific requested blog
+            pagemetadata();
+        }
         loadingDialog.hide();
         init_blog_callback();
     });
@@ -111,14 +124,14 @@ function blog_load() {
                     if (blogposts[i].by) {
                         by = blogposts[i].by;
                     }
-                    blogcontent += '<div class="blog-new-item" data-blogid="' + escapeHTML(blogposts[i].id) + '">';
+                    blogcontent += '<div class="blog-new-item" data-blogid="blog/' + escapeHTML(blogposts[i].th) + '">';
                     blogcontent += '<h2>' + escapeHTML(blogposts[i].h) + '</h2>';
                     blogcontent += '<div class="blog-new-small">' + acc_time2date(blogposts[i].t) + '</div>';
                     blogcontent += '<div class="blog-new-date-div"></div>';
                     blogcontent += '<div class="blog-new-small"><span>By:</span> ' + escapeHTML(by) + '</div>';
                     blogcontent += '<div class="clear"></div><img alt="" data-img="loading_'
                         + escapeHTML(blogposts[i].attaches.simg) + '" src="'
-                        + escapeHTML(CMS.img2(blogposts[i].attaches.simg)) + '" />';
+                        + CMS.img(blogposts[i].attaches.simg) + '" />';
                     blogcontent += '<p><span class="blog-new-description">' + introtxt + '</span>';
                     blogcontent += '<a class="blog-new-read-more">' + l[8512] + '</a>';
                     blogcontent += '<span class="clear"></span></p> </div>';
@@ -141,7 +154,7 @@ function blog_load() {
         blogcontent += blog_pager();
         $('.blog-new-left').safeHTML(blogcontent);
         $('.blog-new-read-more, .blog-new-item img, .blog-new-item h2').rebind('click', function() {
-            loadSubPage('blog_' + $(this).parents('.blog-new-item').data('blogid'));
+            loadSubPage($(this).parents('.blog-new-item').data('blogid'));
         });
         $('.blog-pagination-button').rebind('click', function() {
             var c = $(this).attr('class');
@@ -256,14 +269,22 @@ function blog_archive() {
             }
         }
     }
+
     var blogarchive = '';
     for (mm in blogmonths) {
         if (blogmonths.hasOwnProperty(mm)) {
             mm = escapeHTML(mm);
-            var y = ' ' + mm.split('_')[0] + ' ';
+            var y = mm.split('_')[0];
+
+            var date = new Date();
+            date.setMonth(parseInt(mm.split('_')[1]) - 1);
+            date.setYear(y);
+            date.setDate(1);
+            date = date.getTime() / 1000;
+
             blogarchive += '<a href="/blog_' + mm + '" class="blog-new-archive-lnk clickurl">'
-                + date_months[parseInt(mm.split('_')[1]) - 1]
-                + y + ' <span class="blog-archive-number">' + escapeHTML(blogmonths[mm]) + '</span></a>';
+                + time2date(date, 3) + '<span class="blog-archive-number">'
+                + escapeHTML(blogmonths[mm]) + '</span></a>';
         }
     }
     $('#blog_archive').safeHTML(blogarchive);
@@ -274,6 +295,40 @@ function blog_archive() {
 function blog_more() {
     bloglimit = bloglimit + 5;
     blog_load();
+}
+
+/**
+ * This will attempt to load some valid page if the provided blog ID is invalid.
+ * @return {void}
+ */
+function handleInvalidBlogID() {
+    'use strict';
+    var newPage = '';
+
+    if (is_mobile) {
+        var ids = Object.keys(blogposts).map(function(id) {
+            return parseInt(id.replace('post_', ''));
+        }).filter(function(a) {
+            return a;
+        }).sort(function(a, b) {
+            return b - a;
+        });
+
+        if (ids.length > 0) {
+            newPage = 'blog/' + blogposts['post_' + ids[0]].th;
+        }
+    }
+    else {
+        newPage = 'blog';
+    }
+
+    // This function can be triggered by the normal boot or the legacy system (which does not have loadSubPage)
+    if (newPage && typeof loadSubPage === 'function') {
+        loadSubPage(newPage);
+    }
+    else {
+        window.location.replace('https://mega.nz/' + newPage);
+    }
 }
 
 
@@ -339,17 +394,19 @@ var eventHandlers = [
 
 if (typeof mobileblog !== 'undefined') {
     var blogid = getSitePath().substr(1).replace('blog_', '');
-    unsigned_blogposts(function() {
-
+    CMS.scope = 'blog';
+    CMS.get('blog', function(err, data) {
+        'use strict';
+        blogposts = data.object;
         var i = "post_" + blogid;
         var content = '';
         if (!blogposts[i]) {
-            window.location.replace('https://mega.nz');
+            handleInvalidBlogID();
             return;
         }
         if (blogposts[i].attaches.bimg) {
             content += '<img alt="" data-img="loading_' + escapeHTML(blogposts[i].attaches.bimg)
-                + '" src="https://cms2.mega.nz/unsigned/' + escapeHTML(blogposts[i].attaches.bimg)
+                + '" src="' + CMS.img(blogposts[i].attaches.bimg)
                 + '" class="blog-new-full-img" />';
         }
         content += blogposts[i].c;
@@ -369,7 +426,7 @@ if (typeof mobileblog !== 'undefined') {
                         '<span>by:</span> ' + escapeHTML(blogposts[i].by || "Admin") +
                     '</div>' +
                     '<div class="clear"></div>' +
-                    '<div id="blogarticle_post">' + content.replace(/(?:{|%7B)cmspath(?:%7D|})/g, 'https://cms2.mega.nz/') + '</div>' +
+                    '<div id="blogarticle_post">' + CMS.parse(content) + '</div>' +
                     '<div class="clear"></div>' +
                 '</div>' +
                 '<div class="bottom-menu full-version">' +
@@ -383,7 +440,15 @@ if (typeof mobileblog !== 'undefined') {
             .replace(RegExp(' (' + eventHandlers.join("|") + ')', 'g'), ' data-dummy');
 
         // Prevent blog breaking on mobile due to missing jQuery
-        if (!is_mobile) {
+        if (is_mobile) {
+            // Record blog post visit.
+            onIdle(function() {
+                var xhr = getxhr();
+                xhr.open("POST", apipath + 'cs?id=0' + mega.urlParams(), true);
+                xhr.send(JSON.stringify([{a: 'log', e: 99801, m: blogid}]));
+            });
+        }
+        else {
             clickURLs();
         }
 

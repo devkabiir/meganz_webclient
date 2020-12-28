@@ -99,8 +99,13 @@ var signin = {
             return false;
         }
 
+        // close two-factor dialog if it was opened
+        if (twofactor && twofactor.loginDialog) {
+            twofactor.loginDialog.closeDialog();
+        }
+
         // If successful result
-        else if (result !== false && result >= 0) {
+        if (result !== false && result >= 0) {
 
             // Otherwise if email confirm code is ok, proceed with RSA key generation
             if (confirmok) {
@@ -125,13 +130,13 @@ var signin = {
         }
         else {
             // Show a failed login
-            $('.account.login-form').addClass('both-incorrect-inputs');
+            $('#login-name2').megaInputsShowError().blur();
+            $('#login-password2').megaInputsShowError(l[7431]).val('').blur();
 
             // Close the 2FA dialog for a generic error
             twofactor.loginDialog.closeDialog();
 
             msgDialog('warninga', l[135], l[7431] + '.', false, function() {
-                $('#login-password2').val('');
                 $('#login-name2').select();
             });
         }
@@ -195,9 +200,9 @@ function doConfirm(email, password, callback) {
                 $('.mobile.signin-register-block .signin-button').removeClass('loading');
             }
             else {
-                $('.account.input-wrapper.password input', $formWrapper).val('');
-                $('.account.input-wrapper', $formWrapper).removeClass('incorrect');
-                $('.account.login-form', $formWrapper).addClass('both-incorrect-inputs');
+                $('#login-password2', $formWrapper).val('');
+                $('#login-password2', $formWrapper).megaInputsHideError();
+                $('#login-name2', $formWrapper).megaInputsHideError();
                 msgDialog('warninga', l[135], l[201]);
             }
         }
@@ -227,19 +232,16 @@ function pagelogin() {
     'use strict';
 
     var $formWrapper = $('.main-mid-pad.login form');
-    var $emailContainer = $formWrapper.find('.account.input-wrapper.email');
-    var $email = $emailContainer.find('input');
-    var $passwordContainer = $formWrapper.find('.account.input-wrapper.password');
-    var $password = $passwordContainer.find('input');
-    
-    var e = $email.val();
-    if (e === '' || checkMail(e)) {
-        $emailContainer.addClass('incorrect');
+    var $email = $formWrapper.find('#login-name2');
+    var $password = $formWrapper.find('#login-password2');
+
+    var e = $email.val().trim();
+    if (e === '' || !isValidEmail(e)) {
+        $email.megaInputsShowError(l[141]);
         $email.focus();
     }
     else if ($('#login-password2').val() === '') {
-        $formWrapper.find('.account.input-wrapper').removeClass('incorrect');
-        $formWrapper.addClass('both-incorrect-inputs');
+        $('#login-password2').megaInputsShowError(l[1791]);
         $password.focus();
     }
     else {
@@ -249,7 +251,7 @@ function pagelogin() {
             localStorage.hideloginwarning = 1;
         }
 
-        var email = $email.val();
+        var email = e;
         var password = $password.val();
         var rememberMe = false;
         var twoFactorPin = null;
@@ -270,8 +272,16 @@ function init_login() {
     'use strict';
 
     var $formWrapper = $('.main-mid-pad.login');
-    var $inputs = $formWrapper.find('.account.input-wrapper input');
+    var $inputs = $formWrapper.find('input');
     var $button = $formWrapper.find('.big-red-button');
+    var $forgotPassLink = $('.top-login-forgot-pass', $formWrapper);
+
+    if (is_extension) {
+        $('.extension-advise').addClass('hidden');
+    }
+    else {
+        $('.extension-advise').removeClass('hidden');
+    }
 
     if (login_email) {
         $('#login-name2', $formWrapper).val(login_email);
@@ -282,7 +292,7 @@ function init_login() {
         $('.main-right-block').addClass('hidden');
         $('.register-st2-txt-block').addClass('hidden');
         $('.account.small-header-txt').addClass('hidden');
-        $('.top-login-forgot-pass').addClass('hidden');
+        $forgotPassLink.addClass('hidden');
         $('.main-top-info-block').removeClass('hidden');
         $('.big-red-button.login-button').text(l[1131]);
         $('.account.top-header.login').text(l[1131]);
@@ -297,7 +307,21 @@ function init_login() {
         }
     }
 
+    $forgotPassLink.rebind('click.forgotpasslink', function() {
+
+        var email = document.getElementById('login-name2').value;
+
+        if (isValidEmail(email)) {
+            $.prefillEmail = email;
+        }
+
+        loadSubPage('recovery');
+    });
+
     $inputs.rebind('keydown.initlogin', function(e) {
+
+        $inputs.removeClass('errored').parent().removeClass('error');
+
         if (e.keyCode === 13) {
             pagelogin();
         }

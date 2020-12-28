@@ -1,42 +1,39 @@
 var React = require("react");
 var ReactDOM = require("react-dom");
-var MegaRenderMixin = require('./../../stores/mixins.js').MegaRenderMixin;
+import {MegaRenderMixin} from './../../stores/mixins.js';
 var ButtonsUI = require('./../../ui/buttons.jsx');
 
 
-var EmojiAutocomplete = React.createClass({
-    mixins: [MegaRenderMixin],
-    data_emojis: null,
-    getDefaultProps: function() {
-        return {
-            'requiresUpdateOnResize': true,
-            'emojiSearchQuery': false,
-            'disableCheckingVisibility': true,
-            'maxEmojis': 12
-        }
-    },
-    getInitialState: function() {
-        return {
+export class EmojiAutocomplete extends MegaRenderMixin {
+    static defaultProps = {
+        'requiresUpdateOnResize': true,
+        'emojiSearchQuery': false,
+        'disableCheckingVisibility': true,
+        'maxEmojis': 12
+    }
+    constructor(props) {
+        super(props);
+        this.state = {
             'selected': 0
         };
-    },
-
-    preload_emojis: function() {
-        var self = this;
-        if (!self.loadingPromise) {
-            self.loadingPromise = megaChat.getEmojiDataSet('emojis')
-                .done(function (emojis) {
-                    Soon(function() {
-                        self.data_emojis = emojis;
-                        self.safeForceUpdate();
-                    });
+        this.loading = false;
+        this.data_emojis = [];
+    }
+    preload_emojis() {
+        if (this.loading === false) {
+            this.loading = true;
+            megaChat.getEmojiDataSet('emojis')
+                .then(emojis => {
+                    this.loading = 0;
+                    this.data_emojis = emojis;
+                    this.safeForceUpdate();
                 });
-        };
-    },
-    unbindKeyEvents: function() {
+        }
+    }
+    unbindKeyEvents() {
         $(document).off('keydown.emojiAutocomplete' + this.getUniqueId());
-    },
-    bindKeyEvents: function() {
+    }
+    bindKeyEvents() {
         var self = this;
         $(document).rebind('keydown.emojiAutocomplete' + self.getUniqueId(), function(e) {
             if (!self.props.emojiSearchQuery) {
@@ -108,7 +105,7 @@ var EmojiAutocomplete = React.createClass({
                             if (":" + self.found[i].n + ":" === self.props.emojiSearchQuery + ":") {
                                 // if only 1 found and it matches almost the search query
                                 // e.g. support for :smiley$ENTER$
-                                self.props.onSelect(false, ":" + self.found[0].n + ":", self.state.prefilled);
+                                self.props.onSelect(false, ":" + self.found[0].n + ":");
                                 handled = true;
                             }
                         }
@@ -121,7 +118,7 @@ var EmojiAutocomplete = React.createClass({
                     return;
                 }
                 else if (self.found.length > 0 && self.found[selected]) {
-                    self.props.onSelect(false, ":" + self.found[selected].n + ":", self.state.prefilled);
+                    self.props.onSelect(false, ":" + self.found[selected].n + ":");
                     handled = true;
                 }
                 else {
@@ -146,19 +143,20 @@ var EmojiAutocomplete = React.createClass({
                 }
             }
         });
-    },
-    componentDidUpdate: function() {
+    }
+    componentDidUpdate() {
         if (!this.props.emojiSearchQuery) {
             this.unbindKeyEvents();
         }
         else {
             this.bindKeyEvents();
         }
-    },
-    componentWillUnmount: function() {
+    }
+    componentWillUnmount() {
+        super.componentWillUnmount();
         this.unbindKeyEvents();
-    },
-    render: function() {
+    }
+    render() {
         var self = this;
         if (!self.props.emojiSearchQuery) {
             return null;
@@ -166,7 +164,7 @@ var EmojiAutocomplete = React.createClass({
 
         self.preload_emojis();
 
-        if (self.loadingPromise && self.loadingPromise.state() === 'pending') {
+        if (self.loading) {
             return <div className="textarea-autofill-bl">
                 <div className="textarea-autofill-info">
                     {l[5533]}
@@ -219,6 +217,11 @@ var EmojiAutocomplete = React.createClass({
         this.found = found;
 
         if (!found || found.length === 0) {
+            setTimeout(function() {
+                // onCancel may need to do a .setState on parent component, so need to run it in a separate
+                // thread/stack
+                self.props.onCancel();
+            }, 0);
             return null;
         }
 
@@ -274,9 +277,4 @@ var EmojiAutocomplete = React.createClass({
             </div>
         </div>;
     }
-});
-
-module.exports = {
-    EmojiAutocomplete,
 };
-

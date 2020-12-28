@@ -8,12 +8,13 @@ function browserdetails(useragent) {
     var browser = false;
     var icon = '';
     var name = '';
-    var brand = '';
+    var verSep = "\\s+";
     var verTag = '';
     var nameTrans = '';
     var current = false;
     var brand = false;
     var details = {};
+    var displayName;
 
     if (useragent === undefined || useragent === ua) {
         current = true;
@@ -36,7 +37,7 @@ function browserdetails(useragent) {
         icon = 'wp.png';
         os = 'Windows Phone';
     }
-    else if (useragent.indexOf('android') > 0) {
+    else if (useragent.indexOf('android') > 0 || useragent.indexOf('andr0id') > 0) {
         os = 'Android';
     }
     else if (useragent.indexOf('windows') > 0) {
@@ -55,11 +56,31 @@ function browserdetails(useragent) {
         || useragent.indexOf('darwin') > 0) {
         os = 'Apple';
     }
-    else if (useragent.indexOf('linux') > 0) {
+    else if (useragent.indexOf('qnap') > 0) {
+        os = 'QNAP';
+    }
+    else if (useragent.indexOf('synology') > 0) {
+        os = 'Synology';
+    }
+    else if (useragent.indexOf('linux') > 0
+        || useragent.indexOf('freebsd') > 0
+        || useragent.indexOf('netbsd') > 0
+        || useragent.indexOf('openbsd') > 0
+        || useragent.indexOf('sunos') > 0
+        || useragent.indexOf('gentoo') > 0) {
         os = 'Linux';
     }
     else if (useragent.indexOf('blackberry') > 0) {
         os = 'Blackberry';
+    }
+    else if (useragent.indexOf(' cros ') > 0) {
+        os = 'ChromeOS';
+    }
+    else if (useragent.indexOf(' kaios') > 0) {
+        os = 'KaiOS';
+    }
+    else if (useragent.indexOf('webos') > 0) {
+        os = 'WebOS';
     }
 
     if (mega.browserBrand[brand]) {
@@ -68,20 +89,38 @@ function browserdetails(useragent) {
     else if (useragent.indexOf(' edge/') > 0) {
         browser = 'Edge';
     }
+    else if (useragent.indexOf(' edg/') > 0) {
+        displayName = 'Edge (Chromium)';
+        icon = 'edgium.png';
+        browser = 'Edgium';
+        verTag = 'Edg';
+    }
     else if (useragent.indexOf('iemobile/') > 0) {
         icon = 'ie.png';
         brand = 'IEMobile';
         browser = 'Internet Explorer';
     }
-    else if (useragent.indexOf('opera') > 0 || useragent.indexOf(' opr/') > 0) {
+    else if (useragent.indexOf('smarttv') > 0
+        || useragent.indexOf('smart_tv') > 0
+        || useragent.indexOf('netcast') > 0
+        || useragent.indexOf('webos') > 0
+        || useragent.indexOf('hbbtv') > 0) {
+        icon = 'linux.png';
+        browser = 'SmartTV';
+    }
+    else if (useragent.indexOf('opera') > 0 || useragent.indexOf(' opr/') > 0 || useragent.indexOf(' opt/') > 0) {
         if (useragent.indexOf(' opr/') > 0) {
             verTag = 'opr';
+        }
+        else if (useragent.indexOf(' opt/') > 0) {
+            verTag = 'opt';
         }
         browser = 'Opera';
     }
     else if (useragent.indexOf(' dragon/') > 0) {
         icon = 'dragon.png';
         browser = 'Comodo Dragon';
+        verTag = 'Dragon';
     }
     else if (useragent.indexOf('vivaldi') > 0) {
         browser = 'Vivaldi';
@@ -89,7 +128,7 @@ function browserdetails(useragent) {
     else if (useragent.indexOf('maxthon') > 0) {
         browser = 'Maxthon';
     }
-    else if (useragent.indexOf('electron') > 0) {
+    else if (useragent.indexOf(' electron/') > 0) {
         browser = 'Electron';
     }
     else if (useragent.indexOf('palemoon') > 0) {
@@ -113,6 +152,9 @@ function browserdetails(useragent) {
     else if (useragent.indexOf(' iron/') > 0) {
         browser = 'Iron';
     }
+    else if (useragent.indexOf(' superbird/') > 0) {
+        browser = 'Superbird';
+    }
     else if (useragent.indexOf('avant browser') > 0) {
         browser = 'Avant';
     }
@@ -121,6 +163,15 @@ function browserdetails(useragent) {
     }
     else if (useragent.indexOf('k-meleon') > 0) {
         browser = 'K-Meleon';
+    }
+    else if (useragent.indexOf(' edga/') > 0) {
+        os = 'Android';
+        browser = 'Edge';
+        details.brand = verTag = 'EdgA';
+    }
+    else if (useragent.indexOf(' edgios') > 0) {
+        browser = 'Edge';
+        details.brand = verTag = 'EdgiOS';
     }
     else if (useragent.indexOf(' crios') > 0) {
         browser = 'Chrome';
@@ -151,12 +202,61 @@ function browserdetails(useragent) {
     else if (useragent.indexOf('puffin/') > 0) {
         browser = 'Puffin';
     }
+    else if (useragent.indexOf(' mcent/') > 0) {
+        browser = 'mCent';
+    }
+    else if (useragent.indexOf(' avast/') > 0 || useragent.indexOf(' asw/') > 0) {
+        if (useragent.indexOf(' asw/') > 0) {
+            verTag = 'ASW';
+        }
+        browser = 'Avast';
+    }
+    else if (useragent.indexOf(' vivobrowser/') > 0) {
+        browser = 'VivoBrowser';
+    }
+    else if (useragent.indexOf('qqbrowser/') > 0) {
+        browser = 'QQBrowser';
+    }
+    else if (useragent.indexOf('coc_coc_browser') > 0) {
+        browser = 'Coc';
+        icon = 'coc.png';
+        verTag = 'coc_coc_browser';
+    }
+    else if (useragent.indexOf(' [fb') > 0
+        || useragent.indexOf(' steam ') > 0
+        || useragent.indexOf(' eve-') > 0
+        || useragent.indexOf(' kik/') > 0
+        || useragent.indexOf(' gsa/') > 0
+        || useragent.indexOf('messenger') > 0
+        || useragent.indexOf('twit' + 'ter') > 0
+        || useragent.indexOf('cros' + 'swalk') > 0
+        || useragent.indexOf('snap' + 'chat') > 0
+        || useragent.indexOf('pint' + 'erest') > 0
+        || useragent.indexOf('inst' + 'agram') > 0) {
+
+        icon = 'app.png';
+        browser = 'In-App WebView';
+
+        if (useragent.indexOf(' [fb') > 0) {
+            verSep = ';';
+            verTag = 'FBAV';
+        }
+        else if (useragent.indexOf(' gsa/') > 0) {
+            verTag = 'GSA';
+            browser = 'Google Search App';
+        }
+
+        details.brand = os === 'Android' ? 'Chrome' : 'Safari';
+    }
+    else if (useragent.indexOf(' chromium/') > 0) {
+        browser = 'Chromium';
+    }
     else if (useragent.indexOf('chrome') > 0) {
         browser = 'Chrome';
     }
     else if (useragent.indexOf('safari') > 0) {
         verTag = 'Version';
-        browser = os === 'Android' ? null : 'Safari';
+        browser = os === 'Android' || os === 'Linux' ? null : 'Safari';
     }
     else if (useragent.indexOf('firefox') > 0) {
         browser = 'Firefox';
@@ -172,7 +272,12 @@ function browserdetails(useragent) {
         browser = 'ES File Explorer';
     }
     else if (useragent.indexOf('megasync') > 0) {
+        icon = 'mega.png';
         browser = 'MEGAsync';
+    }
+    else if (useragent.indexOf('megacmd') > 0) {
+        icon = 'mega.png';
+        browser = 'MEGAcmd';
     }
     else if (useragent.indexOf('msie') > 0
         || useragent.indexOf('trident') > 0) {
@@ -182,7 +287,7 @@ function browserdetails(useragent) {
     // Translate "%1 on %2" to "Chrome on Windows"
     if ((os) && (browser)) {
         name = (brand || browser) + ' on ' + os;
-        nameTrans = String(l && l[7684]).replace('%1', brand || browser).replace('%2', os);
+        nameTrans = String(l && l[7684]).replace('%1', displayName || brand || browser).replace('%2', os);
     }
     else if (os) {
         name = os;
@@ -190,6 +295,7 @@ function browserdetails(useragent) {
     }
     else if (browser) {
         name = browser;
+        nameTrans = displayName || name;
     }
     else {
         name = 'Unknown';
@@ -197,7 +303,7 @@ function browserdetails(useragent) {
     }
 
     if (!icon && browser) {
-        if (browser === 'Internet Explorer' || browser === 'Edge') {
+        if (browser === 'Internet Explorer') {
             icon = 'ie.png';
         }
         else {
@@ -216,13 +322,16 @@ function browserdetails(useragent) {
     details.os = os || '';
     details.browser = browser;
     details.version =
-        (useragent.match(RegExp("\\s+" + (verTag || brand || browser) + "/([\\d.]+)", 'i')) || [])[1] || 0;
+        (useragent.match(RegExp(verSep + (verTag || brand || browser) + "/([\\d.]+)", 'i')) || [])[1] || 0;
 
     // Determine if the OS is 64bit
     details.is64bit = /\b(WOW64|x86_64|Win64|intel mac os x 10.(9|\d{2,}))/i.test(useragent);
 
     // Determine if using a browser extension
     details.isExtension = (current && is_extension || useragent.indexOf('megext') > -1);
+
+    // Determine device is ARM machine
+    details.isARM = /\barmv?[4-8]+l?\b/.test(useragent);
 
     if (useragent.indexOf(' MEGAext/') !== -1) {
         var ver = useragent.match(/ MEGAext\/([\d.]+)/);
@@ -235,8 +344,15 @@ function browserdetails(useragent) {
     }
 
     // Determine core engine.
-    if (useragent.indexOf('webkit') > 0) {
+    if (browser === 'Edge') {
+        details.engine = 'EdgeHTML';
+    }
+    else if (useragent.indexOf('webkit') > 0) {
         details.engine = 'Webkit';
+        details.blink = useragent.match(/\bchrom[eium]+\/(\d+(?:\.\d+)?)/);
+        if (details.blink) {
+            details.blink = String(details.blink[1] || '').replace(/\.0+$/, '');
+        }
     }
     else if (useragent.indexOf('trident') > 0) {
         details.engine = 'Trident';

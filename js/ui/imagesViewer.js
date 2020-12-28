@@ -9,6 +9,7 @@ var slideshowid;
     var zoom_mode;
     var origImgWidth;
     var slideshowplay;
+    var slideshowpause;
     var origImgHeight;
     var slideshowTimer;
     var mouseIdleTimer;
@@ -16,6 +17,8 @@ var slideshowid;
     var _hideCounter = false;
     var switchedSides = false;
     var fitToWindow = Object.create(null);
+    var _pdfSeen = false;
+    var zoom_IO_times = 0;
 
     function slideshow_handle(raw) {
         var result;
@@ -157,35 +160,74 @@ var slideshowid;
 
     function slideshow_favourite(n, $overlay) {
         var $favButton = $overlay.find('.viewer-button.favourite');
+        var root = M.getNodeRoot(n && n.h || false);
 
-        if (!n || !n.p || folderlink || M.getNodeRights(n.p) < 2) {
+        if (!n || !n.p || (root === 'shares' && M.getNodeRights(n.p) < 2) || folderlink ||
+            (M.getNodeByHandle(n.h) && !M.getNodeByHandle(n.h).u && M.getNodeRights(n.p) < 2)) {
+
             $favButton.addClass('hidden');
         }
         else {
             $favButton.removeClass('hidden');
 
             $favButton.rebind('click', function() {
+                var $button = $(this);
                 var newFavState = Number(!M.isFavourite(n.h));
 
                 M.favourite(n.h, newFavState);
 
                 if (newFavState) {
-                    $(this).find('i').removeClass('heart').addClass('red-heart');
+                    $button.attr('data-simpletip', l[5872]);
+                    $('i', $button).removeClass('heart').addClass('red-heart');
+                    $favButton.trigger('mouseenter');
                 }
                 else {
-                    $(this).find('i').removeClass('red-heart').addClass('heart');
+                    $button.attr('data-simpletip', l[5871]);
+                    $('i', $button).removeClass('red-heart').addClass('heart');
+                    $favButton.trigger('mouseenter');
                 }
             });
 
             // Change favourite icon
-            if (n.fav) {
-                $overlay.find('.viewer-button.favourite i')
-                    .removeClass('heart').addClass('red-heart');
+            if (M.isFavourite(n.h)) {
+                $('.viewer-button.favourite', $overlay).attr('data-simpletip',  l[5872]);
+                $('.viewer-button.favourite i', $overlay).removeClass('heart').addClass('red-heart');
             }
             else {
-                $overlay.find('.viewer-button.favourite i')
-                    .removeClass('red-heart').addClass('heart');
+                $('.viewer-button.favourite', $overlay).attr('data-simpletip', l[5871]);
+                $('.viewer-button.favourite i', $overlay).removeClass('red-heart').addClass('heart');
             }
+        }
+    }
+
+    function slideshow_remove(n, $overlay) {
+
+        var $removeButton = $overlay.find('.viewer-button.remove');
+        var root = M.getNodeRoot(n && n.h || false);
+
+        if (!n || !n.p || (root === 'shares' && M.getNodeRights(n.p) < 2) || folderlink ||
+            (M.getNodeByHandle(n.h) && !M.getNodeByHandle(n.h).u && M.getNodeRights(n.p) < 2) || M.chat) {
+
+            $removeButton.addClass('hidden');
+        }
+        else {
+            $removeButton.removeClass('hidden');
+
+            $removeButton.rebind('click', function() {
+
+                if (M.isInvalidUserStatus()) {
+                    history.back();
+                    return false;
+                }
+
+                // Has to exit the full screen mode in order to show remove confirmation diagram
+                if ($(document).fullScreen()) {
+                    $(document).fullScreen(false);
+                }
+
+                fmremove();
+                return false;
+            });
         }
     }
 
@@ -204,7 +246,10 @@ var slideshowid;
         if ($overlay) {
             var root = M.getNodeRoot(n && n.h || false);
 
-            if (!n || !n.p || root === 'shares' || root === M.RubbishID || folderlink) {
+            if (!n || !n.p || root === 'shares' || root === M.RubbishID ||
+                (!folderlink && M.getNodeByHandle(n.h) && !M.getNodeByHandle(n.h).u &&
+                 M.getNodeRights(n.p) < 2)) {
+
                 $overlay.find('.viewer-button.getlink').addClass('hidden');
             }
             else {
@@ -229,7 +274,7 @@ var slideshowid;
     }
 
     function slideshow_timereset() {
-        if (slideshowplay) {
+        if (slideshowplay && !slideshowpause) {
             clearTimeout(slideshowTimer);
             slideshowTimer = setTimeout(slideshow_next, 4000);
         }
@@ -250,6 +295,7 @@ var slideshowid;
         if (slideshow_stop) {
             $overlay.removeClass('slideshow').off('mousewheel.imgzoom');
             slideshowplay = false;
+            slideshowpause = false;
             $pauseButton.attr('data-state', 'pause');
             $pauseButton.find('i').removeClass('play').addClass('pause');
             clearTimeout(slideshowTimer);
@@ -277,11 +323,13 @@ var slideshowid;
             if ($(this).attr('data-state') === 'pause') {
                 $this.attr('data-state', 'play');
                 $this.find('i').removeClass('pause').addClass('play');
+                slideshowpause = true;
             }
             else {
                 $this.attr('data-state', 'pause');
                 $this.find('i').removeClass('play').addClass('pause');
                 slideshowTimer = setTimeout(slideshow_next, 4000);
+                slideshowpause = false;
             }
             return false;
         });
@@ -427,7 +475,30 @@ var slideshowid;
         var $img = $overlay.find('img.active');
         var $percLabel = $overlay.find('.viewer-button-label.zoom');
         var perc = parseFloat($percLabel.attr('data-perc'));
-        var newPerc = ((perc * (zoomout ? .90 : 1.10) / 100) || 1) / devicePixelRatio;
+        var newPerc = perc / 100 || 1;
+
+        if (zoomout && (newPerc * 0.9 >= 0.05)) {
+            if (zoom_IO_times <= 0) {
+                newPerc *= 0.9;
+            }
+            else {
+                // It was zoomed in previously
+                newPerc /= 1.1;
+            }
+            zoom_IO_times--;
+        }
+        else if (!zoomout && (newPerc * 1.1 <= 64)) {
+            if (zoom_IO_times >= 0) {
+                newPerc *= 1.1;
+            }
+            else {
+                // It was zoomed out previously
+                newPerc /= 0.9;
+            }
+            zoom_IO_times++;
+        }
+
+        newPerc /= devicePixelRatio;
         var newImgWidth = origImgWidth * newPerc;
         var newImgHeight = origImgHeight * newPerc;
 
@@ -531,15 +602,22 @@ var slideshowid;
 
     // Viewer Init
     function slideshow(id, close, hideCounter) {
+        if (!close && M.isInvalidUserStatus()) {
+            return;
+        }
+
         var $overlay = $('.viewer-overlay');
         var $controls = $overlay.find('.viewer-top-bl, .viewer-bottom-bl, .viewer-slideshow-controls');
         var $document = $(document);
+        zoom_IO_times = 0;
 
         if (d) {
             console.log('slideshow', id, close, slideshowid);
         }
 
         if (close) {
+            sessionStorage.removeItem('previewNode');
+            sessionStorage.removeItem('previewTime');
             zoom_mode = false;
             switchedSides = false;
             slideshowid = false;
@@ -567,6 +645,17 @@ var slideshowid;
             slideshow_imgControls(1);
             mBroadcaster.sendMessage('slideshow:close');
             slideshow_freemem();
+
+            if (_pdfSeen) {
+                _pdfSeen = false;
+
+                tryCatch(function() {
+                    var ev = document.createEvent("HTMLEvents");
+                    ev.initEvent("pdfjs-cleanup.meganz", true);
+                    document.getElementById('pdfpreviewdiv1').contentDocument.body.dispatchEvent(ev);
+                })();
+            }
+
             return false;
         }
 
@@ -578,30 +667,22 @@ var slideshowid;
         // Checking if this the first preview (not a preview navigation)
         if (!slideshowid) {
             // then pushing fake states of history/hash
-            if (!hashLogic && !location.hash) {
-                var isSearch = page.indexOf('fm/search/');
-                if (isSearch >= 0) {
-                    var searchString = page.substring(isSearch + 10);
-                    var tempPage = page.substring(0, isSearch + 10);
-                    history.pushState({subpage: tempPage, searchString: searchString}, "", "/" + tempPage);
-                }
-                else {
-                    history.pushState({subpage: page}, '', '/' + page);
-                }
+            if (!history.state || history.state.view !== id) {
+                pushHistoryState();
             }
-
             _hideCounter = hideCounter;
         }
 
         slideshowid = n.ch || n.h;
         if (window.selectionManager) {
-            selectionManager.clear_selection();
-            selectionManager.set_currently_selected(n.h);
+            selectionManager.resetTo(n.h);
         }
         else {
             $.selected = [n.h];
         }
         mBroadcaster.sendMessage('slideshow:open', n);
+        sessionStorage.setItem('previewNode', id);
+        pushHistoryState(true, Object.assign({subpage: page}, history.state, {view: slideshowid}));
 
         // Turn off pick and pan mode
         slideshow_pickpan($overlay, 1);
@@ -633,14 +714,7 @@ var slideshowid;
                     }
                 }
                 else if (e.keyCode === 8 || e.key === 'Backspace') {
-                    // since Backspace event is processed with keydown at document level for cloudBrowser.
-                    // i prefered that to process it here, instead of unbind the previous handler.
-                    if (hashLogic || location.hash) {
-                        slideshow(0, 1);
-                    }
-                    else {
-                        history.back();
-                    }
+                    history.back();
                     return false;
                 }
             });
@@ -648,12 +722,7 @@ var slideshowid;
             // Close icon
             $overlay.find('.viewer-button.close,.viewer-error-close')
                 .rebind('click', function () {
-                    if (hashLogic || location.hash) {
-                        slideshow(0, 1);
-                    }
-                    else {
-                        history.back();
-                    }
+                    history.back();
                     return false;
                 });
 
@@ -703,6 +772,9 @@ var slideshowid;
         // Favourite Icon
         slideshow_favourite(n, $overlay);
 
+        // Remove Icon
+        slideshow_remove(n, $overlay);
+
         // Set file data
         zoom_mode = false;
         switchedSides = false;
@@ -711,6 +783,9 @@ var slideshowid;
         $overlay.find('.viewer-progress, .viewer-error, video, #pdfpreviewdiv1').addClass('hidden');
         $overlay.find('.viewer-mid-button.prev,.viewer-mid-button.next').removeClass('active');
         $overlay.find('.viewer-progress p').removeAttr('style');
+
+        // Init full screen icon
+        $overlay.find('.viewer-button.fs .icons-img').removeClass('lowscreen').addClass('fullscreen');
 
         var steps = slideshowsteps();
         if (steps.backward.length > 0) {
@@ -783,7 +858,13 @@ var slideshowid;
         if (previews[n.h]) {
             if (previews[n.h].fromChat) {
                 previews[n.h].fromChat = null;
-                fetchsrc(n);
+
+                if (previews[n.h].full) {
+                    previewimg(n.h, previews[n.h].buffer);
+                }
+                else {
+                    fetchsrc(n);
+                }
             }
             else {
                 previewsrc(n.h);
@@ -848,7 +929,7 @@ var slideshowid;
             console.debug('slideshow.fetchsrc', id, n, n.h);
         }
 
-        if (filetype(n) === 'PDF Document') {
+        if (fileext(n.name) === 'pdf') {
             if (!preqs[n.h]) {
                 preqs[n.h] = 1;
 
@@ -877,7 +958,7 @@ var slideshowid;
 
                 M.require('videostream').done(function() {
                     if (preqs[n.h]) {
-                        previewimg(n.h, Array(26).join('x'), filemime(n));
+                        previewimg(n.h, Array(26).join('x'), filemime(n, 'video/mp4'));
                     }
                 }).fail(function() {
                     console.error('Failed to load videostream.js');
@@ -952,7 +1033,9 @@ var slideshowid;
 
             M.gfsfetch(n.link || n.h, 0, -1, progress).tryCatch(function(data) {
                 preview({type: filemime(n, 'image/jpeg')}, n.h, data.buffer);
-                previews[n.h].orientation = parseInt(EXIF.readFromArrayBuffer(data, true).Orientation) || 1;
+                if (!exifImageRotation.fromImage) {
+                    previews[n.h].orientation = parseInt(EXIF.readFromArrayBuffer(data, true).Orientation) || 1;
+                }
             }, function(ev) {
                 if (ev === EOVERQUOTA || Object(ev.target).status === 509) {
                     eventlog(99703, true);
@@ -1003,9 +1086,12 @@ var slideshowid;
                     mBroadcaster.removeListener(preqs[n.h].ev3);
                     mBroadcaster.removeListener(preqs[n.h].ev4);
 
-                    preqs[n.h].destroy();
+                    preqs[n.h].kill();
                     preqs[n.h] = false;
                 }
+
+                sessionStorage.removeItem('previewNode');
+                sessionStorage.removeItem('previewTime');
             };
 
             // Show loading spinner until video is playing
@@ -1063,7 +1149,7 @@ var slideshowid;
         if (n.name) {
             var c = MediaAttribute.getCodecStrings(n);
             if (c) {
-                $overlay.find('.viewer-filename').attr('title', c.join("/"));
+                $overlay.find('.viewer-filename').attr('title', c);
             }
         }
 
@@ -1127,12 +1213,30 @@ var slideshowid;
 
     // a method to fetch scripts and files needed to run pdfviewer
     // and then excute them on iframe element [#pdfpreviewdiv1]
-    function prepareAndViewPdfViewer() {
-        M.require('pdfjs2', 'pdfviewer', 'pdfviewercss', 'pdforiginalviewerjs').done(function() {
+    function prepareAndViewPdfViewer(data) {
+        if (_pdfSeen) {
+            var success = false;
+            tryCatch(function() {
+                var elm = document.getElementById('pdfpreviewdiv1');
+                elm.classList.remove('hidden');
+
+                var ev = document.createEvent("HTMLEvents");
+                ev.initEvent("pdfjs-openfile.meganz", true);
+                ev.data = data.buffer || data.src;
+                elm.contentDocument.body.dispatchEvent(ev);
+                success = true;
+            })();
+
+            if (success) {
+                return;
+            }
+        }
+        M.require('pdfjs2', 'pdfviewer', 'pdfviewercss', 'pdfviewerjs').done(function() {
             var myPage = pages['pdfviewer'];
-            myPage = myPage.replace('^$#^1', window['pdfviewercss']);
-            myPage = myPage.replace('^$#^3', window['pdfjs2']);
-            myPage = myPage.replace('^$#^4', window['pdforiginalviewerjs']);
+            myPage = myPage.replace('viewer.css', window.pdfviewercss);
+            myPage = myPage.replace('../build/pdf.js', window.pdfjs2);
+            myPage = myPage.replace('viewer.js', window.pdfviewerjs);
+            localStorage.setItem('currPdfPrev2', JSON.stringify(data.src));
             // remove then re-add iframe to avoid History changes [push]
             var pdfIframe = document.getElementById('pdfpreviewdiv1');
             var newPdfIframe = document.createElement('iframe');
@@ -1144,6 +1248,7 @@ var slideshowid;
             doc.open();
             doc.write(myPage);
             doc.close();
+            _pdfSeen = true;
         });
     }
 
@@ -1158,22 +1263,25 @@ var slideshowid;
             return;
         }
 
+        var type = typeof previews[id].type === 'string' && previews[id].type || 'image/jpeg';
+        mBroadcaster.sendMessage.apply(mBroadcaster, ['trk:event', 'preview'].concat(type.split('/')));
+
         $overlay.removeClass('pdf video video-theatre-mode');
         $imgBlock.find('embed').addClass('hidden');
         $imgBlock.find('video').addClass('hidden');
         $imgBlock.find('.img-wrap').removeClass('hidden');
         $imgBlock.find('#pdfpreviewdiv1').addClass('hidden');
+        $overlay.find('.viewer-bottom-bl').removeClass('hidden');
 
         if (previews[id].type === 'application/pdf') {
             $overlay.addClass('pdf');
             $overlay.find('.viewer-pending').addClass('hidden');
             $overlay.find('.viewer-progress').addClass('hidden');
+            $overlay.find('.viewer-bottom-bl').addClass('hidden');
             $imgBlock.find('.img-wrap').addClass('hidden');
             // preview pdfs using pdfjs for all browsers #8036
             // to fix pdf compatibility - Bug #7796
-            localStorage.setItem('currPdfPrev2', JSON.stringify(src));
-            localStorage.setItem('pdfPrevTitle', $overlay.find('.viewer-filename').text());
-            prepareAndViewPdfViewer();
+            prepareAndViewPdfViewer(previews[id]);
             api_req({a: 'log', e: 99660, m: 'Previewed PDF Document.'});
             return;
         }
@@ -1232,7 +1340,6 @@ var slideshowid;
 
                 // Restore last good preview
                 if (previews[id].prev) {
-                    M.neuterArrayBuffer(previews[id].buffer);
                     URL.revokeObjectURL(previews[id].src);
                     previews[id] = previews[id].prev;
                     delete previews[id].prev;
@@ -1332,7 +1439,7 @@ var slideshowid;
 
         if (previews[id]) {
             if (previews[id].full) {
-                if (d) {
+                if (d && previews[id].fromChat !== null) {
                     console.warn('Not overwriting a full preview...', id);
                 }
                 if (id === slideshow_handle()) {
@@ -1400,7 +1507,6 @@ var slideshowid;
                 k = p.h;
 
                 size += p.buffer.byteLength;
-                M.neuterArrayBuffer(p.buffer);
                 p.buffer = p.full = preqs[k] = false;
 
                 if (p.prev) {
@@ -1408,7 +1514,7 @@ var slideshowid;
                     delete p.prev;
                 }
 
-                if (p.type.startsWith('image')) {
+                if (p.type.startsWith('image') || p.type === 'application/pdf') {
                     URL.revokeObjectURL(p.src);
                     if (previews[k] === p) {
                         previews[k] = false;
@@ -1426,6 +1532,9 @@ var slideshowid;
         }
     }
 
+    /**
+     * @global
+     */
     global.slideshow = slideshow;
     global.slideshow_next = slideshow_next;
     global.slideshow_prev = slideshow_prev;

@@ -59,7 +59,7 @@ var dlmanager = {
     isDownloading: false,
     dlZipID: 0,
     gotHSTS: false,
-    resumeInfoTag: 'dlmr!',
+    resumeInfoTag: 'dlrv2!',
     resumeInfoCache: Object.create(null),
     logger: MegaLogger.getLogger('dlmanager'),
 
@@ -117,7 +117,7 @@ var dlmanager = {
         }
 
         if (typeof callback === 'function') {
-            promise.tryCatch(callback, callback.bind(null, false));
+            promise.then(callback).catch(callback.bind(null, false));
         }
 
         return promise;
@@ -148,7 +148,7 @@ var dlmanager = {
             return MegaPromise.reject(EINCOMPLETE);
         }
 
-        dl.resumeInfo.mac = dl.mac;
+        dl.resumeInfo.macs = dl.macs;
         dl.resumeInfo.byteOffset = byteOffset;
 
         if (d) {
@@ -172,6 +172,15 @@ var dlmanager = {
      */
     openInBrowser: function(n) {
         'use strict';
+
+        // These browsers do not support opening blob.
+        if (ua.details.brand === 'FxiOS'
+            || ua.details.browser === 'Opera'
+            || ua.details.browser === 'SamsungBrowser') {
+
+            return false;
+        }
+
         var exts = ["pdf", "txt", "png", "gif", "jpg", "jpeg"];
 
         if (ua.details.engine === 'Gecko') {
@@ -207,18 +216,14 @@ var dlmanager = {
      * @param {String} filename The filename..
      * @returns {MegaPromise}
      */
-    getFileSizeOnDisk: function(handle, filename) {
+    getFileSizeOnDisk: promisify(function(resolve, reject, handle, filename) {
         'use strict';
-
-        var promise = new MegaPromise();
-        var reject = promise.reject.bind(promise, null);
 
         if (dlMethod === FileSystemAPI) {
             M.getFileEntryMetadata('mega/' + handle)
-                .fail(reject)
-                .done(function(metadata) {
-                    promise.resolve(metadata.size);
-                });
+                .then(function(metadata) {
+                    resolve(metadata.size);
+                }).catch(reject);
         }
         else if (is_chrome_firefox && typeof OS !== 'undefined') {
             try {
@@ -226,7 +231,7 @@ var dlmanager = {
 
                 OS.File.stat(OS.Path.join(root.path, filename))
                     .then(function(info) {
-                        promise.resolve(info.size);
+                        resolve(info.size);
                     }, reject);
             }
             catch (ex) {
@@ -236,9 +241,7 @@ var dlmanager = {
         else {
             reject(EACCESS);
         }
-
-        return promise;
-    },
+    }),
 
     /**
      * Initialize download
@@ -333,7 +336,7 @@ var dlmanager = {
 
         dl.url = gres.g;
         dl.urls = dl_urls;
-        dl.mac = resumeInfo.mac || [0, 0, 0, 0];
+        dl.macs = resumeInfo.macs || dl.macs || Object.create(null);
         dl.resumeInfo = resumeInfo || Object.create(null);
         dl.byteOffset = dl.resumeInfo.byteOffset = byteOffset;
 
@@ -357,7 +360,7 @@ var dlmanager = {
             delete dlmanager.resumeInfoCache[resumeInfo.tag];
 
             M.readFileEntry(resumeInfo.entry)
-                .done(function(ab) {
+                .then(function(ab) {
                     if (ab instanceof ArrayBuffer && ab.byteLength === dl.byteOffset) {
                         dl.pzBufferStateChange = ab;
                     }
@@ -365,7 +368,7 @@ var dlmanager = {
                         console.warn('Invalid pzBufferStateChange...', ab, dl.byteOffset);
                     }
                 })
-                .finally(function() {
+                .always(function() {
                     onIdle(startDownload);
                     resumeInfo.entry.remove(function() {});
                     delete resumeInfo.entry;
@@ -464,7 +467,7 @@ var dlmanager = {
                     });
                 delete this._newUrlQueue[gid];
             }
-            dlmanager.logger.info("Resuming, got new URL for %s:%s", gid, res.g, changed, res);
+            dlmanager.logger.info("Resuming, got new URL for %s", gid, res.g, changed, res);
             dlQueue.resume();
         }.bind(this));
     },
@@ -651,12 +654,28 @@ var dlmanager = {
             g: 1,
             ssl: use_ssl
         };
+
         var ctx = {
             object: dl,
             next: callback,
             dl_key: dl.key,
             callback: this.dlGetUrlDone.bind(this)
         };
+
+        // IF this is an anonymous chat OR a chat that I'm not a part of
+        if (M.chat && megaChatIsReady) {
+            megaChat.eventuallyAddDldTicketToReq(req);
+        }
+
+        if (d && String(apipath).indexOf('staging') > 0) {
+            var s = sessionStorage;
+            req.f = [s.dltfefq | 0, s.dltflimit | 0];
+        }
+
+        if (window.fetchStreamSupport) {
+            // can handle CloudRAID downloads.
+            req.v = 2;
+        }
 
         if (dl.ph) {
             req.p = dl.ph;
@@ -688,6 +707,17 @@ var dlmanager = {
             else {
                 delete dlmanager.efq;
             }
+            if (res.g && typeof res.g === 'object') {
+                // API may gives a fake array...
+                res.g = Object.values(res.g);
+
+                if (res.g[0] < 0) {
+                    res.e = res.e || res.g[0];
+                }
+                else {
+                    dlQueue.setSize(1);
+                }
+            }
             if (res.d) {
                 error = (res.d ? 2 : 1); // XXX: ???
             }
@@ -714,7 +744,7 @@ var dlmanager = {
                         ctx.object.data = new ArrayBuffer(res.s);
                     }
 
-                    dlmanager.onNolongerOverquota();
+                    // dlmanager.onNolongerOverquota();
                     return ctx.next(false, res, attr, ctx.object);
                 }
             }
@@ -747,6 +777,32 @@ var dlmanager = {
         }
     },
 
+    logDecryptionError: function(dl, skipped) {
+        'use strict';
+
+        if (dl && Array.isArray(dl.url)) {
+            // Decryption error from direct CloudRAID download
+
+            var str = "";
+            if (dl.cloudRaidSettings) {
+                str += "f:" + dl.cloudRaidSettings.onFails;
+                str += " t:" + dl.cloudRaidSettings.timeouts;
+                str += " sg:" + dl.cloudRaidSettings.startglitches;
+                str += " tmf:" + dl.cloudRaidSettings.toomanyfails;
+            }
+
+            eventlog(99720, JSON.stringify([3, dl && dl.id, str, skipped ? 1 : 0]));
+        }
+        else if (String(dl && dl.url).length > 256) {
+            // Decryption error from proxied CloudRAID download
+
+            eventlog(99706, JSON.stringify([2, dl && dl.id, skipped ? 1 : 0]));
+        }
+        else {
+            eventlog(99711, JSON.stringify([2, dl && dl.id, skipped ? 1 : 0]));
+        }
+    },
+
     dlReportStatus: function DM_reportstatus(dl, code) {
         this.logger.warn('dlReportStatus', code, this.getGID(dl), dl);
 
@@ -756,20 +812,38 @@ var dlmanager = {
         }
 
         var eekey = code === EKEY;
-        if (eekey || code === EACCESS) {
+        if (eekey || code === EACCESS || code === ETOOMANY) {
             // TODO: Check if other codes should raise abort()
             later(function() {
                 dlmanager.abort(dl, eekey);
             });
-
             if (M.chat) {
                 $('.toast-notification').removeClass('visible');
-                showToast('download', eekey ? l[24] : l[23]);
+                showToast('download', eekey ? l[24] : l[20228]);
             }
+            else if (code === ETOOMANY) {
+
+                // If `g` request return ETOOMANY, it means the user who originally owned the file is suspended.
+                showToast('download', l[20822]);
+            }
+        }
+
+        if (code === EBLOCKED) {
+            showToast('download', l[20705]);
+        }
+
+        if (eekey) {
+            this.logDecryptionError(dl);
+        }
+
+        if (code === ETEMPUNAVAIL) {
+            eventlog(99698, true);
         }
     },
 
-    dlClearActiveTransfer: function DM_dlClearActiveTransfer(dl_id) {
+    dlClearActiveTransfer: tryCatch(function DM_dlClearActiveTransfer(dl_id) {
+        'use strict';
+
         if (is_mobile) {
             return;
         }
@@ -783,16 +857,18 @@ var dlmanager = {
                 localStorage.aTransfers = JSON.stringify(data);
             }
         }
-    },
+    }),
 
-    dlSetActiveTransfer: function DM_dlSetActiveTransfer(dl_id) {
+    dlSetActiveTransfer: tryCatch(function DM_dlSetActiveTransfer(dl_id) {
+        'use strict';
+
         if (is_mobile) {
             return;
         }
         var data = JSON.parse(localStorage.aTransfers || '{}');
         data[dl_id] = Date.now();
         localStorage.aTransfers = JSON.stringify(data);
-    },
+    }),
 
     isTrasferActive: function DM_isTrasferActive(dl_id) {
         var date = null;
@@ -896,32 +972,9 @@ var dlmanager = {
 
     checkLostChunks: function DM_checkLostChunks(file) {
         'use strict';
-
-        var mac;
         var dl_key = file.key;
 
-        if (file.hasResumeSupport) {
-            mac = file.mac;
-        }
-        else {
-            var t = Object.keys(file.macs)
-                .map(Number)
-                .sort(function(a, b) {
-                    return a - b;
-                })
-                .map(function(v) {
-                    return file.macs[v];
-                });
-
-            mac = condenseMacs(t, [
-                dl_key[0] ^ dl_key[4],
-                dl_key[1] ^ dl_key[5],
-                dl_key[2] ^ dl_key[6],
-                dl_key[3] ^ dl_key[7]
-            ], file.mac);
-        }
-
-        if (have_ab && (dl_key[6] !== (mac[0] ^ mac[1]) || dl_key[7] !== (mac[2] ^ mac[3]))) {
+        if (!this.verifyIntegrity(file)) {
             return false;
         }
 
@@ -944,6 +997,65 @@ var dlmanager = {
         }
 
         return true;
+    },
+
+    /** compute final MAC from block MACs, allow for EOF chunk race gaps */
+    verifyIntegrity: function(dl) {
+        'use strict';
+        const match = (mac) => dl.key[6] === (mac[0] ^ mac[1]) && dl.key[7] === (mac[2] ^ mac[3]);
+        const macs = Object.keys(dl.macs).map(Number).sort((a, b) => a - b).map(v => dl.macs[v]);
+        const aes = new sjcl.cipher.aes([
+            dl.key[0] ^ dl.key[4], dl.key[1] ^ dl.key[5], dl.key[2] ^ dl.key[6], dl.key[3] ^ dl.key[7]
+        ]);
+
+        let mac = condenseMacs(macs, aes);
+
+        // normal case, correct file, correct mac
+        if (match(mac)) {
+            return true;
+        }
+
+        // up to two connections lost the race, up to 32MB (ie chunks) each
+        const end = macs.length;
+        const max = Math.min(32 * 2, end);
+        const gap = (macs, gapStart, gapEnd) => {
+            let mac = [0, 0, 0, 0];
+
+            for (let i = 0; i < macs.length; ++i) {
+                if (i < gapStart || i >= gapEnd) {
+                    let mblk = macs[i];
+
+                    for (let j = 0; j < mblk.length; j += 4) {
+                        mac[0] ^= mblk[j];
+                        mac[1] ^= mblk[j + 1];
+                        mac[2] ^= mblk[j + 2];
+                        mac[3] ^= mblk[j + 3];
+
+                        mac = aes.encrypt(mac);
+                    }
+                }
+            }
+            return mac;
+        };
+
+        // most likely - a single connection gap (possibly two combined)
+        for (let countBack = 1; countBack <= max; ++countBack) {
+            const start1 = end - countBack;
+
+            for (let len1 = 1; len1 <= 64 && start1 + len1 <= end; ++len1) {
+                mac = gap(macs, start1, start1 + len1);
+
+                if (match(mac)) {
+                    if (d) {
+                        this.logger.warn(dl.owner + ' Resolved MAC Gap %d-%d/%d', start1, start1 + len1, end);
+                    }
+                    eventlog(99739);
+                    return true;
+                }
+            }
+        }
+
+        return false;
     },
 
     dlWriter: function DM_dl_writer(dl, is_ready) {
@@ -990,6 +1102,12 @@ var dlmanager = {
             var abDup = dl.data && (is_chrome_firefox & 4) && new Uint8Array(task.data);
 
             var ready = function _onWriterReady() {
+                if (dl.cancelled || oIsFrozen(dl.writer)) {
+                    if (d) {
+                        logger.debug('Download canceled while writing to disk...', dl.cancelled, [dl]);
+                    }
+                    return;
+                }
                 dl.writer.pos += abLen;
 
                 if (dl.data) {
@@ -1000,23 +1118,8 @@ var dlmanager = {
                     ).set(abDup || task.data);
                 }
 
-                if (dl.hasResumeSupport) {
-                    if (d > 1) {
-                        logger.debug('Condense MACs @ offset %s-%s', task.offset, dl.writer.pos, Object.keys(dl.macs));
-                    }
-
-                    for (var pos = task.offset; dl.macs[pos] && pos < dl.writer.pos; pos += 1048576) {
-                        dl.mac[0] ^= dl.macs[pos][0];
-                        dl.mac[1] ^= dl.macs[pos][1];
-                        dl.mac[2] ^= dl.macs[pos][2];
-                        dl.mac[3] ^= dl.macs[pos][3];
-                        dl.mac = dl.aes.encrypt(dl.mac);
-                        delete dl.macs[pos];
-                    }
-                }
-
                 dlmanager.setResumeInfo(dl, dl.writer.pos)
-                    .finally(function() {
+                    .always(function() {
                         finish_write(task, done);
                     });
             };
@@ -1127,17 +1230,16 @@ var dlmanager = {
         }
 
         if (page === 'download') {
-            var $dlPageTW = $('.download.transfer-wrapper');
-            $('.download.over-transfer-quota', $dlPageTW).addClass('hidden');
-            $('.download.in-progress, .video-mode-wrapper', $dlPageTW).removeClass('over-quota');
-            $('.download.file-info').removeClass('overquota');
+            var $dtb = $('.download.top-bar');
+            $dtb.removeClass('stream-overquota overquota');
+            $('.see-our-plans', $dtb).addClass('hidden').off('click');
+            $('.create-account-button', $dtb).addClass('hidden').off('click');
+            $('.get-more-bonuses', $dtb).addClass('hidden').off('click');
+            $('.download.over-transfer-quota', $dtb).addClass('hidden');
+            $(window).trigger('resize');
         }
         else if (ids.length) {
-            $('#' + ids.join(',#'))
-                .addClass('transfer-queued')
-                .find('.transfer-status')
-                .removeClass('overquota')
-                .text(l[7227]);
+            resetOverQuotaTransfers(ids);
         }
 
         for (var i = 0; i < this._dlQuotaListener.length; ++i) {
@@ -1323,7 +1425,7 @@ var dlmanager = {
                 }
             }.bind(this)
 
-        M.req({a: 'uq', xfer: 1}).then(function(res) {
+        M.req.poll(-10, {a: 'uq', xfer: 1}).then(function(res) {
             delay('overquotainfo:reply.success', function() {
                 onQuotaInfo(res);
             });
@@ -1340,10 +1442,15 @@ var dlmanager = {
         'use strict';
 
         var self = this;
+        var unbindEvents = function() {
+            $(window).unbind('resize.overQuotaDialog');
+            $('.fm-dialog-overlay', 'body').unbind('click.closeOverQuotaDialog');
+        };
         var closeDialog = function() {
             if ($.dialog === 'download-pre-warning') {
                 $.dialog = 'was-pre-warning';
             }
+            unbindEvents();
             window.closeDialog();
         };
         var open = function(url) {
@@ -1354,17 +1461,22 @@ var dlmanager = {
             window.open.apply(window, arguments);
         };
         var onclick = function onProClicked() {
-            self.onOverQuotaProClicked = true;
-            delay('overquota:uqft', self._overquotaInfo.bind(self), 30000);
+            if (preWarning) {
+                api_req({a: 'log', e: 99643, m: 'on overquota pre-warning upgrade/pro-plans clicked'});
+            }
+            else {
+                self.onOverQuotaProClicked = true;
+                delay('overquota:uqft', self._overquotaInfo.bind(self), 30000);
+                api_req({a: 'log', e: 99640, m: 'on overquota pro-plans clicked'});
+            }
 
-            if ($(this).hasClass('reg-st3-membership-bl')) {
-                open(getAppBaseUrl() + '#propay_' + $(this).data('payment'));
+            if ($(this).hasClass('plan-button')) {
+                open(getAppBaseUrl() + '#propay_' + $(this).closest('.plan').data('payment'));
             }
             else {
                 open(getAppBaseUrl() + '#pro');
             }
 
-            api_req({a: 'log', e: 99640, m: 'on overquota pro-plans clicked'});
             return false;
         };
         var getMoreBonusesListener = function() {
@@ -1396,46 +1508,26 @@ var dlmanager = {
 
             if (is_mobile) {
                 // desktop has a 'continue' button, on mobile we do treat the close button as such
-                $dialog.find('.fm-dialog-close').rebind('click', this.onLimitedBandwidth.bind(this));
+                $('.fm-dialog-close', $dialog).rebind('click', this.onLimitedBandwidth.bind(this));
             }
-
-            $('.upgrade, .mobile.upgrade-to-pro', $dialog).rebind('click', function() {
-                api_req({a: 'log', e: 99643, m: 'on overquota pre-warning upgrade clicked'});
-
-                // closeDialog();
-
-                // if (preWarning > 1) {
-                //     loadingDialog.show();
-                    open(getAppBaseUrl() + '#pro');
-                    return false;
-                // }
-                //
-                // dlmanager.showRegisterDialog4ach($dialog, flags);
-            });
-
-            $('.reg-st3-membership-bl', $dialog).rebind('click', function() {
-                open(getAppBaseUrl() + '#propay_' + $(this).data('payment'));
-                return false;
-            });
         }
         else {
-            var $dlPageTW = $('.download.transfer-wrapper');
-
-            $('.download.over-transfer-quota', $dlPageTW).addClass('hidden');
-            $('.download.in-progress, .video-mode-wrapper', $dlPageTW).removeClass('over-quota');
 
             $('.msg-overquota', $dialog).removeClass('hidden');
             $('.msg-prewarning', $dialog).addClass('hidden');
 
             $('.continue', $dialog).attr('style', 'display:none');
 
-            $('.upgrade, .mobile.upgrade-to-pro', $dialog).rebind('click', onclick);
-            $dialog.find('.reg-st3-membership-bl').rebind('click', onclick);
-
             $('.video-theatre-mode:visible').addClass('paused');
 
+            $('.fm-dialog-close', $dialog).add($('.fm-dialog-overlay'))
+                .rebind('click.closeOverQuotaDialog', function() {
+
+                    unbindEvents();
+                });
+
             if (page === 'download') {
-                var $dtb = $('.download.transfer-buttons, .download.video-transfer-buttons');
+                var $dtb = $('.download.top-bar');
 
                 $('.create-account-button', $dtb).addClass('hidden').off('click');
                 $('.get-more-bonuses', $dtb).addClass('hidden').off('click');
@@ -1455,10 +1547,13 @@ var dlmanager = {
 
                 $('.see-our-plans', $dtb).removeClass('hidden').rebind('click', onclick);
 
-                $('.download.video .download.over-transfer-quota').removeClass('hidden');
-                $('.download.in-progress, .video-mode-wrapper', $dlPageTW).addClass('over-quota');
+                $('.download.over-transfer-quota', $dtb).removeClass('hidden');
+                $dtb.addClass('stream-overquota');
+                $(window).trigger('resize');
             }
         }
+
+        $('.upgrade, .mobile.upgrade-to-pro, .plan-button', $dialog).rebind('click', onclick);
 
         $('.bottom-tips a', $dialog).rebind('click', function() {
             open(getAppBaseUrl() +
@@ -1492,8 +1587,6 @@ var dlmanager = {
                         })
                         .done(function() {
                             api_req({a: 'log', e: 99645, m: 'on overquota logged into account.'});
-                            closeDialog();
-                            topmenuUI();
                             dlmanager._onQuotaRetry(true);
                         })
                         .fail(showOverQuotaRegisterDialog);
@@ -1569,6 +1662,7 @@ var dlmanager = {
         mega.ui.showRegisterDialog({
             title: l[17],
             body: '<p>' + l[8834] + '</p><p>' + l[8833] + '</p><h2>' + l[1095] + '</h2>',
+            showLogin: true,
 
             onAccountCreated: function(gotLoggedIn, accountData) {
                 if (gotLoggedIn) {
@@ -1578,7 +1672,7 @@ var dlmanager = {
                     api_req({a: 'log', e: 99649, m: 'on overquota logged-in through register dialog.'});
                 }
                 else {
-                    localStorage.awaitingConfirmationAccount = JSON.stringify(accountData);
+                    security.register.cacheRegistrationData(accountData);
                     mega.ui.sendSignupLinkDialog(accountData);
 
                     api_req({a: 'log', e: 99650, m: 'on overquota account created.'});
@@ -1607,7 +1701,7 @@ var dlmanager = {
                     dlmanager._onOverquotaDispatchRetry($dialog);
                 }
                 else {
-                    localStorage.awaitingConfirmationAccount = JSON.stringify(accountData);
+                    security.register.cacheRegistrationData(accountData);
                     mega.ui.sendSignupLinkDialog(accountData);
                 }
             },
@@ -1624,95 +1718,73 @@ var dlmanager = {
     },
 
     prepareLimitedBandwidthDialogPlans: function ($dialog) {
-        var $pricingBoxes = $dialog.find('.reg-st3-membership-bl');
-        for (var i = 0, length = pro.membershipPlans.length; i < length; i++) {
-            var currentPlan = pro.membershipPlans[i];
-            var months = currentPlan[pro.UTQA_RES_INDEX_MONTHS];
-            var planNum = currentPlan[pro.UTQA_RES_INDEX_ACCOUNTLEVEL];
-            var planName = pro.getProPlanName(planNum);
-            if (months !== 12) {
-                var $pricingBox = $pricingBoxes.filter('.pro' + planNum);
-                var $planName = $pricingBox.find('.title span');
-                var $price = $pricingBox.find('.price');
-                var $priceDollars = $price.find('.big');
-                var $priceCents = $price.find('.small');
-                var $storageAmount = $pricingBox.find('.storage-amount');
-                var $storageUnit = $pricingBox.find('.storage-unit');
-                var $bandwidthAmount = $pricingBox.find('.bandwidth-amount');
-                var $bandwidthUnit = $pricingBox.find('.bandwidth-unit');
-                var $euroPrice = $('.euro-price', $price);
-                var $currncyAbbrev = $('.local-currency-code', $price);
-                var monthlyBasePrice;
-                var monthlyBasePriceCurrencySign;
-                var euroSign = '\u20ac';
-                $priceDollars.removeClass('tooBig tooBig2');
-                $priceCents.removeClass('toosmall toosmall2');
-                if (currentPlan[pro.UTQA_RES_INDEX_LOCALPRICE]) {
-                    $pricingBoxes.addClass('local-currency');
-                    $euroPrice.removeClass('hidden');
-                    $currncyAbbrev.removeClass('hidden');
-                    $currncyAbbrev.text(currentPlan[pro.UTQA_RES_INDEX_LOCALPRICECURRENCY]);
-                    $euroPrice.text(currentPlan[pro.UTQA_RES_INDEX_MONTHLYBASEPRICE] +
-                        ' ' + euroSign);
-                    // Calculate the monthly base price in local currency
-                    monthlyBasePrice = '' + currentPlan[pro.UTQA_RES_INDEX_LOCALPRICE];
-                    $('.reg-st3-txt-localcurrencyprogram', $dialog).removeClass('hidden');
-                }
-                else {
-                    $pricingBoxes.removeClass('local-currency');
-                    $euroPrice.addClass('hidden');
-                    $currncyAbbrev.addClass('hidden');
-                    monthlyBasePrice = '' + currentPlan[pro.UTQA_RES_INDEX_MONTHLYBASEPRICE];
-                    monthlyBasePriceCurrencySign = euroSign;
-                    $('.reg-st3-txt-localcurrencyprogram', $dialog).addClass('hidden');
-                }
-                var monthlyBasePriceParts = monthlyBasePrice.split('.');
-                var monthlyBasePriceDollars = monthlyBasePriceParts[0];
-                var monthlyBasePriceCents = monthlyBasePriceParts[1] || '00';
-                if (monthlyBasePriceDollars.length > 7) {
-                    if (monthlyBasePriceDollars.length > 9) {
-                        $priceDollars.addClass('tooBig2');
-                        $priceCents.addClass('toosmall2');
-                        monthlyBasePriceCents = '0';
+        var $pricingBoxes = $('.plan', $dialog);
+
+        pro.proplan.initPlanPeriodControls($dialog);
+        pro.proplan.updateEachPriceBlock("D", $pricingBoxes, $dialog, 1);
+    },
+
+    setPlanPrices: function($dialog) {
+        'use strict';
+
+        var $scrollBlock = $('.scrollable', $dialog);
+
+        // Set scroll to top
+        $scrollBlock.scrollTop(0);
+
+        // Load the membership plans
+        pro.loadMembershipPlans(function() {
+
+            // Render the plan details
+            dlmanager.prepareLimitedBandwidthDialogPlans($dialog);
+
+            if (!is_mobile) {
+
+                // Check if touch device
+                var is_touch = function() {
+                    return 'ontouchstart' in window || 'onmsgesturechange' in window;
+                };
+
+                // Change dialog height to fit browser height
+                var updateDialogHeight = function() {
+
+                    var dialogHeight;
+                    var contentHeight;
+
+                    $dialog.css('height', '');
+                    dialogHeight = $dialog.outerHeight();
+                    contentHeight = $('.fm-dialog-body', $dialog).outerHeight();
+
+                    if (dialogHeight < contentHeight) {
+                        $dialog.outerHeight(contentHeight);
                     }
-                    else {
-                        $priceDollars.addClass('tooBig');
-                        $priceCents.addClass('toosmall');
-                        monthlyBasePriceCents = '00';
+
+                    if (!is_touch()) {
+
+                        // Update previous scrolling
+                        if ($scrollBlock.is('.ps-container')) {
+                            Ps.update($scrollBlock[0]);
+                        }
+                        else {
+                            // Initialize scrolling
+                            Ps.initialize($scrollBlock[0]);
+                        }
                     }
-                    monthlyBasePriceDollars = Number.parseInt(monthlyBasePriceDollars) + 1;
-                }
-                else {
-                    if (monthlyBasePriceCents.length > 2) {
-                        monthlyBasePriceCents = monthlyBasePriceCents.substr(0, 2);
-                        monthlyBasePriceCents = Number.parseInt(monthlyBasePriceCents) + 1;
-                        monthlyBasePriceCents = (monthlyBasePriceCents + '0').substr(0, 2);
-                    }
-                }
-                var storageGigabytes = currentPlan[pro.UTQA_RES_INDEX_STORAGE];
-                var storageBytes = storageGigabytes * 1024 * 1024 * 1024;
-                var storageFormatted = numOfBytes(storageBytes, 0);
-                var storageSizeRounded = Math.round(storageFormatted.size);
-                var bandwidthGigabytes = currentPlan[pro.UTQA_RES_INDEX_TRANSFER];
-                var bandwidthBytes = bandwidthGigabytes * 1024 * 1024 * 1024;
-                var bandwidthFormatted = numOfBytes(bandwidthBytes, 0);
-                var bandwidthSizeRounded = Math.round(bandwidthFormatted.size);
-                $planName.text(planName);
-                if (currentPlan[pro.UTQA_RES_INDEX_LOCALPRICE]) {
-                    $priceDollars.text(monthlyBasePrice);
-                    $priceCents.text('');
-                }
-                else {
-                    $priceDollars.text(monthlyBasePriceDollars);
-                    $priceCents.text('.' + monthlyBasePriceCents + ' ' +
-                        monthlyBasePriceCurrencySign);
-                }
-                $storageAmount.text(storageSizeRounded);
-                $storageUnit.text(storageFormatted.unit);
-                $bandwidthAmount.text(bandwidthSizeRounded);
-                $bandwidthUnit.text(bandwidthFormatted.unit);
+                };
+
+                // Change dialog height to fit browser height
+                Soon(updateDialogHeight);
+
+                $(window).rebind('resize.overQuotaDialog', function() {
+
+                    // Change dialog height to fit browser height
+                    updateDialogHeight();
+
+                    // Change dialog position
+                    dialogPositioning($dialog);
+                });
             }
-        }
+        });
     },
 
     showLimitedBandwidthDialog: function(res, callback, flags) {
@@ -1723,10 +1795,10 @@ var dlmanager = {
         loadingDialog.hide();
         this.onLimitedBandwidth = function() {
             if (callback) {
-                $dialog.removeClass('registered achievements exceeded pro slider');
+                $dialog.removeClass('registered achievements exceeded pro slider uploads');
                 $('.bottom-tips a', $dialog).off('click');
                 $('.continue, .continue-download, .fm-dialog-close', $dialog).off('click');
-                $('.upgrade, .reg-st3-membership-bl, .mobile.upgrade-to-pro', $dialog).off('click');
+                $('.upgrade, .pricing-page.plan, .mobile.upgrade-to-pro', $dialog).off('click');
                 $('.get-more-bonuses', $dialog).off('click');
                 if ($.dialog === 'download-pre-warning') {
                     $.dialog = false;
@@ -1755,16 +1827,12 @@ var dlmanager = {
             eventlog(99617);// overquota pre-warning shown.
 
             // Load the membership plans
-            pro.loadMembershipPlans(function() {
-
-                // Render the plan details
-                dlmanager.prepareLimitedBandwidthDialogPlans($dialog);
-            });
+            dlmanager.setPlanPrices($dialog);
 
             uiCheckboxes($dialog, 'ignoreLimitedBandwidth');
             dlmanager._overquotaClickListeners($dialog, flags, res || true);
 
-            return $dialog.removeClass('exceeded');
+            return $dialog.removeClass('exceeded registered achievements pro slider uploads');
         });
     },
 
@@ -1793,13 +1861,6 @@ var dlmanager = {
         var asyncTaskID = false;
         var $dialog = $('.fm-dialog.limited-bandwidth-dialog');
 
-        // Load the membership plans
-        pro.loadMembershipPlans(function () {
-
-            // Render the plan details
-            dlmanager.prepareLimitedBandwidthDialogPlans($dialog);
-        });
-
         $(document).fullScreen(false);
         this._setOverQuotaState(dlTask);
 
@@ -1825,10 +1886,21 @@ var dlmanager = {
             $('.p-after-icon.msg-overquota', $dialog).text(l[120]);
             $('.header-before-icon.exceeded', $dialog).text(l[17]);
 
+            if (dlmanager.isStreaming) {
+                $('.p-after-icon.msg-overquota', $dialog).text(l[19615]);
+            }
+
             if (flags & dlmanager.LMT_ISPRO) {
                 $dialog.addClass('pro');
 
                 asyncTaskID = 'mOverQuota.' + makeUUID();
+
+                if (dlmanager.isStreaming) {
+                    $('.pro-exceeded-txt .msg-overquota', $dialog).text(l[19617]);
+                }
+                else {
+                    $('.pro-exceeded-txt .msg-overquota', $dialog).text(l[17084]);
+                }
 
                 if (M.account) {
                     // Force data retrieval from API
@@ -1884,12 +1956,19 @@ var dlmanager = {
 
             $('.fm-dialog-overlay').rebind('click.dloverq', doCloseModal);
 
+            if (is_mobile) {
+                $(window).trigger('orientationchange');
+            }
+
             $dialog
                 .addClass('exceeded')
                 .removeClass('hidden')
                 .rebind('dialog-closed', doCloseModal)
                 .find('.fm-dialog-close')
                 .rebind('click.quota', doCloseModal);
+
+            // Load the membership plans
+            dlmanager.setPlanPrices($dialog);
 
             api_req({a: 'log', e: 99648, m: 'on overquota dialog shown'});
 
@@ -2051,23 +2130,23 @@ var dlmanager = {
         if (message) {
             $elm.addClass('default-warning');
         }
+        else if (String(uad.browser).startsWith('Edg')) {
+            $elm.addClass('edge');
+        }
         else if (window.safari) {
             $elm.addClass('safari');
         }
-        else if (mega.chrome) {
-            $elm.addClass('chrome');
-        }
         else if (window.opr) {
             $elm.addClass('opera');
+        }
+        else if (mega.chrome) {
+            $elm.addClass('chrome');
         }
         else if (uad.engine === 'Gecko') {
             $elm.addClass('ff');
         }
         else if (uad.engine === 'Trident') {
             $elm.addClass('ie');
-        }
-        else if (uad.browser === 'Edge') {
-            $elm.addClass('edge');
         }
 
         var setText = function(locale, $elm) {
@@ -2126,8 +2205,29 @@ var dlmanager = {
                 text = text.replace('%2', '(' + l[16868] + ')');
             }
 
-            $elm.find('span').safeHTML(text);
+            $elm.find('span.txt').safeHTML(text);
         };
+
+        $elm.find('.default-white-button').rebind('click', function() {
+            if (typeof megasync === 'undefined') {
+                console.error('Failed to load megasync.js');
+            }
+            else {
+                if (typeof dlpage_ph === 'string') {
+                    megasync.download(dlpage_ph, dlpage_key);
+                }
+                else {
+                    open(megasync.getMegaSyncUrl() || (getAppBaseUrl() + '#sync'));
+                }
+            }
+            if ($('.download.top-bar').hasClass('video')) {
+                $elm.removeClass('visible');
+            }
+        });
+
+        $elm.find('.fm-dialog-close').rebind('click', function() {
+            $elm.removeClass('visible');
+        });
 
         if ($container && $elm) {
             setText(l[16866], $elm);
@@ -2151,10 +2251,13 @@ var dlmanager = {
             $body.off('keyup.msd');
             $overlay.addClass('hidden');
             $body.removeClass('overlayed');
+            $overlay.hide();
+            return false;
         };
 
         $overlay.addClass('msd-dialog').removeClass('hidden downloading');
         $body.addClass('overlayed');
+        $overlay.show();
 
         var $slides = $overlay.find('.megasync-slide');
         var $currentSlide = $slides.filter('.megasync-slide:not(.hidden)').first();
@@ -2174,6 +2277,10 @@ var dlmanager = {
             var $currentSlide = $overlay.find('.megasync-slide.current');
             var $prevSlide = $currentSlide.prev().not('.hidden');
             var $nextSlide = $currentSlide.next().not('.hidden');
+
+            if ($this.hasClass('disabled')) {
+                return false;
+            }
 
             if ($this.hasClass('prev') && $prevSlide.length) {
                 $slides.removeClass('prev current next');

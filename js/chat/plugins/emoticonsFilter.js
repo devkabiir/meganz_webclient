@@ -8,7 +8,7 @@
 var EmoticonsFilter = function(megaChat) {
     var self = this;
 
-    self.emoticonsRegExp = /((^|\W?)(:[a-zA-Z0-9\-_]+:)(?=(\s|$)))/gi;
+    self.emoticonsRegExp = /(:[a-zA-Z0-9\-_]+:)/gi;
     self.map = {};
 
     self.emoticonsLoading = megaChat.getEmojiDataSet('emojis')
@@ -27,6 +27,7 @@ var EmoticonsFilter = function(megaChat) {
     megaChat.on("onBeforeSendMessage", function(e, messageObject) {
         self.processOutgoingMessage(e, messageObject);
     });
+
 
     return this;
 };
@@ -91,8 +92,8 @@ EmoticonsFilter.prototype.processHtmlMessage = function(messageContents) {
     }
 
     // convert legacy :smile: emojis to utf
-    messageContents = messageContents.replace(self.emoticonsRegExp, function(match, p1, p2, p3, p4) {
-        var foundSlug = $.trim(p3.toLowerCase());
+    messageContents = messageContents.replace(self.emoticonsRegExp, function(match, p1) {
+        var foundSlug = $.trim(p1.toLowerCase());
         // remove start/end ":"
         foundSlug = foundSlug.substr(1).substr(0, foundSlug.length - 2);
 
@@ -102,11 +103,12 @@ EmoticonsFilter.prototype.processHtmlMessage = function(messageContents) {
                     staticpath + 'images/mega/twemojis/2_v2/' + twemoji.size + '/' +
                     twemoji.convert.toCodePoint(self.reservedEmotions[foundSlug]) + twemoji.ext + '"/>';
         }
+
         if (!utf) {
             return match;
         }
 
-        return p2 + utf + p4;
+        return utf;
     });
 
     // convert any utf emojis to images
@@ -133,6 +135,28 @@ EmoticonsFilter.prototype.processHtmlMessage = function(messageContents) {
             'class="emoji"',
             'class="emoji big"'
         );
+    }
+
+    var found = false;
+    messageContents = messageContents.replace(/alt="([^"]+)"/g, function(match, p1) {
+        if (megaChat._emojiData.emojisUtf[p1]) {
+            found = true;
+
+            return match
+                .replace(
+                    match,
+                    'alt="' + p1 + '" data-simpletip=":' + megaChat._emojiData.emojisUtf[p1].n + ':"'
+                );
+        }
+
+        return match;
+    });
+
+
+    if (found) {
+        messageContents = messageContents
+            .replace(/class="emoji"/g, 'class="emoji simpletip"')
+            .replace(/class="emoji big"/g, 'class="emoji big simpletip"');
     }
 
     return messageContents;
